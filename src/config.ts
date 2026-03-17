@@ -97,16 +97,12 @@ const DEFAULT_CONFIG: PluginConfig = {
   },
 }
 
-/**
- * Load config from opencode-mem.jsonc in standard config locations.
- * Falls back to defaults for any missing field.
- */
 export function loadConfig(directory?: string): PluginConfig {
   const candidates = [
-    directory && join(directory, "opencode-mem.jsonc"),
-    directory && join(directory, "opencode-mem.json"),
-    join(homedir(), ".config", "opencode", "opencode-mem.jsonc"),
-    join(homedir(), ".config", "opencode", "opencode-mem.json"),
+    directory && join(directory, "opencode-mmcp-1file.jsonc"),
+    directory && join(directory, "opencode-mmcp-1file.json"),
+    join(homedir(), ".config", "opencode", "opencode-mmcp-1file.jsonc"),
+    join(homedir(), ".config", "opencode", "opencode-mmcp-1file.json"),
   ].filter(Boolean) as string[]
 
   for (const path of candidates) {
