@@ -1,0 +1,38 @@
+{
+  // Memory injection on user messages (READ)
+  "chatMessage": {
+    "enabled": true,
+    "maxMemories": 5,
+    "injectOn": "first",       // "first" = first message only, "always" = every message
+    "excludeCurrentSession": true,
+    "maxAgeDays": 30
+  },
+
+  // Auto-capture on session idle (WRITE)
+  "autoCapture": {
+    "enabled": true,
+    "debounceMs": 10000,
+    "language": "en"
+  },
+
+  // Memory recovery after context compaction (READ)
+  "compaction": {
+    "enabled": true,
+    "memoryLimit": 10
+  },
+
+  // LLM for auto-capture summarization (OpenAI-compatible API)
+  "captureModel": {
+    "provider": "openai",
+    "model": "gpt-4o-mini",
+    "apiUrl": "https://api.openai.com/v1",
+    "apiKey": ""               // Required for auto-capture; leave empty to disable
+  },
+
+  // MCP server configuration (memory-mcp-1file)
+  "mcpServer": {
+    "command": ["npx", "-y", "memory-mcp-1file"],
+    "dataDir": "~/.local/share/opencode-mmcp-1file/default",
+    "model": "qwen3"
+  }
+}
