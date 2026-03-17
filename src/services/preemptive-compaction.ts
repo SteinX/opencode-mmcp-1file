@@ -1,5 +1,6 @@
 import type { PluginConfig } from "../config.js"
 import { recall } from "./mcp-client.js"
+import { logger } from "../utils/logger.js"
 import { formatMemoriesForInjection } from "../utils/format.js"
 
 interface CompactionState {
@@ -96,7 +97,8 @@ export async function performPreemptiveCompaction(
     summarizedSessions.add(sessionID)
 
     return true
-  } catch {
+  } catch (err) {
+    logger.error("preemptive compaction failed", { sessionID, error: String(err) })
     return false
   } finally {
     state.compactionInProgress = false

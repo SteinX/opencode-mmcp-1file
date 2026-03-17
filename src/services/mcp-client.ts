@@ -2,6 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import type { PluginConfig } from "../config.js"
 import type { MemoryEntry } from "../utils/format.js"
+import { logger } from "../utils/logger.js"
 
 let mcpClient: Client | null = null
 let connectionPromise: Promise<Client> | null = null
@@ -31,6 +32,7 @@ async function connectToServer(config: PluginConfig): Promise<Client> {
   const transport = new StdioClientTransport({
     command,
     args,
+    stderr: "pipe",
   })
 
   await client.connect(transport)
@@ -66,7 +68,8 @@ function parseMemories(raw: string): MemoryEntry[] {
     if (parsed.memories && Array.isArray(parsed.memories)) return parsed.memories
     if (parsed.results && Array.isArray(parsed.results)) return parsed.results
     return []
-  } catch {
+  } catch (err) {
+    logger.debug("failed to parse memories", { error: String(err) })
     return []
   }
 }
@@ -83,7 +86,8 @@ export async function recall(
       arguments: { query, limit },
     })
     return parseMemories(extractTextResult(result))
-  } catch {
+  } catch (err) {
+    logger.error("recall failed", { query, error: String(err) })
     return []
   }
 }
@@ -101,7 +105,8 @@ export async function searchMemory(
       arguments: { query, mode, limit },
     })
     return parseMemories(extractTextResult(result))
-  } catch {
+  } catch (err) {
+    logger.error("searchMemory failed", { query, mode, error: String(err) })
     return []
   }
 }
@@ -121,7 +126,8 @@ export async function storeMemory(
       },
     })
     return true
-  } catch {
+  } catch (err) {
+    logger.error("storeMemory failed", { error: String(err) })
     return false
   }
 }
@@ -137,7 +143,8 @@ export async function listMemories(
       arguments: { limit },
     })
     return parseMemories(extractTextResult(result))
-  } catch {
+  } catch (err) {
+    logger.error("listMemories failed", { error: String(err) })
     return []
   }
 }
@@ -146,8 +153,8 @@ export async function disconnectMemoryClient(): Promise<void> {
   if (mcpClient) {
     try {
       await mcpClient.close()
-    } catch {
-      // ignore close errors
+    } catch (err) {
+      logger.debug("mcp client close error", { error: String(err) })
     }
     mcpClient = null
   }

@@ -12,6 +12,7 @@ import { recall, searchMemory, storeMemory, listMemories } from "./services/mcp-
 import { summarizeExchange } from "./services/llm-client.js"
 import { detectMemoryKeyword, MEMORY_NUDGE_MESSAGE } from "./utils/keywords.js"
 import { stripPrivateContent, isFullyPrivate } from "./utils/privacy.js"
+import { initLogger, logger } from "./utils/logger.js"
 import {
   trackMessageTokens,
   shouldTriggerCompaction,
@@ -22,6 +23,7 @@ import type { PluginConfig } from "./config.js"
 
 const plugin: Plugin = async (input) => {
   const config = loadConfig(input.directory)
+  initLogger(input.client)
   const idleTimers = new Map<string, ReturnType<typeof setTimeout>>()
   const compactedSessions = new Set<string>()
 
@@ -126,8 +128,8 @@ const plugin: Plugin = async (input) => {
                     parts: [{ type: "text" as const, text: "Continue" } as any],
                   },
                 })
-              } catch {
-  
+              } catch (err) {
+                logger.warn("auto-continue prompt failed", { sessionID, error: String(err) })
               }
             }
           }
@@ -202,7 +204,8 @@ function extractEventMessageText(event: any): string | null {
       .filter((p: any) => p.type === "text" && p.text)
       .map((p: any) => p.text)
       .join("\n") || null
-  } catch {
+  } catch (err) {
+    logger.debug("failed to extract event message text", { error: String(err) })
     return null
   }
 }
@@ -236,8 +239,8 @@ async function handleIdleCapture(
         },
       })
     }
-  } catch {
-
+  } catch (err) {
+    logger.error("idle capture failed", { sessionID, error: String(err) })
   }
 }
 
@@ -271,8 +274,8 @@ async function handleCompactionRecovery(
         duration: 5000,
       },
     })
-  } catch {
-
+  } catch (err) {
+    logger.error("compaction recovery failed", { sessionID, error: String(err) })
   }
 }
 
@@ -310,8 +313,8 @@ async function captureCompactionSummary(
     }
 
     await storeMemory(config, content, "episodic")
-  } catch {
-
+  } catch (err) {
+    logger.error("compaction summary capture failed", { sessionID, error: String(err) })
   }
 }
 
