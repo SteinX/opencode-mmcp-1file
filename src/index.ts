@@ -8,7 +8,7 @@ import {
 } from "./services/context-inject.js"
 import { performAutoCapture } from "./services/auto-capture.js"
 import { buildCompactionRecoveryContext } from "./services/compaction.js"
-import { recall, searchMemory, storeMemory, listMemories } from "./services/mcp-client.js"
+import { getMemoryClient, recall, searchMemory, storeMemory, listMemories } from "./services/mcp-client.js"
 import { summarizeExchange } from "./services/llm-client.js"
 import { detectMemoryKeyword, MEMORY_NUDGE_MESSAGE } from "./utils/keywords.js"
 import { stripPrivateContent, isFullyPrivate } from "./utils/privacy.js"
@@ -24,6 +24,12 @@ import type { PluginConfig } from "./config.js"
 const plugin: Plugin = async (input) => {
   const config = loadConfig(input.directory)
   initLogger(input.client)
+
+  // Eagerly warm up MCP connection in background to avoid cold-start latency on first message
+  getMemoryClient(config).catch((err: unknown) => {
+    logger.warn("MCP warmup failed (will retry on first use)", { error: String(err) })
+  })
+
   const idleTimers = new Map<string, ReturnType<typeof setTimeout>>()
   const compactedSessions = new Set<string>()
 
