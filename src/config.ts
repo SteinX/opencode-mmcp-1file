@@ -7,8 +7,7 @@ export interface PluginConfig {
     enabled: boolean
     maxMemories: number
     injectOn: "first" | "always"
-    excludeCurrentSession: boolean
-    maxAgeDays: number
+
   }
   autoCapture: {
     enabled: boolean
@@ -53,8 +52,6 @@ const DEFAULT_CONFIG: PluginConfig = {
     enabled: true,
     maxMemories: 5,
     injectOn: "first",
-    excludeCurrentSession: true,
-    maxAgeDays: 30,
   },
   autoCapture: {
     enabled: true,

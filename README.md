@@ -35,7 +35,7 @@ Then add to your OpenCode configuration (`opencode.json` or `~/.config/opencode/
 
 ## Configuration
 
-The plugin can be configured via an `opencode-mem.jsonc` file placed at your project root or `~/.config/opencode/opencode-mem.jsonc`.
+The plugin can be configured via an `opencode-mmcp-1file.jsonc` file placed at your project root or `~/.config/opencode/opencode-mmcp-1file.jsonc`.
 
 ```jsonc
 {
@@ -43,9 +43,7 @@ The plugin can be configured via an `opencode-mem.jsonc` file placed at your pro
   "chatMessage": {
     "enabled": true,
     "maxMemories": 5,
-    "injectOn": "first",       // "first" = first message only, "always" = every message
-    "excludeCurrentSession": true,
-    "maxAgeDays": 30
+    "injectOn": "first"        // "first" = first message only, "always" = every message
   },
   // Auto-capture on session idle (WRITE)
   "autoCapture": {
@@ -108,11 +106,12 @@ The plugin can be configured via an `opencode-mem.jsonc` file placed at your pro
 
 ## Architecture
 
-The plugin integrates with OpenCode via three primary hooks:
+The plugin integrates with OpenCode via these hooks:
 
 - **`chat.message` hook**: Intercepts user messages to perform hybrid search for relevant memories and injects them as synthetic context.
 - **`event(session.idle)`**: Triggered when the session is idle, using the `captureModel` to summarize the latest exchange and store it.
 - **`event(session.compacted)`**: Triggered after context compaction to restore critical task and context memories.
+- **`event(message.updated)`**: Monitors message updates for preemptive compaction triggers and compaction summary capture.
 
 ## How It Works
 

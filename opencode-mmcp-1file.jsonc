@@ -4,8 +4,6 @@
     "enabled": true,
     "maxMemories": 5,
     "injectOn": "first",       // "first" = first message only, "always" = every message
-    "excludeCurrentSession": true,
-    "maxAgeDays": 30
   },
 
   // Auto-capture on session idle (WRITE)
@@ -19,6 +17,30 @@
   "compaction": {
     "enabled": true,
     "memoryLimit": 10
+  },
+
+  // Keyword detection for explicit memory requests
+  "keywordDetection": {
+    "enabled": true,
+    "extraPatterns": []          // Additional regex patterns to detect
+  },
+
+  // Preemptive compaction before hitting context limit
+  "preemptiveCompaction": {
+    "enabled": true,
+    "thresholdPercent": 80,
+    "modelContextLimit": 200000,
+    "autoContinue": true
+  },
+
+  // Privacy: strip <private> tags before storing
+  "privacy": {
+    "enabled": true
+  },
+
+  // Store compaction summaries as memories
+  "compactionSummaryCapture": {
+    "enabled": true
   },
 
   // LLM for auto-capture summarization (OpenAI-compatible API)
