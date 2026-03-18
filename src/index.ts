@@ -1,6 +1,5 @@
 import type { Plugin } from "@opencode-ai/plugin"
-import { tool } from "@opencode-ai/plugin/tool"
-import { loadConfig } from "./config.js"
+import { loadConfig, resolveDataDir } from "./config.js"
 import {
   shouldInjectMemories,
   markSessionInjected,
@@ -8,7 +7,7 @@ import {
 } from "./services/context-inject.js"
 import { performAutoCapture } from "./services/auto-capture.js"
 import { buildCompactionRecoveryContext } from "./services/compaction.js"
-import { getMemoryClient, recall, searchMemory, storeMemory, listMemories } from "./services/mcp-client.js"
+import { getMemoryClient, storeMemory, disconnectMemoryClient, discoverTools } from "./services/mcp-client.js"
 import { summarizeExchange } from "./services/llm-client.js"
 import { detectMemoryKeyword, MEMORY_NUDGE_MESSAGE } from "./utils/keywords.js"
 import { stripPrivateContent, isFullyPrivate } from "./utils/privacy.js"
@@ -19,19 +18,62 @@ import {
   performPreemptiveCompaction,
   resetSessionState,
 } from "./services/preemptive-compaction.js"
+import { stopServer } from "./services/server-process.js"
+import { buildMemorySystemPrompt } from "./services/system-prompt.js"
+import { buildToolRegistry } from "./services/tool-registry.js"
 import type { PluginConfig } from "./config.js"
 
 const plugin: Plugin = async (input) => {
   const config = loadConfig(input.directory)
   initLogger(input.client)
 
-  // Eagerly warm up MCP connection in background to avoid cold-start latency on first message
-  getMemoryClient(config).catch((err: unknown) => {
-    logger.warn("MCP warmup failed (will retry on first use)", { error: String(err) })
-  })
+  // Check if plugin is enabled (requires tag or dataDir)
+  const dataDir = resolveDataDir(config)
+  if (!dataDir) {
+    logger.warn("Plugin disabled: no tag or dataDir configured")
+    return {}
+  }
+
+  void (async () => {
+    try {
+      await getMemoryClient(config)
+      const tag = config.mcpServer.tag || "custom"
+      logger.info(`Memory server connected (${tag})`)
+      await input.client.tui.showToast({
+        body: {
+          message: `Memory server connected (${tag})`,
+          variant: "success",
+          duration: 3000,
+        },
+      })
+    } catch (err) {
+      logger.error("Memory server connection failed", { error: String(err) })
+      await input.client.tui.showToast({
+        body: {
+          message: "Memory server failed to connect",
+          variant: "error",
+          duration: 5000,
+        },
+      })
+    }
+  })()
+
+  const cleanup = async () => {
+    await disconnectMemoryClient()
+    await stopServer()
+  }
+  process.on("SIGTERM", () => void cleanup())
+  process.on("SIGINT", () => void cleanup())
 
   const idleTimers = new Map<string, ReturnType<typeof setTimeout>>()
   const compactedSessions = new Set<string>()
+
+  let cachedTools: string[] | null = null
+  const getAvailableTools = async (): Promise<string[]> => {
+    if (cachedTools) return cachedTools
+    cachedTools = await discoverTools(config)
+    return cachedTools
+  }
 
   return {
     "chat.message": async (hookInput, output) => {
@@ -150,47 +192,59 @@ const plugin: Plugin = async (input) => {
       }
     },
 
-    tool: {
-      memory: tool({
-        description:
-          "Search, store, or list project memories. Modes: search <query>, store <content>, list [limit]",
-        args: {
-          mode: tool.schema.enum(["search", "store", "list"]),
-          query: tool.schema.string().optional(),
-          content: tool.schema.string().optional(),
-          limit: tool.schema.number().optional(),
-        },
-        execute: async (args) => {
-          switch (args.mode) {
-            case "search": {
-              if (!args.query) return "Error: query is required for search mode"
-              const results = await recall(config, args.query, args.limit ?? 10)
-              if (results.length === 0) return "No memories found."
-              return results.map((m) => `- ${m.content}`).join("\n")
-            }
-            case "store": {
-              if (!args.content) return "Error: content is required for store mode"
-              let content = args.content
-              if (config.privacy.enabled) {
-                content = stripPrivateContent(content)
-                if (isFullyPrivate(content)) {
-                  return "Content is entirely private — nothing to store."
-                }
-              }
-              const ok = await storeMemory(config, content)
-              return ok ? "Memory stored successfully." : "Failed to store memory."
-            }
-            case "list": {
-              const results = await listMemories(config, args.limit ?? 10)
-              if (results.length === 0) return "No memories found."
-              return results.map((m) => `- [${m.memory_type ?? "unknown"}] ${m.content}`).join("\n")
-            }
-            default:
-              return "Unknown mode. Use: search, store, or list."
-          }
-        },
-      }),
+    "experimental.chat.system.transform": async (_hookInput, output) => {
+      if (!config.systemPrompt.enabled) return
+      const tools = await getAvailableTools()
+      const promptText = buildMemorySystemPrompt(config, tools)
+      output.system.push(promptText)
     },
+
+    "tool.definition": async (hookInput, output) => {
+      const toolID = hookInput.toolID.toLowerCase()
+      const serverName = config.mcpServer.mcpServerName.toLowerCase()
+      if (!toolID.includes(serverName) && !toolID.includes("memory")) return
+
+      const TOOL_HINTS: Record<string, string> = {
+        store_memory:
+          "\n\nPrefix content with: DECISION:, TASK:, PATTERN:, BUGFIX:, CONTEXT:, RESEARCH:, or USER: for categorization.",
+        recall:
+          "\n\nBest for general context retrieval. Uses hybrid search (semantic + keyword + knowledge graph).",
+        invalidate:
+          "\n\nUse when stored information becomes outdated. Provide replacement_id to link to the updated entry.",
+      }
+
+      for (const [toolName, hint] of Object.entries(TOOL_HINTS)) {
+        if (toolID.includes(toolName)) {
+          output.description += hint
+          break
+        }
+      }
+    },
+
+    "experimental.session.compacting": async (_hookInput, output) => {
+      if (!config.compaction.enabled) return
+      const recovery = await buildCompactionRecoveryContext(config)
+      if (recovery) {
+        output.context.push(recovery.text)
+      }
+    },
+
+    "tool.execute.before": async (hookInput, output) => {
+      if (!config.privacy.enabled) return
+      const toolName = hookInput.tool.toLowerCase()
+      if (!toolName.includes("store_memory") && !toolName.includes("update_memory")) return
+
+      const content = output.args?.content
+      if (typeof content !== "string") return
+
+      if (isFullyPrivate(content)) {
+        output.args.content = "[REDACTED — fully private content]"
+        return
+      }
+      output.args.content = stripPrivateContent(content)
+    },
+
+    tool: buildToolRegistry(config),
   }
 }
 

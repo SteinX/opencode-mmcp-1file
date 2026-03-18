@@ -53,34 +53,4 @@ export function formatMemoriesForRecovery(
   return `[MEMORY RECOVERY]\n${sections.join("\n")}`
 }
 
-/**
- * Map auto-capture type to memory prefix per AGENTS.md protocol.
- */
-export function typeToPrefix(
-  type: string,
-): string {
-  const map: Record<string, string> = {
-    decision: "DECISION:",
-    pattern: "PATTERN:",
-    bugfix: "BUGFIX:",
-    context: "CONTEXT:",
-    task: "TASK:",
-    project: "PROJECT:",
-  }
-  return map[type] ?? "CONTEXT:"
-}
 
-/**
- * Map auto-capture type to memory_type for storage.
- */
-export function typeToMemoryType(type: string): string {
-  const map: Record<string, string> = {
-    decision: "semantic",
-    pattern: "procedural",
-    bugfix: "episodic",
-    context: "episodic",
-    task: "episodic",
-    project: "semantic",
-  }
-  return map[type] ?? "episodic"
-}

@@ -42,8 +42,13 @@ export interface PluginConfig {
   }
   mcpServer: {
     command: string[]
-    dataDir: string
+    tag: string
+    dataDir?: string
     model: string
+    mcpServerName: string
+  }
+  systemPrompt: {
+    enabled: boolean
   }
 }
 
@@ -85,13 +90,24 @@ const DEFAULT_CONFIG: PluginConfig = {
     apiKey: "",
   },
   mcpServer: {
-    command: ["npx", "-y", "memory-mcp-1file"],
-    dataDir: join(
-      homedir(),
-      ".local/share/opencode-mmcp-1file/default",
-    ),
+    command: ["npm", "exec", "-y", "memory-mcp-1file", "--"],
+    tag: "default",
     model: "qwen3",
+    mcpServerName: "memory-mcp-1file",
   },
+  systemPrompt: {
+    enabled: true,
+  },
+}
+
+export function resolveDataDir(config: PluginConfig): string | null {
+  if (config.mcpServer.dataDir) {
+    return config.mcpServer.dataDir
+  }
+  if (config.mcpServer.tag) {
+    return join(homedir(), ".local/share/opencode-mmcp-1file", config.mcpServer.tag)
+  }
+  return null
 }
 
 export function loadConfig(directory?: string): PluginConfig {
@@ -132,5 +148,6 @@ function mergeConfig(defaults: PluginConfig, overrides: Partial<any>): PluginCon
     compactionSummaryCapture: { ...defaults.compactionSummaryCapture, ...overrides.compactionSummaryCapture },
     captureModel: { ...defaults.captureModel, ...overrides.captureModel },
     mcpServer: { ...defaults.mcpServer, ...overrides.mcpServer },
+    systemPrompt: { ...defaults.systemPrompt, ...overrides.systemPrompt },
   }
 }

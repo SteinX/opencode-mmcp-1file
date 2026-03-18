@@ -2,7 +2,7 @@ import type { createOpencodeClient } from "@opencode-ai/sdk"
 
 type Client = ReturnType<typeof createOpencodeClient>
 
-const SERVICE_NAME = "memory-plugin"
+const SERVICE_NAME = "opencode-mmcp-1file"
 
 let _client: Client | null = null
 

@@ -1,6 +1,5 @@
 import type { PluginConfig } from "../config.js"
 import { storeMemory } from "./mcp-client.js"
-import { typeToPrefix, typeToMemoryType } from "../utils/format.js"
 import { stripPrivateContent, isFullyPrivate } from "../utils/privacy.js"
 
 interface SessionMessages {
@@ -64,18 +63,16 @@ export async function performAutoCapture(
     const raw = await callLLM(llmPrompt)
     const parsed = parseStructuredOutput(raw)
 
-    if (parsed.type === "skip") return false
+    if (parsed.prefix === "SKIP") return false
 
-    const prefix = typeToPrefix(parsed.type)
-    const memoryType = typeToMemoryType(parsed.type)
-    let content = `${prefix} ${parsed.summary}`
+    let content = `${parsed.prefix} ${parsed.summary}`
 
     if (config.privacy.enabled) {
       content = stripPrivateContent(content)
       if (isFullyPrivate(content)) return false
     }
 
-    const stored = await storeMemory(config, content, memoryType)
+    const stored = await storeMemory(config, content, parsed.memoryType)
 
     if (stored) {
       const lastMsg = uncapturedMessages[uncapturedMessages.length - 1]
@@ -105,8 +102,9 @@ ${toolSummary}
 
 Output a JSON object with exactly these fields:
 - "summary": A concise summary (1-3 sentences, max 200 chars) of the key knowledge gained. Language: ${language}
-- "type": One of: "decision", "pattern", "bugfix", "context", "task", "skip"
-  Use "skip" if the exchange is trivial (greetings, simple questions, non-technical).
+- "prefix": One of: "DECISION:", "TASK:", "PATTERN:", "BUGFIX:", "CONTEXT:", "RESEARCH:", "PROJECT:", "EPIC:", "USER:", "SKIP"
+  Use "SKIP" if the exchange is trivial (greetings, simple questions, non-technical).
+- "memory_type": One of: "semantic" (facts, decisions), "episodic" (events, tasks), "procedural" (patterns, how-to)
 - "tags": Array of 1-3 relevant tags (e.g., ["auth", "react", "migration"])
 
 Respond with ONLY the JSON object, no markdown fences.`
@@ -114,7 +112,8 @@ Respond with ONLY the JSON object, no markdown fences.`
 
 interface CaptureResult {
   summary: string
-  type: string
+  prefix: string
+  memoryType: string
   tags: string[]
 }
 
@@ -124,10 +123,11 @@ function parseStructuredOutput(raw: string): CaptureResult {
     const parsed = JSON.parse(cleaned)
     return {
       summary: parsed.summary ?? "",
-      type: parsed.type ?? "skip",
+      prefix: parsed.prefix ?? "SKIP",
+      memoryType: parsed.memory_type ?? "semantic",
       tags: Array.isArray(parsed.tags) ? parsed.tags : [],
     }
   } catch {
-    return { summary: "", type: "skip", tags: [] }
+    return { summary: "", prefix: "SKIP", memoryType: "semantic", tags: [] }
   }
 }

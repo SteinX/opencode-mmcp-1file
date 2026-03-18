@@ -3,7 +3,7 @@
   "chatMessage": {
     "enabled": true,
     "maxMemories": 5,
-    "injectOn": "first",       // "first" = first message only, "always" = every message
+    "injectOn": "first"            // "first" = first message only, "always" = every message
   },
 
   // Auto-capture on session idle (WRITE)
@@ -22,7 +22,7 @@
   // Keyword detection for explicit memory requests
   "keywordDetection": {
     "enabled": true,
-    "extraPatterns": []          // Additional regex patterns to detect
+    "extraPatterns": []              // Additional regex patterns to detect
   },
 
   // Preemptive compaction before hitting context limit
@@ -48,13 +48,20 @@
     "provider": "openai",
     "model": "gpt-4o-mini",
     "apiUrl": "https://api.openai.com/v1",
-    "apiKey": ""               // Required for auto-capture; leave empty to disable
+    "apiKey": ""                     // Required for auto-capture; leave empty to disable
   },
 
   // MCP server configuration (memory-mcp-1file)
   "mcpServer": {
-    "command": ["npx", "-y", "memory-mcp-1file"],
-    "dataDir": "~/.local/share/opencode-mmcp-1file/default",
-    "model": "qwen3"
+    "command": ["npm", "exec", "-y", "memory-mcp-1file", "--"],
+    "tag": "default",                // Memory namespace; derives dataDir as ~/.local/share/opencode-mmcp-1file/{tag}
+    // "dataDir": "",               // Override: explicit data directory (takes precedence over tag)
+    "model": "qwen3",
+    "mcpServerName": "memory-mcp-1file"  // Cosmetic name for logging
+  },
+
+  // System prompt injection — guides agent on memory tool usage
+  "systemPrompt": {
+    "enabled": true
   }
 }

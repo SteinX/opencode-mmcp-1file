@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
-import type { PluginConfig } from "../config.js"
+import { PluginConfig, resolveDataDir } from "../config.js"
 import type { MemoryEntry } from "../utils/format.js"
 import { logger } from "../utils/logger.js"
 
@@ -9,7 +9,6 @@ let connectionPromise: Promise<Client> | null = null
 
 export async function getMemoryClient(config: PluginConfig): Promise<Client> {
   if (mcpClient) return mcpClient
-
   if (connectionPromise) return connectionPromise
 
   connectionPromise = connectToServer(config)
@@ -27,23 +26,24 @@ async function connectToServer(config: PluginConfig): Promise<Client> {
     version: "0.1.0",
   })
 
-  const [command, ...args] = buildCommand(config)
-
-  const transport = new StdioClientTransport({
-    command,
-    args,
-    stderr: "pipe",
-  })
-
+  const cmdParts = buildStdioCommand(config)
+  if (!cmdParts) throw new Error("Cannot build stdio command: no data directory configured")
+  const [command, ...args] = cmdParts
+  logger.info(`Connecting to MCP server via stdio: ${command} ${args.join(" ")}`)
+  const transport = new StdioClientTransport({ command, args, stderr: "pipe" })
   await client.connect(transport)
+
   return client
 }
 
-function buildCommand(config: PluginConfig): string[] {
-  const { command, dataDir, model } = config.mcpServer
+function buildStdioCommand(config: PluginConfig): string[] | null {
+  const dataDir = resolveDataDir(config)
+  if (!dataDir) return null
+
+  const { command, model } = config.mcpServer
   const fullCommand = [...command]
 
-  if (!fullCommand.some((a) => a === "--data-dir") && dataDir) {
+  if (!fullCommand.some((a) => a === "--data-dir")) {
     fullCommand.push("--data-dir", dataDir)
   }
   if (!fullCommand.some((a) => a === "--model") && model) {
@@ -51,6 +51,17 @@ function buildCommand(config: PluginConfig): string[] {
   }
 
   return fullCommand
+}
+
+export async function discoverTools(config: PluginConfig): Promise<string[]> {
+  try {
+    const client = await getMemoryClient(config)
+    const result = await client.listTools()
+    return result.tools.map((t) => t.name)
+  } catch (err) {
+    logger.error("discoverTools failed", { error: String(err) })
+    return []
+  }
 }
 
 function extractTextResult(result: Awaited<ReturnType<Client["callTool"]>>): string {
@@ -147,6 +158,16 @@ export async function listMemories(
     logger.error("listMemories failed", { error: String(err) })
     return []
   }
+}
+
+export async function callMemoryTool(
+  config: PluginConfig,
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<string> {
+  const client = await getMemoryClient(config)
+  const result = await client.callTool({ name: toolName, arguments: args })
+  return extractTextResult(result)
 }
 
 export async function disconnectMemoryClient(): Promise<void> {
