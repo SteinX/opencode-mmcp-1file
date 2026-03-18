@@ -27,16 +27,15 @@ Plugin hooks (index.ts)
   └── tool:memory        → fallback memory tool (search/store/list)
         ↓
   Services layer (src/services/)
-    ├── server-process.ts → spawn MCP server (HTTP mode)
-    ├── mcp-client.ts     → dual transport (SSE / stdio)
+    ├── tool-registry.ts  → register 11 memory tools as plugin tools
+    ├── mcp-client.ts     → stdio transport to MCP server
     └── ...other services
         ↓
-  memory-mcp-1file server
-    ├── HTTP mode: spawned by plugin, registered in OpenCode via client.mcp.add()
-    └── stdio mode: fallback, plugin-only connection
+  memory-mcp-1file server (stdio)
+    └── spawned by plugin, tool calls proxied via StdioClientTransport
 ```
 
-**Data flow**: Plugin hooks → services → MCP client → MCP server. Plugin manages server lifecycle (spawn, register, shutdown). In HTTP mode, agent also talks to server directly via OpenCode MCP integration. LLM client (`llm-client.ts`) used only for auto-capture summarization.
+**Data flow**: Plugin hooks → services → MCP client → MCP server. Plugin manages server lifecycle (spawn, shutdown). LLM client (`llm-client.ts`) used only for auto-capture summarization.
 
 ## Conventions
 
@@ -47,8 +46,9 @@ Plugin hooks (index.ts)
 - **Privacy**: Content passes through `privacy.ts` filters before memory storage. Also intercepted via `tool.execute.before` hook for agent's direct MCP calls.
 - **SDK types**: `as any` casts used where OpenCode SDK type declarations are incomplete — this is intentional, not sloppy
 - **Config**: JSONC format (`opencode-mmcp-1file.jsonc`), loaded via `loadConfig()` with 10 sections (chatMessage, autoCapture, compaction, keywordDetection, preemptiveCompaction, privacy, compactionSummaryCapture, captureModel, mcpServer, systemPrompt)
-- **Transport**: HTTP mode (default) spawns server with `--listen :PORT`, connects via SSE. Stdio mode is automatic fallback if HTTP fails.
+- **Transport**: Stdio only — plugin spawns MCP server via `StdioClientTransport`. HTTP/SSE transport is not implemented (server-process.ts is a placeholder).
 - **Testing**: When adding or modifying functionality, the corresponding unit tests in `tests/` **must** be created or updated in the same change. Follow existing test patterns (vitest, `vi.mock()` for dependencies). Run `npm run test` to verify before considering work complete.
+- **Sync rule**: Any change to config schema (`src/config.ts` `PluginConfig`), default values (`DEFAULT_CONFIG`), or config-driven behavior **must** be reflected in all three places in the same commit: (1) code implementation, (2) `README.md` Configuration section (both the JSONC example block and the config sections table), (3) example config file `opencode-mmcp-1file.jsonc`. If a section is added/removed/renamed, update the section count in this file's Conventions → Config bullet as well.
 
 ## Key Files
 
@@ -56,8 +56,9 @@ Plugin hooks (index.ts)
 |------|------|-------------|
 | `src/index.ts` | Plugin entry, all hook registrations | `plugin` (default export via `definePlugin`) |
 | `src/config.ts` | Config schema + loader | `PluginConfig`, `loadConfig()`, `resolveDataDir()` |
-| `src/services/server-process.ts` | MCP server spawn + lifecycle (HTTP mode) | `startServer()`, `stopServer()`, `getServerUrl()`, `isServerRunning()` |
-| `src/services/mcp-client.ts` | MCP connection singleton (SSE or stdio) | `recall()`, `searchMemory()`, `storeMemory()`, `listMemories()`, `discoverTools()`, `disconnectMemoryClient()` |
+| `src/services/server-process.ts` | MCP server spawn + lifecycle (placeholder) | `stopServer()` (no-op placeholder) |
+| `src/services/mcp-client.ts` | MCP connection singleton (stdio) | `recall()`, `searchMemory()`, `storeMemory()`, `listMemories()`, `discoverTools()`, `disconnectMemoryClient()` |
+| `src/services/tool-registry.ts` | Register 11 memory tools as plugin tools | `buildToolRegistry()` |
 | `src/services/system-prompt.ts` | Memory Protocol system prompt builder | `buildMemorySystemPrompt()` |
 | `src/services/auto-capture.ts` | Session-idle memory extraction | `performAutoCapture()` |
 | `src/services/context-inject.ts` | Chat message memory injection | `shouldInjectMemories()`, `fetchAndFormatMemories()` |
@@ -72,13 +73,11 @@ Plugin hooks (index.ts)
 ## Gotchas
 
 - **Import extensions**: Always use `.js` in import paths, even for `.ts` source files. TypeScript's `bundler` module resolution requires this.
-- **MCP server lifecycle**: In HTTP mode, `server-process.ts` spawns the server and polls `/sse` for readiness (30s timeout). `stopServer()` sends SIGTERM with 5s grace before SIGKILL.
-- **MCP client transport selection**: `mcp-client.ts` checks `isServerRunning()` — if the HTTP server is up, connects via SSE; otherwise falls back to stdio. This is transparent to callers.
-- **OpenCode MCP registration**: Uses `client.mcp.add({ body: { name, config: { type: "remote", url } } })` — this is a v1 SDK pattern with `as any` cast since types are incomplete.
+- **MCP server lifecycle**: `server-process.ts` is currently a placeholder (no-op `stopServer()`). Stdio transport lifecycle is managed by `StdioClientTransport` in `mcp-client.ts`.
+- **MCP client transport selection**: `mcp-client.ts` uses only `StdioClientTransport`. Connection is lazy-initialized as a singleton — first call to `getMemoryClient()` spawns the process.
 - **Session tracking**: `injectedSessions` Set in `context-inject.ts` and `capturedSessions` Set in `auto-capture.ts` prevent duplicate operations per session. These reset only on process restart.
 - **Config path**: `loadConfig()` searches for `opencode-mmcp-1file.jsonc` relative to CWD, not plugin install dir.
 - **Plugin disabled state**: If neither `tag` nor `dataDir` is set in config, `resolveDataDir()` returns `null` and the plugin returns `{}` (no hooks registered).
-- **SSE transport**: Uses `SSEClientTransport` (deprecated in MCP SDK but needed for `rmcp`-based servers that don't support Streamable HTTP yet).
 - **CI/CD**: `.github/workflows/npm-publish.yml` uses manual dispatch (`workflow_dispatch`), bumps version, publishes to npm, creates GitHub release.
 
 ## Plan Submission

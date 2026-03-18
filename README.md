@@ -4,13 +4,13 @@ Persistent memory for OpenCode agents via [memory-mcp-1file](https://github.com/
 
 ## What it does
 
-This OpenCode plugin gives agents persistent memory across sessions. It manages a `memory-mcp-1file` MCP server, registers it in OpenCode so the agent gets **direct access to all 18 memory tools**, and enhances the experience with automatic context injection, idle-time capture, compaction recovery, and agent guidance via system prompt.
+This OpenCode plugin gives agents persistent memory across sessions. It connects to a `memory-mcp-1file` MCP server via stdio and registers **11 core memory tools** as plugin tools, giving the agent direct access to store, search, and manage memories. The plugin also provides automatic context injection, idle-time capture, compaction recovery, and agent guidance via system prompt.
 
 ## Features
 
-### Agent-facing (via MCP server registration)
+### Agent-facing (via plugin tool registration)
 
-- **Direct Memory Tools** — The plugin spawns and registers the MCP server in OpenCode. The agent gets direct access to `store_memory`, `recall`, `search_memory`, `update_memory`, `invalidate`, `knowledge_graph`, and all other MCP tools — no wrapper needed.
+- **Direct Memory Tools** — The plugin registers 11 core memory tools (`store_memory`, `recall`, `search_memory`, `update_memory`, `delete_memory`, `get_memory`, `list_memories`, `invalidate`, `get_valid`, `knowledge_graph`, `get_status`) as plugin tools. Each proxies to the MCP server via stdio.
 - **System Prompt Guidance** — Injects a Memory Protocol into the system prompt via `experimental.chat.system.transform`, teaching the agent when and how to use memory tools, prefix conventions (DECISION:, TASK:, PATTERN:, etc.), and memory lifecycle.
 - **Tool Description Enhancement** — Augments MCP tool descriptions via `tool.definition` hook with contextual hints (prefix guidance for `store_memory`, hybrid search notes for `recall`, etc.).
 - **Keyword Detection** — Detects phrases like "remember this", "save this", "记住" in user messages and nudges the agent to use `store_memory`.
@@ -39,7 +39,7 @@ Add to your OpenCode configuration (`opencode.json` or `~/.config/opencode/confi
 }
 ```
 
-The plugin automatically spawns an MCP server in HTTP mode and registers it in OpenCode. No separate MCP server configuration needed.
+The plugin automatically spawns a [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server via stdio. No separate MCP server configuration needed.
 
 ## Configuration
 
@@ -101,14 +101,11 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
 
   // MCP server configuration (memory-mcp-1file)
   "mcpServer": {
-    "command": ["npx", "-y", "memory-mcp-1file"],
+    "command": ["npm", "exec", "-y", "memory-mcp-1file", "--"],
     "tag": "default",                // Memory namespace; derives dataDir as ~/.local/share/opencode-mmcp-1file/{tag}
     // "dataDir": "",               // Override: explicit data directory (takes precedence over tag)
     "model": "qwen3",               // Embedding model for vector search
-    "transport": "http",             // "http" (recommended) or "stdio" (fallback)
-    "port": 23817,                   // HTTP server port (only used when transport is "http")
-    "registerInOpencode": true,      // Register MCP server in OpenCode for direct agent access
-    "mcpServerName": "memory-mcp-1file"  // Name used when registering in OpenCode
+    "mcpServerName": "memory-mcp-1file"  // Cosmetic name for logging
   },
 
   // System prompt injection — guides agent on memory tool usage
@@ -130,7 +127,7 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
 | **privacy** | Redaction of `<private>` tagged content |
 | **compactionSummaryCapture** | Saves compaction summaries as memories |
 | **captureModel** | LLM used for auto-capture summarization |
-| **mcpServer** | MCP server spawn, transport, and registration settings |
+| **mcpServer** | [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server command, data directory, and embedding model |
 | **systemPrompt** | Agent guidance via Memory Protocol in system prompt |
 
 ### Memory Namespaces via `tag`
@@ -164,8 +161,8 @@ Plugin hooks (index.ts)
   └── tool:memory        → fallback memory tool (search/store/list)
         ↓
   Services layer (src/services/)
-    ├── server-process.ts → spawn MCP server (HTTP mode)
-    ├── mcp-client.ts     → dual transport (SSE / stdio)
+    ├── tool-registry.ts  → register 11 memory tools as plugin tools
+    ├── mcp-client.ts     → stdio transport to MCP server
     ├── system-prompt.ts  → Memory Protocol prompt builder
     ├── auto-capture.ts   → LLM summarization + store
     ├── context-inject.ts → memory injection
@@ -174,30 +171,14 @@ Plugin hooks (index.ts)
     └── llm-client.ts     → OpenAI-compatible API
         ↓
   MCP Server (memory-mcp-1file)
-    ├── HTTP mode: plugin spawns server, registers in OpenCode
-    │   → agent uses 18 MCP tools directly
-    │   → plugin connects via SSE for internal operations
-    └── stdio mode: fallback, plugin-only connection
+    └── stdio: plugin spawns server, proxies tool calls
 ```
-
-### Transport Modes
-
-**HTTP mode** (default, recommended):
-1. Plugin spawns MCP server with `--listen :PORT`
-2. Plugin registers server in OpenCode via `client.mcp.add()`
-3. Agent gets direct access to all 18 MCP tools
-4. Plugin connects via SSE for its own internal operations (injection, capture, etc.)
-
-**Stdio mode** (fallback):
-1. Plugin spawns MCP server via stdio
-2. Only the plugin can talk to the server
-3. Agent uses the fallback `memory` tool (3 modes only)
 
 ## How It Works
 
-Memory context is handled through **synthetic parts** — invisible in the OpenCode TUI but received by the LLM as part of the conversation. The agent has full access to past project context without cluttering the user's view.
+The plugin spawns a [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server via stdio and registers 11 core memory tools as plugin tools. The agent calls these tools directly; each call is proxied to the MCP server.
 
-In HTTP mode, the agent also has **direct MCP tool access**, meaning it can proactively store, search, update, and manage memories without the plugin acting as intermediary.
+Memory context is also handled through **synthetic parts** — invisible in the OpenCode TUI but received by the LLM as part of the conversation. The agent has full access to past project context without cluttering the user's view.
 
 ## Requirements
 
