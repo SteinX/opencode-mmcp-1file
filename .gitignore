@@ -19,6 +19,10 @@ Thumbs.db
 *.swo
 *~
 
+# Local plugin config (use opencode-mmcp-1file.example.jsonc as template)
+opencode-mmcp-1file.jsonc
+opencode-mmcp-1file.json
+
 # Logs
 *.log
 npm-debug.log*

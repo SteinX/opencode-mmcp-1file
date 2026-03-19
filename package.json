@@ -8,6 +8,7 @@
   "files": [
     "dist",
     "commands",
+    "opencode-mmcp-1file.example.jsonc",
     "README.md",
     "LICENSE"
   ],

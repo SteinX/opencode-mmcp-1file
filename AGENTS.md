@@ -48,7 +48,7 @@ Plugin hooks (index.ts)
 - **Config**: JSONC format (`opencode-mmcp-1file.jsonc`), loaded via `loadConfig()` with 10 sections (chatMessage, autoCapture, compaction, keywordDetection, preemptiveCompaction, privacy, compactionSummaryCapture, captureModel, mcpServer, systemPrompt)
 - **Transport**: Stdio only — plugin spawns MCP server via `StdioClientTransport`. HTTP/SSE transport is not implemented (server-process.ts is a placeholder).
 - **Testing**: When adding or modifying functionality, the corresponding unit tests in `tests/` **must** be created or updated in the same change. Follow existing test patterns (vitest, `vi.mock()` for dependencies). Run `npm run test` to verify before considering work complete.
-- **Sync rule**: Any change to config schema (`src/config.ts` `PluginConfig`), default values (`DEFAULT_CONFIG`), or config-driven behavior **must** be reflected in all three places in the same commit: (1) code implementation, (2) `README.md` Configuration section (both the JSONC example block and the config sections table), (3) example config file `opencode-mmcp-1file.jsonc`. If a section is added/removed/renamed, update the section count in this file's Conventions → Config bullet as well.
+- **Sync rule**: Any change to config schema (`src/config.ts` `PluginConfig`), default values (`DEFAULT_CONFIG`), or config-driven behavior **must** be reflected in all three places in the same commit: (1) code implementation, (2) `README.md` Configuration section (both the JSONC example block and the config sections table), (3) example config file `opencode-mmcp-1file.example.jsonc`. If a section is added/removed/renamed, update the section count in this file's Conventions → Config bullet as well.
 
 ## Key Files
 
@@ -78,7 +78,7 @@ Plugin hooks (index.ts)
 - **MCP server lifecycle**: `server-process.ts` is currently a placeholder (no-op `stopServer()`). Stdio transport lifecycle is managed by `StdioClientTransport` in `mcp-client.ts`.
 - **MCP client transport selection**: `mcp-client.ts` uses only `StdioClientTransport`. Connection is lazy-initialized as a singleton — first call to `getMemoryClient()` spawns the process.
 - **Session tracking**: `injectedSessions` Set in `context-inject.ts` and `capturedSessions` Set in `auto-capture.ts` prevent duplicate operations per session. These reset only on process restart.
-- **Config path**: `loadConfig()` searches for `opencode-mmcp-1file.jsonc` relative to CWD, not plugin install dir.
+- **Config path**: `loadConfig()` searches for `opencode-mmcp-1file.jsonc` relative to CWD, not plugin install dir. The repo tracks `opencode-mmcp-1file.example.jsonc` as a template; `opencode-mmcp-1file.jsonc` is gitignored for local use.
 - **Plugin disabled state**: If neither `tag` nor `dataDir` is set in config, `resolveDataDir()` returns `null` and the plugin returns `{}` (no hooks registered).
 - **CI/CD**: `.github/workflows/npm-publish.yml` uses manual dispatch (`workflow_dispatch`), bumps version, publishes to npm, creates GitHub release.
 
