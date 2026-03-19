@@ -129,6 +129,76 @@ describe("loadConfig", () => {
     expect(config.mcpServer.tag).toBe("")
   })
 
+  it("preserves URLs containing // inside string values", () => {
+    vi.mocked(existsSync).mockImplementation((p) =>
+      String(p).endsWith("opencode-mmcp-1file.jsonc"),
+    )
+    vi.mocked(readFileSync).mockReturnValue(
+      `{
+        // line comment
+        "captureModel": {
+          "apiUrl": "https://api.openai.com/v1", // inline comment
+          "apiKey": "sk-test"
+        }
+      }`,
+    )
+
+    const config = loadConfig("/dir")
+    expect(config.captureModel.apiUrl).toBe("https://api.openai.com/v1")
+    expect(config.captureModel.apiKey).toBe("sk-test")
+  })
+
+  it("handles trailing commas in objects and arrays", () => {
+    vi.mocked(existsSync).mockImplementation((p) =>
+      String(p).endsWith("opencode-mmcp-1file.jsonc"),
+    )
+    vi.mocked(readFileSync).mockReturnValue(
+      `{
+        "mcpServer": {
+          "tag": "my-tag",
+        },
+        "keywordDetection": {
+          "extraPatterns": ["foo", "bar",],
+        },
+      }`,
+    )
+
+    const config = loadConfig("/dir")
+    expect(config.mcpServer.tag).toBe("my-tag")
+    expect(config.keywordDetection.extraPatterns).toEqual(["foo", "bar"])
+  })
+
+  it("parses the full JSONC config with comments, URLs, and trailing commas", () => {
+    vi.mocked(existsSync).mockImplementation((p) =>
+      String(p).endsWith("opencode-mmcp-1file.jsonc"),
+    )
+    vi.mocked(readFileSync).mockReturnValue(
+      `{
+        // Memory injection on user messages
+        "chatMessage": {
+          "enabled": true,
+          "maxMemories": 5,
+          "injectOn": "first"
+        },
+        "captureModel": {
+          "provider": "openai",
+          "model": "gpt-4o-mini",
+          "apiUrl": "https://api.openai.com/v1",
+          "apiKey": ""
+        },
+        /* MCP server configuration */
+        "mcpServer": {
+          "tag": "opencode-mmcp-1file",
+          // "dataDir": "",
+        },
+      }`,
+    )
+
+    const config = loadConfig("/dir")
+    expect(config.captureModel.apiUrl).toBe("https://api.openai.com/v1")
+    expect(config.mcpServer.tag).toBe("opencode-mmcp-1file")
+  })
+
   it("merges only provided sections, preserving all defaults", () => {
     vi.mocked(existsSync).mockImplementation((p) =>
       String(p).endsWith("opencode-mmcp-1file.jsonc"),

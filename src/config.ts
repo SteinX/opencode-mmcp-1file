@@ -1,6 +1,8 @@
 import { readFileSync, existsSync } from "fs"
 import { join } from "path"
 import { homedir } from "os"
+import { parse as parseJsonc } from "jsonc-parser"
+import { logger } from "./utils/logger.js"
 
 export interface PluginConfig {
   chatMessage: {
@@ -122,14 +124,10 @@ export function loadConfig(directory?: string): PluginConfig {
     if (existsSync(path)) {
       try {
         const raw = readFileSync(path, "utf-8")
-        // Strip JSONC comments (// and /* */)
-        const stripped = raw
-          .replace(/\/\/.*$/gm, "")
-          .replace(/\/\*[\s\S]*?\*\//g, "")
-        const parsed = JSON.parse(stripped)
+        const parsed = parseJsonc(raw, [], { allowTrailingComma: true })
         return mergeConfig(DEFAULT_CONFIG, parsed)
-      } catch {
-        // ignore parse errors, use defaults
+      } catch (err) {
+        logger.warn(`Failed to parse config at ${path}`, { error: String(err) })
       }
     }
   }
