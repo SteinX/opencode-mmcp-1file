@@ -1,3 +1,7 @@
+import { existsSync, mkdirSync, copyFileSync } from "node:fs"
+import { join, dirname } from "node:path"
+import { homedir } from "node:os"
+import { fileURLToPath } from "node:url"
 import type { Plugin } from "@opencode-ai/plugin"
 import { loadConfig, resolveDataDir } from "./config.js"
 import {
@@ -57,6 +61,8 @@ const plugin: Plugin = async (input) => {
       })
     }
   })()
+
+  installCommand()
 
   const cleanup = async () => {
     await disconnectMemoryClient()
@@ -244,7 +250,7 @@ const plugin: Plugin = async (input) => {
       output.args.content = stripPrivateContent(content)
     },
 
-    tool: buildToolRegistry(config),
+    tool: buildToolRegistry(config, input.directory),
   }
 }
 
@@ -375,6 +381,33 @@ async function captureCompactionSummary(
     await storeMemory(config, content, "episodic")
   } catch (err) {
     logger.error("compaction summary capture failed", { sessionID, error: String(err) })
+  }
+}
+
+function installCommand(): void {
+  try {
+    const pluginDir = dirname(fileURLToPath(import.meta.url))
+    const commandsDir = join(pluginDir, "..", "commands")
+    const targetDir = join(homedir(), ".config", "opencode", "command")
+
+    const commands = ["init-mcp-memory.md", "setup-mcp-memory.md"]
+    const installed: string[] = []
+
+    for (const cmd of commands) {
+      const source = join(commandsDir, cmd)
+      if (!existsSync(source)) continue
+      const target = join(targetDir, cmd)
+      if (existsSync(target)) continue
+      mkdirSync(targetDir, { recursive: true })
+      copyFileSync(source, target)
+      installed.push(cmd.replace(".md", ""))
+    }
+
+    if (installed.length > 0) {
+      logger.info(`Installed commands: ${installed.map((c) => `/${c}`).join(", ")}`)
+    }
+  } catch (err) {
+    logger.debug("Command auto-install failed (manual copy available)", { error: String(err) })
   }
 }
 
