@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { resolveDataDir, loadConfig } from "../src/config.js"
+import { resolveDataDir, loadConfig, applyConfig } from "../src/config.js"
 import type { PluginConfig } from "../src/config.js"
 
 vi.mock("fs", () => ({
@@ -63,7 +63,7 @@ describe("loadConfig", () => {
     const config = loadConfig("/some/dir")
     expect(config.chatMessage.enabled).toBe(true)
     expect(config.chatMessage.maxMemories).toBe(5)
-    expect(config.mcpServer.tag).toBe("default")
+    expect(config.mcpServer.tag).toBe("")
     expect(config.privacy.enabled).toBe(true)
   })
 
@@ -126,7 +126,7 @@ describe("loadConfig", () => {
   it("returns defaults when called without directory argument", () => {
     const config = loadConfig()
     expect(config.chatMessage.enabled).toBe(true)
-    expect(config.mcpServer.tag).toBe("default")
+    expect(config.mcpServer.tag).toBe("")
   })
 
   it("merges only provided sections, preserving all defaults", () => {
@@ -143,5 +143,78 @@ describe("loadConfig", () => {
     expect(config.preemptiveCompaction.modelContextLimit).toBe(200000)
     expect(config.chatMessage.maxMemories).toBe(5)
     expect(config.captureModel.model).toBe("gpt-4o-mini")
+  })
+})
+
+describe("applyConfig", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(existsSync).mockReturnValue(false)
+  })
+
+  it("returns empty array when nothing changed", () => {
+    const target = makeConfig({ mcpServer: { command: ["npm", "exec", "-y", "memory-mcp-1file", "--"], tag: "", model: "qwen3", mcpServerName: "memory-mcp-1file" } })
+    const changed = applyConfig(target)
+    expect(changed).toEqual([])
+  })
+
+  it("returns changed section names", () => {
+    vi.mocked(existsSync).mockImplementation((p) =>
+      String(p).endsWith("opencode-mmcp-1file.jsonc"),
+    )
+    vi.mocked(readFileSync).mockReturnValue(
+      `{ "chatMessage": { "maxMemories": 20 }, "privacy": { "enabled": false } }`,
+    )
+
+    const target = makeConfig()
+    const changed = applyConfig(target, "/dir")
+    expect(changed).toContain("chatMessage")
+    expect(changed).toContain("privacy")
+    expect(changed).not.toContain("autoCapture")
+  })
+
+  it("mutates target object in-place", () => {
+    vi.mocked(existsSync).mockImplementation((p) =>
+      String(p).endsWith("opencode-mmcp-1file.jsonc"),
+    )
+    vi.mocked(readFileSync).mockReturnValue(
+      `{ "chatMessage": { "maxMemories": 42 } }`,
+    )
+
+    const target = makeConfig()
+    expect(target.chatMessage.maxMemories).toBe(5)
+
+    applyConfig(target, "/dir")
+    expect(target.chatMessage.maxMemories).toBe(42)
+  })
+
+  it("preserves unchanged sections", () => {
+    vi.mocked(existsSync).mockImplementation((p) =>
+      String(p).endsWith("opencode-mmcp-1file.jsonc"),
+    )
+    vi.mocked(readFileSync).mockReturnValue(
+      `{ "privacy": { "enabled": false } }`,
+    )
+
+    const target = makeConfig()
+    const originalAutoCapture = { ...target.autoCapture }
+
+    applyConfig(target, "/dir")
+    expect(target.autoCapture).toEqual(originalAutoCapture)
+    expect(target.privacy.enabled).toBe(false)
+  })
+
+  it("detects mcpServer changes", () => {
+    vi.mocked(existsSync).mockImplementation((p) =>
+      String(p).endsWith("opencode-mmcp-1file.jsonc"),
+    )
+    vi.mocked(readFileSync).mockReturnValue(
+      `{ "mcpServer": { "tag": "new-project" } }`,
+    )
+
+    const target = makeConfig()
+    const changed = applyConfig(target, "/dir")
+    expect(changed).toContain("mcpServer")
+    expect(target.mcpServer.tag).toBe("new-project")
   })
 })

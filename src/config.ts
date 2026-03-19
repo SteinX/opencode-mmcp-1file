@@ -91,7 +91,7 @@ const DEFAULT_CONFIG: PluginConfig = {
   },
   mcpServer: {
     command: ["npm", "exec", "-y", "memory-mcp-1file", "--"],
-    tag: "default",
+    tag: "",
     model: "qwen3",
     mcpServerName: "memory-mcp-1file",
   },
@@ -150,4 +150,23 @@ function mergeConfig(defaults: PluginConfig, overrides: Partial<any>): PluginCon
     mcpServer: { ...defaults.mcpServer, ...overrides.mcpServer },
     systemPrompt: { ...defaults.systemPrompt, ...overrides.systemPrompt },
   }
+}
+
+/**
+ * Reload config from disk and apply changes in-place to the existing config object.
+ * All closures holding a reference to `target` will see the updated values immediately.
+ * Returns a list of section names that changed.
+ */
+export function applyConfig(target: PluginConfig, directory?: string): string[] {
+  const fresh = loadConfig(directory)
+  const changed: string[] = []
+  const sections = Object.keys(fresh) as (keyof PluginConfig)[]
+
+  for (const section of sections) {
+    if (JSON.stringify(target[section]) !== JSON.stringify(fresh[section])) {
+      changed.push(section)
+      Object.assign(target[section], fresh[section])
+    }
+  }
+  return changed
 }

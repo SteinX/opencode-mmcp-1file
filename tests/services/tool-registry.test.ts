@@ -10,6 +10,10 @@ vi.mock("../../src/utils/logger.js", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }))
 
+vi.mock("../../src/config.js", () => ({
+  applyConfig: vi.fn().mockReturnValue([]),
+}))
+
 vi.mock("../../src/utils/privacy.js", () => ({
   stripPrivateContent: vi.fn((s: string) => s.replace(/<private>[\s\S]*?<\/private>/gi, "[REDACTED]")),
   isFullyPrivate: vi.fn((s: string) => {
@@ -20,6 +24,7 @@ vi.mock("../../src/utils/privacy.js", () => ({
 
 const { callMemoryTool } = await import("../../src/services/mcp-client.js")
 const { stripPrivateContent, isFullyPrivate } = await import("../../src/utils/privacy.js")
+const { applyConfig } = await import("../../src/config.js")
 
 function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
   return {
@@ -53,7 +58,7 @@ describe("buildToolRegistry", () => {
     vi.clearAllMocks()
   })
 
-  it("returns all 11 expected tools", () => {
+  it("returns all 16 expected tools", () => {
     const tools = buildToolRegistry(makeConfig())
     const toolNames = Object.keys(tools)
     expect(toolNames).toEqual([
@@ -68,6 +73,11 @@ describe("buildToolRegistry", () => {
       "get_valid",
       "knowledge_graph",
       "get_status",
+      "index_project",
+      "recall_code",
+      "search_symbols",
+      "project_info",
+      "reload_config",
     ])
   })
 
@@ -221,5 +231,199 @@ describe("proxy tools (simple passthrough)", () => {
     const result = await tools.get_status.execute({}, mockContext)
     expect(result).toContain("Error:")
     expect(result).toContain("connection failed")
+  })
+})
+
+describe("index_project tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("passes path as required arg", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.index_project.execute({ path: "/my/project" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "index_project", { path: "/my/project" })
+  })
+
+  it("passes force when provided", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.index_project.execute({ path: "/my/project", force: true }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "index_project", { path: "/my/project", force: true })
+  })
+
+  it("omits force when not provided", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.index_project.execute({ path: "/my/project" }, mockContext)
+    const callArgs = vi.mocked(callMemoryTool).mock.calls[0]?.[2]
+    expect(callArgs).not.toHaveProperty("force")
+  })
+})
+
+describe("recall_code tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("passes query as required arg", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.recall_code.execute({ query: "authentication handler" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "recall_code", { query: "authentication handler" })
+  })
+
+  it("maps snake_case args to camelCase for MCP server", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.recall_code.execute({
+      query: "test",
+      project_id: "proj-1",
+      vector_weight: 0.5,
+      bm25_weight: 0.3,
+      ppr_weight: 0.2,
+      path_prefix: "src/",
+      chunk_type: "function",
+    }, mockContext)
+
+    const callArgs = vi.mocked(callMemoryTool).mock.calls[0]?.[2]
+    // Should be camelCase in the MCP call
+    expect(callArgs).toEqual({
+      query: "test",
+      projectId: "proj-1",
+      vectorWeight: 0.5,
+      bm25Weight: 0.3,
+      pprWeight: 0.2,
+      pathPrefix: "src/",
+      chunkType: "function",
+    })
+  })
+
+  it("passes mode and language filters", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.recall_code.execute({ query: "test", mode: "vector", language: "typescript" }, mockContext)
+    const callArgs = vi.mocked(callMemoryTool).mock.calls[0]?.[2]
+    expect(callArgs).toEqual({ query: "test", mode: "vector", language: "typescript" })
+  })
+
+  it("omits optional args when not provided", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.recall_code.execute({ query: "test" }, mockContext)
+    const callArgs = vi.mocked(callMemoryTool).mock.calls[0]?.[2]
+    expect(callArgs).toEqual({ query: "test" })
+  })
+})
+
+describe("search_symbols tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("passes query as required arg", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.search_symbols.execute({ query: "handleRequest" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "search_symbols", { query: "handleRequest" })
+  })
+
+  it("keeps snake_case for MCP server (no rename)", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.search_symbols.execute({
+      query: "test",
+      project_id: "proj-1",
+      limit: 20,
+      offset: 10,
+      symbol_type: "function",
+      path_prefix: "src/services/",
+    }, mockContext)
+
+    const callArgs = vi.mocked(callMemoryTool).mock.calls[0]?.[2]
+    expect(callArgs).toEqual({
+      query: "test",
+      project_id: "proj-1",
+      limit: 20,
+      offset: 10,
+      symbol_type: "function",
+      path_prefix: "src/services/",
+    })
+  })
+
+  it("omits optional args when not provided", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.search_symbols.execute({ query: "test" }, mockContext)
+    const callArgs = vi.mocked(callMemoryTool).mock.calls[0]?.[2]
+    expect(callArgs).toEqual({ query: "test" })
+  })
+})
+
+describe("project_info tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("passes action as required arg", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.project_info.execute({ action: "list" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "project_info", { action: "list" })
+  })
+
+  it("passes project_id for status action", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.project_info.execute({ action: "status", project_id: "proj-1" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "project_info", { action: "status", project_id: "proj-1" })
+  })
+
+  it("passes project_id for stats action", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.project_info.execute({ action: "stats", project_id: "proj-1" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "project_info", { action: "stats", project_id: "proj-1" })
+  })
+
+  it("omits project_id when not provided", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.project_info.execute({ action: "list" }, mockContext)
+    const callArgs = vi.mocked(callMemoryTool).mock.calls[0]?.[2]
+    expect(callArgs).not.toHaveProperty("project_id")
+  })
+})
+
+describe("reload_config tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("returns no-change message when config unchanged", async () => {
+    vi.mocked(applyConfig).mockReturnValue([])
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.reload_config.execute({}, mockContext)
+    expect(result).toContain("no changes detected")
+  })
+
+  it("returns changed section names", async () => {
+    vi.mocked(applyConfig).mockReturnValue(["chatMessage", "privacy"])
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.reload_config.execute({}, mockContext)
+    expect(result).toContain("chatMessage")
+    expect(result).toContain("privacy")
+  })
+
+  it("warns when mcpServer changed", async () => {
+    vi.mocked(applyConfig).mockReturnValue(["mcpServer"])
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.reload_config.execute({}, mockContext)
+    expect(result).toContain("mcpServer")
+    expect(result).toContain("restart")
+  })
+
+  it("passes directory to applyConfig", async () => {
+    vi.mocked(applyConfig).mockReturnValue([])
+    const tools = buildToolRegistry(makeConfig(), "/my/project")
+    await tools.reload_config.execute({}, mockContext)
+    expect(applyConfig).toHaveBeenCalledWith(expect.anything(), "/my/project")
+  })
+
+  it("returns error message when applyConfig throws", async () => {
+    vi.mocked(applyConfig).mockImplementation(() => {
+      throw new Error("file read failed")
+    })
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.reload_config.execute({}, mockContext)
+    expect(result).toContain("Config reload failed")
+    expect(result).toContain("file read failed")
   })
 })

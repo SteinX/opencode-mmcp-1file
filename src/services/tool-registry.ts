@@ -3,22 +3,24 @@
  * Each tool has a hardcoded Zod schema (matching the MCP server's JSON Schema)
  * and an execute function that proxies to the MCP server via callMemoryTool().
  *
- * We register core memory tools (CRUD, search, knowledge graph) but skip:
+ * We register core memory tools (CRUD, search, knowledge graph) and code intelligence
+ * tools (index_project, recall_code, search_symbols, project_info) but skip:
  * - reset_all_memory (dangerous)
  * - how_to_use (agent has system prompt guidance)
- * - Code intelligence tools (index_project, recall_code, search_symbols, symbol_graph,
- *   project_info, delete_project) — specialized, registered separately if needed
+ * - delete_project (dangerous — no undo)
+ * - symbol_graph (too specialized for general use)
  */
 
 import { tool } from "@opencode-ai/plugin/tool"
 import type { PluginConfig } from "../config.js"
+import { applyConfig } from "../config.js"
 import { callMemoryTool } from "./mcp-client.js"
 import { stripPrivateContent, isFullyPrivate } from "../utils/privacy.js"
 import { logger } from "../utils/logger.js"
 
 type ToolMap = Record<string, ReturnType<typeof tool>>
 
-export function buildToolRegistry(config: PluginConfig): ToolMap {
+export function buildToolRegistry(config: PluginConfig, directory?: string): ToolMap {
   const proxy = async (name: string, args: Record<string, unknown>): Promise<string> => {
     try {
       return await callMemoryTool(config, name, args)
@@ -223,6 +225,111 @@ export function buildToolRegistry(config: PluginConfig): ToolMap {
       description: "Get memory system status and startup progress.",
       args: {},
       execute: async () => proxy("get_status", {}),
+    }),
+
+    // --- Code Intelligence ---
+    index_project: tool({
+      description:
+        "Index a codebase directory for code search. Run this before using recall_code or search_symbols on a project.",
+      args: {
+        path: tool.schema.string(),
+        force: tool.schema.boolean().optional(),
+      },
+      execute: async (args) => {
+        const callArgs: Record<string, unknown> = { path: args.path }
+        if (args.force !== undefined) callArgs.force = args.force
+        return proxy("index_project", callArgs)
+      },
+    }),
+
+    recall_code: tool({
+      description:
+        "Search indexed code using hybrid retrieval (vector + BM25 + graph fusion). Filter by path prefix, language, or chunk type.",
+      args: {
+        query: tool.schema.string(),
+        project_id: tool.schema.string().optional(),
+        limit: tool.schema.number().optional(),
+        mode: tool.schema.string().optional(),
+        vector_weight: tool.schema.number().optional(),
+        bm25_weight: tool.schema.number().optional(),
+        ppr_weight: tool.schema.number().optional(),
+        path_prefix: tool.schema.string().optional(),
+        language: tool.schema.string().optional(),
+        chunk_type: tool.schema.string().optional(),
+      },
+      execute: async (args) => {
+        // recall_code uses camelCase JSON keys (Rust serde rename_all = "camelCase")
+        const callArgs: Record<string, unknown> = { query: args.query }
+        if (args.project_id) callArgs.projectId = args.project_id
+        if (args.limit !== undefined) callArgs.limit = args.limit
+        if (args.mode) callArgs.mode = args.mode
+        if (args.vector_weight !== undefined) callArgs.vectorWeight = args.vector_weight
+        if (args.bm25_weight !== undefined) callArgs.bm25Weight = args.bm25_weight
+        if (args.ppr_weight !== undefined) callArgs.pprWeight = args.ppr_weight
+        if (args.path_prefix) callArgs.pathPrefix = args.path_prefix
+        if (args.language) callArgs.language = args.language
+        if (args.chunk_type) callArgs.chunkType = args.chunk_type
+        return proxy("recall_code", callArgs)
+      },
+    }),
+
+    search_symbols: tool({
+      description:
+        "Search code symbols (functions, classes, types, etc.) by name across indexed projects.",
+      args: {
+        query: tool.schema.string(),
+        project_id: tool.schema.string().optional(),
+        limit: tool.schema.number().optional(),
+        offset: tool.schema.number().optional(),
+        symbol_type: tool.schema.string().optional(),
+        path_prefix: tool.schema.string().optional(),
+      },
+      execute: async (args) => {
+        const callArgs: Record<string, unknown> = { query: args.query }
+        if (args.project_id) callArgs.project_id = args.project_id
+        if (args.limit !== undefined) callArgs.limit = args.limit
+        if (args.offset !== undefined) callArgs.offset = args.offset
+        if (args.symbol_type) callArgs.symbol_type = args.symbol_type
+        if (args.path_prefix) callArgs.path_prefix = args.path_prefix
+        return proxy("search_symbols", callArgs)
+      },
+    }),
+
+    project_info: tool({
+      description:
+        "Get project indexing info. Actions: list (all projects), status (indexing status), stats (code statistics). Requires project_id for status/stats.",
+      args: {
+        action: tool.schema.string(),
+        project_id: tool.schema.string().optional(),
+      },
+      execute: async (args) => {
+        const callArgs: Record<string, unknown> = { action: args.action }
+        if (args.project_id) callArgs.project_id = args.project_id
+        return proxy("project_info", callArgs)
+      },
+    }),
+
+    // --- Config ---
+    reload_config: tool({
+      description:
+        "Reload plugin configuration from disk. Call after editing opencode-mmcp-1file.jsonc to apply changes without restart. Note: mcpServer changes require a full restart.",
+      args: {},
+      execute: async () => {
+        try {
+          const changed = applyConfig(config, directory)
+          if (changed.length === 0) {
+            return "Config reloaded — no changes detected."
+          }
+          const mcpChanged = changed.includes("mcpServer")
+          let msg = `Config reloaded. Updated sections: ${changed.join(", ")}.`
+          if (mcpChanged) {
+            msg += "\n⚠️ mcpServer settings changed — restart the editor for server changes to take effect."
+          }
+          return msg
+        } catch (err) {
+          return `Config reload failed: ${String(err)}`
+        }
+      },
     }),
   }
 
