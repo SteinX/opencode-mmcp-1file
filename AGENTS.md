@@ -27,7 +27,7 @@ Plugin hooks (index.ts)
   └── tool:memory        → fallback memory tool (search/store/list)
         ↓
   Services layer (src/services/)
-    ├── tool-registry.ts  → register 11 memory tools as plugin tools
+    ├── tool-registry.ts  → register 16 memory + code intelligence tools as plugin tools
     ├── mcp-client.ts     → stdio transport to MCP server
     └── ...other services
         ↓
@@ -55,10 +55,10 @@ Plugin hooks (index.ts)
 | File | Role | Key exports |
 |------|------|-------------|
 | `src/index.ts` | Plugin entry, all hook registrations | `plugin` (default export via `definePlugin`) |
-| `src/config.ts` | Config schema + loader | `PluginConfig`, `loadConfig()`, `resolveDataDir()` |
+| `src/config.ts` | Config schema + loader + hot-reload | `PluginConfig`, `loadConfig()`, `resolveDataDir()`, `applyConfig()` |
 | `src/services/server-process.ts` | MCP server spawn + lifecycle (placeholder) | `stopServer()` (no-op placeholder) |
 | `src/services/mcp-client.ts` | MCP connection singleton (stdio) | `recall()`, `searchMemory()`, `storeMemory()`, `listMemories()`, `discoverTools()`, `disconnectMemoryClient()` |
-| `src/services/tool-registry.ts` | Register 11 memory tools as plugin tools | `buildToolRegistry()` |
+| `src/services/tool-registry.ts` | Register 16 memory + code intelligence tools as plugin tools | `buildToolRegistry()` |
 | `src/services/system-prompt.ts` | Memory Protocol system prompt builder | `buildMemorySystemPrompt()` |
 | `src/services/auto-capture.ts` | Session-idle memory extraction | `performAutoCapture()` |
 | `src/services/context-inject.ts` | Chat message memory injection | `shouldInjectMemories()`, `fetchAndFormatMemories()` |
@@ -69,6 +69,8 @@ Plugin hooks (index.ts)
 | `src/utils/keywords.ts` | Memory keyword detection (EN+CN) | `detectMemoryKeyword()`, `MEMORY_NUDGE_MESSAGE` |
 | `src/utils/privacy.ts` | Content privacy filtering | `stripPrivateContent()`, `isFullyPrivate()`, `containsPrivateTag()` |
 | `src/utils/logger.ts` | Logging wrapper | `initLogger()`, `logger` |
+| `commands/init-mcp-memory.md` | `/init-mcp-memory` slash command for project bootstrap | N/A (Markdown prompt) |
+| `commands/setup-mcp-memory.md` | `/setup-mcp-memory` slash command for guided config setup | N/A (Markdown prompt) |
 
 ## Gotchas
 

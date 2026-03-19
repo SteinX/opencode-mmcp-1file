@@ -1,16 +1,23 @@
 # opencode-mmcp-1file
 
+[![npm version](https://img.shields.io/npm/v/opencode-mmcp-1file)](https://www.npmjs.com/package/opencode-mmcp-1file)
+[![license](https://img.shields.io/npm/l/opencode-mmcp-1file)](./LICENSE)
+[![node](https://img.shields.io/node/v/opencode-mmcp-1file)](https://nodejs.org)
+[![GitHub Actions](https://img.shields.io/github/actions/workflow/status/SteinX/opencode-mmcp-1file/npm-publish.yml?label=publish)](https://github.com/SteinX/opencode-mmcp-1file/actions)
+
 Persistent memory for OpenCode agents via [memory-mcp-1file](https://github.com/pomazanbohdan/memory-mcp-1file).
 
 ## What it does
 
-This OpenCode plugin gives agents persistent memory across sessions. It connects to a `memory-mcp-1file` MCP server via stdio and registers **11 core memory tools** as plugin tools, giving the agent direct access to store, search, and manage memories. The plugin also provides automatic context injection, idle-time capture, compaction recovery, and agent guidance via system prompt.
+This OpenCode plugin gives agents persistent memory across sessions. It connects to a `memory-mcp-1file` MCP server via stdio and registers **16 memory & code intelligence tools** as plugin tools, giving the agent direct access to store, search, and manage memories — plus index, search, and explore codebases. The plugin also provides automatic context injection, idle-time capture, compaction recovery, agent guidance via system prompt, a `/init-mcp-memory` bootstrap command for deep project onboarding, and a `/setup-mcp-memory` guided configuration wizard.
 
 ## Features
 
 ### Agent-facing (via plugin tool registration)
 
 - **Direct Memory Tools** — The plugin registers 11 core memory tools (`store_memory`, `recall`, `search_memory`, `update_memory`, `delete_memory`, `get_memory`, `list_memories`, `invalidate`, `get_valid`, `knowledge_graph`, `get_status`) as plugin tools. Each proxies to the MCP server via stdio.
+- **Code Intelligence Tools** — 4 additional tools for codebase understanding: `index_project` (index a directory for code search), `recall_code` (semantic/hybrid code retrieval), `search_symbols` (find symbols by name/type), `project_info` (list/status/stats for indexed projects).
+- **Config Reload** — `reload_config` tool re-reads the configuration file and applies changes in-place without restart (except `mcpServer` changes which require restart).
 - **System Prompt Guidance** — Injects a Memory Protocol into the system prompt via `experimental.chat.system.transform`, teaching the agent when and how to use memory tools, prefix conventions (DECISION:, TASK:, PATTERN:, etc.), and memory lifecycle.
 - **Tool Description Enhancement** — Augments MCP tool descriptions via `tool.definition` hook with contextual hints (prefix guidance for `store_memory`, hybrid search notes for `recall`, etc.).
 - **Keyword Detection** — Detects phrases like "remember this", "save this", "记住" in user messages and nudges the agent to use `store_memory`.
@@ -161,7 +168,7 @@ Plugin hooks (index.ts)
   └── tool:memory        → fallback memory tool (search/store/list)
         ↓
   Services layer (src/services/)
-    ├── tool-registry.ts  → register 11 memory tools as plugin tools
+    ├── tool-registry.ts  → register 16 memory + code intelligence tools as plugin tools
     ├── mcp-client.ts     → stdio transport to MCP server
     ├── system-prompt.ts  → Memory Protocol prompt builder
     ├── auto-capture.ts   → LLM summarization + store
@@ -176,15 +183,76 @@ Plugin hooks (index.ts)
 
 ## How It Works
 
-The plugin spawns a [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server via stdio and registers 11 core memory tools as plugin tools. The agent calls these tools directly; each call is proxied to the MCP server.
+The plugin spawns a [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server via stdio and registers 16 memory and code intelligence tools as plugin tools. The agent calls these tools directly; each call is proxied to the MCP server.
 
 Memory context is also handled through **synthetic parts** — invisible in the OpenCode TUI but received by the LLM as part of the conversation. The agent has full access to past project context without cluttering the user's view.
+
+## Project Initialization
+
+The plugin ships with a `/init-mcp-memory` slash command that bootstraps deep project knowledge in memory. On first load, the command file is automatically installed to `~/.config/opencode/command/init-mcp-memory.md`.
+
+### Usage
+
+In OpenCode, run:
+
+```
+/init-mcp-memory
+```
+
+The agent will execute a 3-phase initialization:
+
+1. **Code Indexing** — Indexes the project directory via `index_project`, then verifies with `project_info`.
+2. **Deep Research** — Explores docs, configs, git history, dependencies, and code patterns. Stores findings as categorized memories (CONTEXT:, PATTERN:, DECISION:, etc.).
+3. **Knowledge Graph** — Creates entities and relations for key architectural components, then runs community detection.
+
+This typically involves 30–60+ tool calls and takes a few minutes. The result is a rich, queryable memory base the agent can draw on in future sessions.
+
+### Manual Installation
+
+If auto-install doesn't work (e.g. permissions), copy the command files manually:
+
+```bash
+cp node_modules/opencode-mmcp-1file/commands/init-mcp-memory.md ~/.config/opencode/command/
+cp node_modules/opencode-mmcp-1file/commands/setup-mcp-memory.md ~/.config/opencode/command/
+```
+
+## Configuration Setup
+
+The plugin ships with a `/setup-mcp-memory` slash command that guides you through generating a project-scoped configuration file.
+
+### Usage
+
+In OpenCode, run:
+
+```
+/setup-mcp-memory
+```
+
+The agent will walk you through:
+
+1. **Memory namespace** — choosing a `tag` to isolate this project's memories
+2. **Auto-capture** — configuring the LLM provider and API key for automatic memory extraction
+3. **Embedding model** — selecting the local embedding model for code search
+4. **Optional tuning** — memory injection frequency, context limits, privacy settings
+
+After answering, the agent generates `opencode-mmcp-1file.jsonc` in the project root and calls `reload_config()` to apply changes immediately — no restart needed.
+
+You can also re-run `/setup-mcp-memory` anytime to update your configuration.
 
 ## Requirements
 
 - OpenCode v1.2.27+
 - Node.js 18+
 - For auto-capture: An OpenAI-compatible API key
+
+## Limitations
+
+- **Stdio transport only** — The MCP server is accessed exclusively via stdio. HTTP/SSE transport is not implemented, so external tools cannot connect to the memory server directly.
+- **Auto-capture requires LLM API** — The session-idle auto-capture feature requires an OpenAI-compatible API endpoint and key configured in `captureModel`. Without it, automatic memory extraction is disabled.
+- **In-memory session tracking** — Duplicate-prevention state (`injectedSessions`, `capturedSessions`) is held in memory and resets on process restart. The first message after a restart may re-inject memories that were already injected in the previous session.
+- **Tag-based privacy only** — Content is redacted only when explicitly wrapped in `<private>…</private>` tags. There is no automatic PII or secret detection.
+- **Approximate token counting** — Preemptive compaction estimates token usage via `chars / 4`, not a real tokenizer. Thresholds may not trigger at the exact expected point.
+- **Single namespace per project** — Each configuration binds to one memory namespace (via `tag` or `dataDir`). Cross-namespace queries are not supported.
 
 ## License
 
