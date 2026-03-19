@@ -56,4 +56,23 @@ describe("buildMemorySystemPrompt", () => {
     expect(withTools).toContain("store_memory")
     expect(withoutTools).toContain("store_memory")
   })
+
+  it("appends Code Intelligence section when code intel tools present", () => {
+    const result = buildMemorySystemPrompt(makeConfig(), ["recall", "index_project", "recall_code"])
+    expect(result).toContain("### Code Intelligence Tools")
+    expect(result).toContain("index_project")
+    expect(result).toContain("recall_code")
+    expect(result).toContain("/init-mcp-memory")
+  })
+
+  it("does not include Code Intelligence section without code intel tools", () => {
+    const result = buildMemorySystemPrompt(makeConfig(), ["recall", "store_memory"])
+    expect(result).not.toContain("### Code Intelligence Tools")
+    expect(result).not.toContain("/init-mcp-memory")
+  })
+
+  it("includes Code Intelligence with any single code intel tool", () => {
+    const result = buildMemorySystemPrompt(makeConfig(), ["search_symbols"])
+    expect(result).toContain("### Code Intelligence Tools")
+  })
 })

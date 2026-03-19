@@ -35,6 +35,18 @@ CONTEXT: Project uses ESM modules with .js import extensions
 \`\`\`
 `
 
+const CODE_INTELLIGENCE = `
+### Code Intelligence Tools
+When a project has been indexed (via \`index_project\`), you can use these tools for deep code understanding:
+- **index_project**: Index a codebase directory. Run once per project; use \`force: true\` to re-index after major changes
+- **recall_code**: Search indexed code with hybrid retrieval (vector + BM25 + graph). Supports filtering by \`path_prefix\`, \`language\`, \`chunk_type\`
+- **search_symbols**: Find functions, classes, types by name across indexed projects
+- **project_info**: Check indexing status (\`action: "list"\`) or get code statistics (\`action: "stats"\`)
+
+Use \`/init-mcp-memory\` command to bootstrap full project memory with code indexing + deep research + knowledge graph.
+Use \`/setup-mcp-memory\` command to configure or update the plugin settings for this project.
+`
+
 export function buildMemorySystemPrompt(
   _config: PluginConfig,
   availableTools: string[],
@@ -42,8 +54,16 @@ export function buildMemorySystemPrompt(
   if (availableTools.length === 0) return MEMORY_PROTOCOL
 
   const toolList = availableTools.map((t) => `\`${t}\``).join(", ")
-  return `${MEMORY_PROTOCOL}
+  const hasCodeIntel = availableTools.some((t) =>
+    ["index_project", "recall_code", "search_symbols", "project_info"].includes(t),
+  )
+
+  let prompt = `${MEMORY_PROTOCOL}
 ### Available Memory Tools
 ${toolList}
 `
+  if (hasCodeIntel) {
+    prompt += CODE_INTELLIGENCE
+  }
+  return prompt
 }
