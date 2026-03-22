@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest"
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { buildToolRegistry } from "../../src/services/tool-registry.js"
 import type { PluginConfig } from "../../src/config.js"
 
@@ -22,9 +22,20 @@ vi.mock("../../src/utils/privacy.js", () => ({
   }),
 }))
 
+vi.mock("../../src/services/connection-state.js", () => ({
+  isConnectionFailed: vi.fn().mockReturnValue(false),
+  getConnectionStatus: vi.fn().mockReturnValue({
+    connected: true,
+    failureCount: 0,
+    lastFailureTime: null,
+    retrying: false,
+  }),
+}))
+
 const { callMemoryTool } = await import("../../src/services/mcp-client.js")
 const { stripPrivateContent, isFullyPrivate } = await import("../../src/utils/privacy.js")
 const { applyConfig } = await import("../../src/config.js")
+const { isConnectionFailed, getConnectionStatus } = await import("../../src/services/connection-state.js")
 
 function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
   return {
@@ -58,7 +69,7 @@ describe("buildToolRegistry", () => {
     vi.clearAllMocks()
   })
 
-  it("returns all 16 expected tools", () => {
+  it("returns all 17 expected tools", () => {
     const tools = buildToolRegistry(makeConfig())
     const toolNames = Object.keys(tools)
     expect(toolNames).toEqual([
@@ -77,6 +88,7 @@ describe("buildToolRegistry", () => {
       "recall_code",
       "search_symbols",
       "project_info",
+      "symbol_graph",
       "reload_config",
     ])
   })
@@ -382,6 +394,45 @@ describe("project_info tool", () => {
   })
 })
 
+describe("symbol_graph tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("passes action and symbol_id as required args", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.symbol_graph.execute({ action: "callers", symbol_id: "sym-1" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "symbol_graph", { action: "callers", symbol_id: "sym-1" })
+  })
+
+  it("passes depth and direction for related action", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.symbol_graph.execute({ action: "related", symbol_id: "sym-1", depth: 3, direction: "out" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "symbol_graph", {
+      action: "related",
+      symbol_id: "sym-1",
+      depth: 3,
+      direction: "out",
+    })
+  })
+
+  it("omits depth and direction when not provided", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.symbol_graph.execute({ action: "callees", symbol_id: "sym-2" }, mockContext)
+    const callArgs = vi.mocked(callMemoryTool).mock.calls[0]?.[2]
+    expect(callArgs).not.toHaveProperty("depth")
+    expect(callArgs).not.toHaveProperty("direction")
+  })
+
+  it("returns error string when proxy fails", async () => {
+    vi.mocked(callMemoryTool).mockRejectedValueOnce(new Error("connection lost"))
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.symbol_graph.execute({ action: "callers", symbol_id: "sym-1" }, mockContext)
+    expect(result).toContain("Error:")
+    expect(result).toContain("connection lost")
+  })
+})
+
 describe("reload_config tool", () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -425,5 +476,89 @@ describe("reload_config tool", () => {
     const result = await tools.reload_config.execute({}, mockContext)
     expect(result).toContain("Config reload failed")
     expect(result).toContain("file read failed")
+  })
+})
+
+describe("proxy fast-fail when connection failed", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(isConnectionFailed).mockReturnValue(true)
+  })
+
+  afterEach(() => {
+    vi.mocked(isConnectionFailed).mockReturnValue(false)
+  })
+
+  it("returns unavailable message for recall when disconnected", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.recall.execute({ query: "test" }, mockContext)
+    expect(result).toContain("Memory server temporarily unavailable")
+    expect(result).toContain("auto-reconnecting")
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+
+  it("returns unavailable message for store_memory when disconnected", async () => {
+    const tools = buildToolRegistry(makeConfig({ privacy: { enabled: false } }))
+    const result = await tools.store_memory.execute({ content: "test" }, mockContext)
+    expect(result).toContain("Memory server temporarily unavailable")
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+
+  it("returns unavailable message for delete_memory when disconnected", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.delete_memory.execute({ id: "mem-1" }, mockContext)
+    expect(result).toContain("Memory server temporarily unavailable")
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+})
+
+describe("get_status local fallback when disconnected", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(isConnectionFailed).mockReturnValue(true)
+  })
+
+  afterEach(() => {
+    vi.mocked(isConnectionFailed).mockReturnValue(false)
+  })
+
+  it("returns local status JSON instead of calling MCP", async () => {
+    vi.mocked(getConnectionStatus).mockReturnValue({
+      connected: false,
+      failureCount: 3,
+      lastFailureTime: new Date("2025-01-15T10:00:00Z").getTime(),
+      retrying: true,
+    })
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.get_status.execute({}, mockContext)
+
+    const parsed = JSON.parse(result as string)
+    expect(parsed.status).toBe("disconnected")
+    expect(parsed.failureCount).toBe(3)
+    expect(parsed.lastFailureTime).toBe("2025-01-15T10:00:00.000Z")
+    expect(parsed.retrying).toBe(true)
+    expect(parsed.message).toContain("offline")
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+
+  it("handles null lastFailureTime", async () => {
+    vi.mocked(getConnectionStatus).mockReturnValue({
+      connected: false,
+      failureCount: 1,
+      lastFailureTime: null,
+      retrying: false,
+    })
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.get_status.execute({}, mockContext)
+
+    const parsed = JSON.parse(result as string)
+    expect(parsed.lastFailureTime).toBeNull()
+  })
+
+  it("proxies to MCP when connection is healthy", async () => {
+    vi.mocked(isConnectionFailed).mockReturnValue(false)
+    const tools = buildToolRegistry(makeConfig())
+    await tools.get_status.execute({}, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "get_status", {})
   })
 })

@@ -4,18 +4,20 @@ import {
   markSessionInjected,
   markSessionCompacted,
   fetchAndFormatMemories,
+  fetchCodeIntelContext,
 } from "../../src/services/context-inject.js"
 import type { PluginConfig } from "../../src/config.js"
 
 vi.mock("../../src/services/mcp-client.js", () => ({
   recall: vi.fn().mockResolvedValue([]),
+  callMemoryTool: vi.fn().mockResolvedValue("{}"),
 }))
 
 vi.mock("../../src/utils/logger.js", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }))
 
-const { recall } = await import("../../src/services/mcp-client.js")
+const { recall, callMemoryTool } = await import("../../src/services/mcp-client.js")
 
 function makeConfig(overrides?: Partial<Pick<PluginConfig, "chatMessage">>): PluginConfig {
   return {
@@ -107,5 +109,89 @@ describe("fetchAndFormatMemories", () => {
     vi.mocked(recall).mockResolvedValue([])
     await fetchAndFormatMemories(config, "some question about the project")
     expect(recall).toHaveBeenCalledWith(config, "some question about the project", 3)
+  })
+})
+
+describe("fetchCodeIntelContext", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("returns null when no projects are indexed", async () => {
+    const config = makeConfig()
+    vi.mocked(callMemoryTool).mockResolvedValue(JSON.stringify({ projects: [], count: 0 }))
+    const result = await fetchCodeIntelContext(config)
+    expect(result).toBeNull()
+    expect(callMemoryTool).toHaveBeenCalledWith(config, "project_info", { action: "list" })
+  })
+
+  it("returns null when all projects are still indexing", async () => {
+    const config = makeConfig()
+    vi.mocked(callMemoryTool).mockResolvedValue(
+      JSON.stringify({ projects: [{ id: "proj-1", status: "indexing", chunks: 0, symbols: 0 }], count: 1 }),
+    )
+    const result = await fetchCodeIntelContext(config)
+    expect(result).toBeNull()
+  })
+
+  it("returns context string for completed projects", async () => {
+    const config = makeConfig()
+    vi.mocked(callMemoryTool).mockResolvedValue(
+      JSON.stringify({
+        projects: [{ id: "my-project", status: "completed", chunks: 500, symbols: 120 }],
+        count: 1,
+      }),
+    )
+    const result = await fetchCodeIntelContext(config)
+    expect(result).not.toBeNull()
+    expect(result).toContain("[CODE INTELLIGENCE]")
+    expect(result).toContain("my-project")
+    expect(result).toContain("120 symbols")
+    expect(result).toContain("500 chunks")
+    expect(result).toContain("recall_code")
+    expect(result).toContain("symbol_graph")
+  })
+
+  it("filters out non-completed projects", async () => {
+    const config = makeConfig()
+    vi.mocked(callMemoryTool).mockResolvedValue(
+      JSON.stringify({
+        projects: [
+          { id: "done-proj", status: "completed", chunks: 100, symbols: 50 },
+          { id: "wip-proj", status: "indexing", chunks: 10, symbols: 5 },
+        ],
+        count: 2,
+      }),
+    )
+    const result = await fetchCodeIntelContext(config)
+    expect(result).toContain("done-proj")
+    expect(result).not.toContain("wip-proj")
+  })
+
+  it("accepts 'indexed' status as completed", async () => {
+    const config = makeConfig()
+    vi.mocked(callMemoryTool).mockResolvedValue(
+      JSON.stringify({
+        projects: [{ id: "indexed-proj", status: "indexed", chunks: 200, symbols: 80 }],
+        count: 1,
+      }),
+    )
+    const result = await fetchCodeIntelContext(config)
+    expect(result).not.toBeNull()
+    expect(result).toContain("indexed-proj")
+  })
+
+  it("returns null and does not throw when callMemoryTool fails", async () => {
+    const config = makeConfig()
+    vi.mocked(callMemoryTool).mockRejectedValue(new Error("connection refused"))
+    const result = await fetchCodeIntelContext(config)
+    expect(result).toBeNull()
+  })
+
+  it("returns null when callMemoryTool returns null", async () => {
+    const config = makeConfig()
+    vi.mocked(callMemoryTool).mockResolvedValue(null as any)
+    const result = await fetchCodeIntelContext(config)
+    expect(result).toBeNull()
   })
 })

@@ -75,4 +75,36 @@ describe("buildMemorySystemPrompt", () => {
     const result = buildMemorySystemPrompt(makeConfig(), ["search_symbols"])
     expect(result).toContain("### Code Intelligence Tools")
   })
+
+  it("includes connection warning when connectionOk is false", () => {
+    const result = buildMemorySystemPrompt(makeConfig(), ["recall", "store_memory"], false)
+    expect(result).toContain("### MEMORY SERVER OFFLINE")
+    expect(result).toContain("Do NOT call memory tools")
+    expect(result).toContain("get_status")
+  })
+
+  it("does not include connection warning when connectionOk is true", () => {
+    const result = buildMemorySystemPrompt(makeConfig(), ["recall", "store_memory"], true)
+    expect(result).not.toContain("### MEMORY SERVER OFFLINE")
+  })
+
+  it("defaults connectionOk to true (no warning)", () => {
+    const result = buildMemorySystemPrompt(makeConfig(), ["recall"])
+    expect(result).not.toContain("### MEMORY SERVER OFFLINE")
+  })
+
+  it("does not inject warning when tools list is empty (even if connectionOk=false)", () => {
+    const result = buildMemorySystemPrompt(makeConfig(), [], false)
+    expect(result).not.toContain("### MEMORY SERVER OFFLINE")
+    expect(result).toBe(result)
+  })
+
+  it("places warning between base protocol and available tools", () => {
+    const result = buildMemorySystemPrompt(makeConfig(), ["recall"], false)
+    const warningIndex = result.indexOf("### MEMORY SERVER OFFLINE")
+    const toolsIndex = result.indexOf("### Available Memory Tools")
+    const baseIndex = result.indexOf("### Prefix Format")
+    expect(warningIndex).toBeGreaterThan(baseIndex)
+    expect(warningIndex).toBeLessThan(toolsIndex)
+  })
 })

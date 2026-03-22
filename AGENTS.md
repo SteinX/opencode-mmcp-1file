@@ -27,7 +27,7 @@ Plugin hooks (index.ts)
   └── tool:memory        → fallback memory tool (search/store/list)
         ↓
   Services layer (src/services/)
-    ├── tool-registry.ts  → register 16 memory + code intelligence tools as plugin tools
+    ├── tool-registry.ts  → register 17 memory + code intelligence tools as plugin tools
     ├── mcp-client.ts     → stdio transport to MCP server
     └── ...other services
         ↓
@@ -49,6 +49,7 @@ Plugin hooks (index.ts)
 - **Transport**: Stdio only — plugin spawns MCP server via `StdioClientTransport`. HTTP/SSE transport is not implemented (server-process.ts is a placeholder).
 - **Testing**: When adding or modifying functionality, the corresponding unit tests in `tests/` **must** be created or updated in the same change. Follow existing test patterns (vitest, `vi.mock()` for dependencies). Run `npm run test` to verify before considering work complete.
 - **Sync rule**: Any change to config schema (`src/config.ts` `PluginConfig`), default values (`DEFAULT_CONFIG`), or config-driven behavior **must** be reflected in all three places in the same commit: (1) code implementation, (2) `README.md` Configuration section (both the JSONC example block and the config sections table), (3) example config file `opencode-mmcp-1file.example.jsonc`. If a section is added/removed/renamed, update the section count in this file's Conventions → Config bullet as well.
+- **Example config rule**: `opencode-mmcp-1file.example.jsonc` must always reflect the **complete, current feature set** — every config section, every field, with accurate default values and descriptive comments. When any feature is added, removed, or changed, the example config must be updated in the same commit. Treat it as the single source of truth for users; a stale or incomplete example config is a bug.
 
 ## Key Files
 
@@ -58,7 +59,7 @@ Plugin hooks (index.ts)
 | `src/config.ts` | Config schema + loader + hot-reload | `PluginConfig`, `loadConfig()`, `resolveDataDir()`, `applyConfig()` |
 | `src/services/server-process.ts` | MCP server spawn + lifecycle (placeholder) | `stopServer()` (no-op placeholder) |
 | `src/services/mcp-client.ts` | MCP connection singleton (stdio) | `recall()`, `searchMemory()`, `storeMemory()`, `listMemories()`, `discoverTools()`, `disconnectMemoryClient()` |
-| `src/services/tool-registry.ts` | Register 16 memory + code intelligence tools as plugin tools | `buildToolRegistry()` |
+| `src/services/tool-registry.ts` | Register 17 memory + code intelligence tools as plugin tools | `buildToolRegistry()` |
 | `src/services/system-prompt.ts` | Memory Protocol system prompt builder | `buildMemorySystemPrompt()` |
 | `src/services/auto-capture.ts` | Session-idle memory extraction | `performAutoCapture()` |
 | `src/services/context-inject.ts` | Chat message memory injection | `shouldInjectMemories()`, `fetchAndFormatMemories()` |

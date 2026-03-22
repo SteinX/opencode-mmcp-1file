@@ -37,28 +37,52 @@ CONTEXT: Project uses ESM modules with .js import extensions
 
 const CODE_INTELLIGENCE = `
 ### Code Intelligence Tools
-When a project has been indexed (via \`index_project\`), you can use these tools for deep code understanding:
-- **index_project**: Index a codebase directory. Run once per project; use \`force: true\` to re-index after major changes
-- **recall_code**: Search indexed code with hybrid retrieval (vector + BM25 + graph). Supports filtering by \`path_prefix\`, \`language\`, \`chunk_type\`
-- **search_symbols**: Find functions, classes, types by name across indexed projects
-- **project_info**: Check indexing status (\`action: "list"\`) or get code statistics (\`action: "stats"\`)
+When a project has been indexed (via \`/init-mcp-memory\` or \`index_project\`), these tools provide **semantic code understanding** beyond what grep/LSP offer — intent-based search, cross-session persistence, and call graph traversal.
+
+#### Tool Selection Guide
+| Need | Tool | When to prefer over grep/LSP |
+|------|------|------------------------------|
+| Find code by **intent or concept** | \`recall_code\` | "How is auth handled?" — semantic search understands intent, not just literal matches |
+| Find symbols by **name** | \`search_symbols\` | Similar to LSP symbol search, but works across indexed projects and persists cross-session |
+| Trace **callers/callees** of a symbol | \`symbol_graph\` | Call graph traversal — grep/LSP cannot provide this relationship view |
+| Check indexing status | \`project_info\` | Use \`action: "list"\` to verify a project is indexed before searching |
+
+#### Workflow
+1. **Search**: Use \`recall_code\` for semantic/intent queries, \`search_symbols\` for exact symbol lookup
+2. **Trace relationships**: Pass \`symbol_id\` from \`search_symbols\` results into \`symbol_graph\` to explore callers, callees, or related symbols
+3. **Do NOT** call \`index_project\` proactively — indexing is a one-time setup via \`/init-mcp-memory\`. Only call it if search tools return empty results and you suspect the project is not yet indexed.
 
 Use \`/init-mcp-memory\` command to bootstrap full project memory with code indexing + deep research + knowledge graph.
 Use \`/setup-mcp-memory\` command to configure or update the plugin settings for this project.
 `
 
+const CONNECTION_WARNING = `
+### MEMORY SERVER OFFLINE
+All memory tools (recall, store_memory, search_memory, etc.) are temporarily unavailable.
+Auto-reconnection is in progress. Do NOT call memory tools until this warning disappears.
+The only working tool is \`get_status\` which returns local connection status.
+Continue your work without memory tools for now.
+`
+
 export function buildMemorySystemPrompt(
   _config: PluginConfig,
   availableTools: string[],
+  connectionOk = true,
 ): string {
   if (availableTools.length === 0) return MEMORY_PROTOCOL
 
   const toolList = availableTools.map((t) => `\`${t}\``).join(", ")
   const hasCodeIntel = availableTools.some((t) =>
-    ["index_project", "recall_code", "search_symbols", "project_info"].includes(t),
+    ["index_project", "recall_code", "search_symbols", "project_info", "symbol_graph"].includes(t),
   )
 
-  let prompt = `${MEMORY_PROTOCOL}
+  let prompt = MEMORY_PROTOCOL
+
+  if (!connectionOk) {
+    prompt += CONNECTION_WARNING
+  }
+
+  prompt += `
 ### Available Memory Tools
 ${toolList}
 `

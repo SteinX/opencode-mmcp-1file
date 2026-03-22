@@ -16,13 +16,13 @@ const { readFileSync, existsSync } = await import("fs")
 function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
   return {
     chatMessage: { enabled: true, maxMemories: 5, injectOn: "first" },
-    autoCapture: { enabled: true, debounceMs: 10000, language: "en" },
+    autoCapture: { enabled: false, debounceMs: 10000, language: "en" },
     compaction: { enabled: true, memoryLimit: 10 },
     keywordDetection: { enabled: true, extraPatterns: [] },
     preemptiveCompaction: { enabled: true, thresholdPercent: 80, modelContextLimit: 200000, autoContinue: true },
     privacy: { enabled: true },
     compactionSummaryCapture: { enabled: true },
-    captureModel: { provider: "openai", model: "gpt-4o-mini", apiUrl: "https://api.openai.com/v1", apiKey: "" },
+    captureModel: { provider: "", model: "", apiUrl: "", apiKey: "" },
     mcpServer: { command: ["npm", "exec", "-y", "memory-mcp-1file", "--"], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file" },
     systemPrompt: { enabled: true },
     ...overrides,
@@ -98,7 +98,7 @@ describe("loadConfig", () => {
 
     const config = loadConfig("/dir")
     expect(config.autoCapture.language).toBe("zh")
-    expect(config.autoCapture.enabled).toBe(true)
+    expect(config.autoCapture.enabled).toBe(false)
   })
 
   it("returns defaults when config file has invalid JSON", () => {
@@ -212,7 +212,7 @@ describe("loadConfig", () => {
     expect(config.preemptiveCompaction.enabled).toBe(true)
     expect(config.preemptiveCompaction.modelContextLimit).toBe(200000)
     expect(config.chatMessage.maxMemories).toBe(5)
-    expect(config.captureModel.model).toBe("gpt-4o-mini")
+    expect(config.captureModel.model).toBe("")
   })
 })
 

@@ -61,7 +61,7 @@ const DEFAULT_CONFIG: PluginConfig = {
     injectOn: "first",
   },
   autoCapture: {
-    enabled: true,
+    enabled: false,
     debounceMs: 10_000,
     language: "en",
   },
@@ -86,9 +86,9 @@ const DEFAULT_CONFIG: PluginConfig = {
     enabled: true,
   },
   captureModel: {
-    provider: "openai",
-    model: "gpt-4o-mini",
-    apiUrl: "https://api.openai.com/v1",
+    provider: "",
+    model: "",
+    apiUrl: "",
     apiKey: "",
   },
   mcpServer: {

@@ -4,11 +4,10 @@
  * and an execute function that proxies to the MCP server via callMemoryTool().
  *
  * We register core memory tools (CRUD, search, knowledge graph) and code intelligence
- * tools (index_project, recall_code, search_symbols, project_info) but skip:
+ * tools (index_project, recall_code, search_symbols, project_info, symbol_graph) but skip:
  * - reset_all_memory (dangerous)
  * - how_to_use (agent has system prompt guidance)
  * - delete_project (dangerous — no undo)
- * - symbol_graph (too specialized for general use)
  */
 
 import { tool } from "@opencode-ai/plugin/tool"
@@ -17,11 +16,19 @@ import { applyConfig } from "../config.js"
 import { callMemoryTool } from "./mcp-client.js"
 import { stripPrivateContent, isFullyPrivate } from "../utils/privacy.js"
 import { logger } from "../utils/logger.js"
+import { isConnectionFailed, getConnectionStatus } from "./connection-state.js"
+
+const UNAVAILABLE_MESSAGE =
+  "Memory server temporarily unavailable — auto-reconnecting. " +
+  "Try again in ~30s. Do not retry memory tools until the system prompt confirms the connection is restored."
 
 type ToolMap = Record<string, ReturnType<typeof tool>>
 
 export function buildToolRegistry(config: PluginConfig, directory?: string): ToolMap {
   const proxy = async (name: string, args: Record<string, unknown>): Promise<string> => {
+    if (isConnectionFailed()) {
+      return UNAVAILABLE_MESSAGE
+    }
     try {
       return await callMemoryTool(config, name, args)
     } catch (err) {
@@ -224,7 +231,21 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
     get_status: tool({
       description: "Get memory system status and startup progress.",
       args: {},
-      execute: async () => proxy("get_status", {}),
+      execute: async () => {
+        if (isConnectionFailed()) {
+          const status = getConnectionStatus()
+          return JSON.stringify({
+            status: "disconnected",
+            failureCount: status.failureCount,
+            lastFailureTime: status.lastFailureTime
+              ? new Date(status.lastFailureTime).toISOString()
+              : null,
+            retrying: status.retrying,
+            message: "Memory server offline — auto-reconnecting in background.",
+          })
+        }
+        return proxy("get_status", {})
+      },
     }),
 
     // --- Code Intelligence ---
@@ -306,6 +327,26 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
         const callArgs: Record<string, unknown> = { action: args.action }
         if (args.project_id) callArgs.project_id = args.project_id
         return proxy("project_info", callArgs)
+      },
+    }),
+
+    symbol_graph: tool({
+      description:
+        "Navigate symbol call graph. Actions: callers(symbol_id) | callees(symbol_id) | related(symbol_id, depth?, direction?)",
+      args: {
+        action: tool.schema.enum(["callers", "callees", "related"]),
+        symbol_id: tool.schema.string(),
+        depth: tool.schema.number().optional(),
+        direction: tool.schema.enum(["in", "out", "both"]).optional(),
+      },
+      execute: async (args) => {
+        const callArgs: Record<string, unknown> = {
+          action: args.action,
+          symbol_id: args.symbol_id,
+        }
+        if (args.depth !== undefined) callArgs.depth = args.depth
+        if (args.direction) callArgs.direction = args.direction
+        return proxy("symbol_graph", callArgs)
       },
     }),
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest"
+import { describe, it, expect, vi, beforeEach } from "vitest"
 import type { PluginConfig } from "../../src/config.js"
 
 function makeConfig(): PluginConfig {
@@ -16,6 +16,12 @@ function makeConfig(): PluginConfig {
   } as PluginConfig
 }
 
+let mockConnectionState: {
+  isConnectionFailed: ReturnType<typeof vi.fn>
+  markConnectionFailed: ReturnType<typeof vi.fn>
+  markConnectionHealthy: ReturnType<typeof vi.fn>
+}
+
 function createMockClient() {
   return {
     connect: vi.fn().mockResolvedValue(undefined),
@@ -29,6 +35,12 @@ async function setupModule() {
   vi.resetModules()
 
   const mockClient = createMockClient()
+
+  mockConnectionState = {
+    isConnectionFailed: vi.fn().mockReturnValue(false),
+    markConnectionFailed: vi.fn(),
+    markConnectionHealthy: vi.fn(),
+  }
 
   vi.doMock("@modelcontextprotocol/sdk/client/index.js", () => ({
     Client: function () { return mockClient },
@@ -50,6 +62,7 @@ async function setupModule() {
     const original = await importOriginal<typeof import("../../src/config.js")>()
     return { ...original, resolveDataDir: vi.fn(() => "/tmp/test-data") }
   })
+  vi.doMock("../../src/services/connection-state.js", () => mockConnectionState)
 
   const mod = await import("../../src/services/mcp-client.js")
   return { mod, mockClient }
@@ -210,5 +223,63 @@ describe("mcp-client", () => {
 
     const result = await mod.recall(config, "query")
     expect(result).toEqual(memories)
+  })
+
+  it("getMemoryClient throws immediately when connection is flagged as failed", async () => {
+    const { mod } = await setupModule()
+    const config = makeConfig()
+
+    mockConnectionState.isConnectionFailed.mockReturnValue(true)
+
+    await expect(mod.getMemoryClient(config)).rejects.toThrow("Memory server unavailable")
+  })
+
+  it("getMemoryClient calls markConnectionFailed on connection error", async () => {
+    const { mod, mockClient } = await setupModule()
+    const config = makeConfig()
+
+    mockClient.connect.mockRejectedValue(new Error("ENOENT"))
+
+    await expect(mod.getMemoryClient(config)).rejects.toThrow("ENOENT")
+    expect(mockConnectionState.markConnectionFailed).toHaveBeenCalled()
+  })
+
+  it("getMemoryClient calls markConnectionHealthy on success", async () => {
+    const { mod } = await setupModule()
+    const config = makeConfig()
+
+    await mod.getMemoryClient(config)
+    expect(mockConnectionState.markConnectionHealthy).toHaveBeenCalled()
+  })
+})
+
+describe("tryReconnect", () => {
+  it("returns true on successful reconnection", async () => {
+    const { mod } = await setupModule()
+    const config = makeConfig()
+
+    const result = await mod.tryReconnect(config)
+    expect(result).toBe(true)
+  })
+
+  it("returns false when connection fails", async () => {
+    const { mod, mockClient } = await setupModule()
+    const config = makeConfig()
+
+    mockClient.connect.mockRejectedValue(new Error("spawn failed"))
+
+    const result = await mod.tryReconnect(config)
+    expect(result).toBe(false)
+  })
+
+  it("resets internal client state before attempting reconnection", async () => {
+    const { mod, mockClient } = await setupModule()
+    const config = makeConfig()
+
+    await mod.getMemoryClient(config)
+    expect(mockClient.connect).toHaveBeenCalledTimes(1)
+
+    await mod.tryReconnect(config)
+    expect(mockClient.connect).toHaveBeenCalledTimes(2)
   })
 })

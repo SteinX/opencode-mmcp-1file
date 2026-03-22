@@ -3,20 +3,40 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { PluginConfig, resolveDataDir } from "../config.js"
 import type { MemoryEntry } from "../utils/format.js"
 import { logger } from "../utils/logger.js"
+import { isConnectionFailed, markConnectionFailed, markConnectionHealthy } from "./connection-state.js"
 
 let mcpClient: Client | null = null
 let connectionPromise: Promise<Client> | null = null
 
 export async function getMemoryClient(config: PluginConfig): Promise<Client> {
   if (mcpClient) return mcpClient
+  if (isConnectionFailed()) {
+    throw new Error("Memory server unavailable — auto-reconnecting in background")
+  }
   if (connectionPromise) return connectionPromise
 
   connectionPromise = connectToServer(config)
   try {
     mcpClient = await connectionPromise
+    markConnectionHealthy()
     return mcpClient
+  } catch (err) {
+    markConnectionFailed()
+    throw err
   } finally {
     connectionPromise = null
+  }
+}
+
+export async function tryReconnect(config: PluginConfig): Promise<boolean> {
+  try {
+    mcpClient = null
+    connectionPromise = null
+    const client = await connectToServer(config)
+    mcpClient = client
+    return true
+  } catch {
+    return false
   }
 }
 

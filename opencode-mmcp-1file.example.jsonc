@@ -8,7 +8,7 @@
 
   // Auto-capture on session idle (WRITE)
   "autoCapture": {
-    "enabled": true,
+    "enabled": false,
     "debounceMs": 10000,
     "language": "en"
   },
@@ -43,12 +43,13 @@
     "enabled": true
   },
 
-  // LLM for auto-capture summarization (OpenAI-compatible API)
+  // LLM for auto-capture summarization
+  // apiKey set → direct HTTP to apiUrl; apiKey empty → OpenCode session API (zero-config)
   "captureModel": {
-    "provider": "openai",
-    "model": "gpt-4o-mini",
-    "apiUrl": "https://api.openai.com/v1",
-    "apiKey": ""                     // Required for auto-capture; leave empty to disable
+    "provider": "",                  // OpenCode provider ID (e.g. "openai", "anthropic"); empty = use default
+    "model": "",                     // Model ID (e.g. "gpt-4o-mini"); empty = use default
+    "apiUrl": "",                    // Only used with direct HTTP mode (when apiKey is set)
+    "apiKey": ""                     // Optional; leave empty to use OpenCode session API
   },
 
   // MCP server configuration (memory-mcp-1file)

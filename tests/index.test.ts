@@ -22,6 +22,7 @@ vi.mock("../src/services/context-inject.js", () => ({
   shouldInjectMemories: vi.fn().mockReturnValue(false),
   markSessionInjected: vi.fn(),
   fetchAndFormatMemories: vi.fn().mockResolvedValue(null),
+  fetchCodeIntelContext: vi.fn().mockResolvedValue(null),
 }))
 
 vi.mock("../src/services/auto-capture.js", () => ({
@@ -37,10 +38,21 @@ vi.mock("../src/services/mcp-client.js", () => ({
   storeMemory: vi.fn().mockResolvedValue(true),
   disconnectMemoryClient: vi.fn().mockResolvedValue(undefined),
   discoverTools: vi.fn().mockResolvedValue(["store_memory", "recall"]),
+  tryReconnect: vi.fn().mockResolvedValue(true),
+}))
+
+vi.mock("../src/services/connection-state.js", () => ({
+  isConnectionFailed: vi.fn().mockReturnValue(false),
+  startRetryLoop: vi.fn(),
+  stopRetryLoop: vi.fn(),
 }))
 
 vi.mock("../src/services/llm-client.js", () => ({
   summarizeExchange: vi.fn().mockResolvedValue("summary"),
+}))
+
+vi.mock("../src/services/session-llm.js", () => ({
+  callSessionLLM: vi.fn().mockResolvedValue("session-summary"),
 }))
 
 vi.mock("../src/utils/keywords.js", () => ({
@@ -83,8 +95,10 @@ const { loadConfig, resolveDataDir } = await import("../src/config.js")
 const { shouldInjectMemories, markSessionInjected, fetchAndFormatMemories } = await import("../src/services/context-inject.js")
 const { performAutoCapture } = await import("../src/services/auto-capture.js")
 const { buildCompactionRecoveryContext } = await import("../src/services/compaction.js")
-const { getMemoryClient, storeMemory, disconnectMemoryClient, discoverTools } = await import("../src/services/mcp-client.js")
+const { getMemoryClient, storeMemory, disconnectMemoryClient, discoverTools, tryReconnect } = await import("../src/services/mcp-client.js")
+const { isConnectionFailed, startRetryLoop, stopRetryLoop } = await import("../src/services/connection-state.js")
 const { summarizeExchange } = await import("../src/services/llm-client.js")
+const { callSessionLLM } = await import("../src/services/session-llm.js")
 const { detectMemoryKeyword, MEMORY_NUDGE_MESSAGE } = await import("../src/utils/keywords.js")
 const { stripPrivateContent, isFullyPrivate } = await import("../src/utils/privacy.js")
 const { initLogger, logger } = await import("../src/utils/logger.js")
@@ -125,6 +139,8 @@ function makePluginInput(directoryOverride?: string) {
       session: {
         messages: vi.fn().mockResolvedValue({ data: [] }),
         prompt: vi.fn().mockResolvedValue(undefined),
+        create: vi.fn().mockResolvedValue({ data: { id: "ephemeral-session" } }),
+        delete: vi.fn().mockResolvedValue({ data: true }),
       },
     },
   } as any
@@ -221,11 +237,48 @@ describe("plugin factory", () => {
     })
   })
 
+  it("starts retry loop on connection failure", async () => {
+    vi.mocked(getMemoryClient).mockRejectedValueOnce(new Error("connection failed"))
+    const config = makeConfig()
+    vi.mocked(loadConfig).mockReturnValue(config)
+    vi.mocked(resolveDataDir).mockReturnValue("/mock-data-dir")
+    const input = makePluginInput()
+    await plugin(input)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(startRetryLoop).toHaveBeenCalledWith(
+      expect.any(Function),
+      30_000,
+      expect.any(Function),
+    )
+  })
+
+  it("does not start retry loop on successful connection", async () => {
+    const config = makeConfig()
+    vi.mocked(loadConfig).mockReturnValue(config)
+    vi.mocked(resolveDataDir).mockReturnValue("/mock-data-dir")
+    const input = makePluginInput()
+    await plugin(input)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(startRetryLoop).not.toHaveBeenCalled()
+  })
+
   it("registers SIGTERM and SIGINT cleanup handlers", async () => {
     await initPlugin()
     const events = registeredHandlers.map((h) => h.event)
     expect(events).toContain("SIGTERM")
     expect(events).toContain("SIGINT")
+  })
+
+  it("cleanup handler calls stopRetryLoop before disconnecting", async () => {
+    await initPlugin()
+    const sigterm = registeredHandlers.find((h) => h.event === "SIGTERM")
+    expect(sigterm).toBeDefined()
+    sigterm!.handler()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stopRetryLoop).toHaveBeenCalled()
+    expect(disconnectMemoryClient).toHaveBeenCalled()
   })
 
   it("returns all expected hook keys", async () => {
@@ -644,18 +697,48 @@ describe("event handler: session.idle", () => {
     })
   })
 
-  it("skips capture when apiKey is empty", async () => {
-    const { hooks } = await initPlugin({
+  it("uses session API for capture when apiKey is empty", async () => {
+    const { hooks, input } = await initPlugin({
       autoCapture: { enabled: true, debounceMs: 10, language: "en" },
       captureModel: { provider: "openai", model: "gpt-4o-mini", apiUrl: "", apiKey: "" },
     })
+
+    input.client.session.messages.mockResolvedValue({
+      data: [
+        { info: { role: "user" }, parts: [{ type: "text", text: "hello" }] },
+        { info: { role: "assistant" }, parts: [{ type: "text", text: "hi" }] },
+      ],
+    })
+    vi.mocked(performAutoCapture).mockResolvedValue(true)
 
     await hooks.event({
       event: { type: "session.idle", properties: { sessionID: "s-nokey" } },
     })
     await vi.advanceTimersByTimeAsync(10)
 
-    expect(performAutoCapture).not.toHaveBeenCalled()
+    expect(performAutoCapture).toHaveBeenCalled()
+  })
+
+  it("uses direct HTTP for capture when apiKey is set", async () => {
+    const { hooks, input } = await initPlugin({
+      autoCapture: { enabled: true, debounceMs: 10, language: "en" },
+      captureModel: { provider: "openai", model: "gpt-4o-mini", apiUrl: "https://api.example.com/v1", apiKey: "sk-test" },
+    })
+
+    input.client.session.messages.mockResolvedValue({
+      data: [
+        { info: { role: "user" }, parts: [{ type: "text", text: "hello" }] },
+        { info: { role: "assistant" }, parts: [{ type: "text", text: "hi" }] },
+      ],
+    })
+    vi.mocked(performAutoCapture).mockResolvedValue(true)
+
+    await hooks.event({
+      event: { type: "session.idle", properties: { sessionID: "s-withkey" } },
+    })
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(performAutoCapture).toHaveBeenCalled()
   })
 
   it("logs error when capture throws", async () => {
@@ -1115,8 +1198,35 @@ describe("experimental.chat.system.transform", () => {
     await hooks["experimental.chat.system.transform"]({}, output1)
     await hooks["experimental.chat.system.transform"]({}, output2)
 
-    // discoverTools called only once due to caching
     expect(discoverTools).toHaveBeenCalledTimes(1)
+  })
+
+  it("passes connectionOk=true when connection is healthy", async () => {
+    const { hooks } = await initPlugin({ systemPrompt: { enabled: true } })
+    vi.mocked(isConnectionFailed).mockReturnValue(false)
+
+    const output = { system: [] as string[] }
+    await hooks["experimental.chat.system.transform"]({}, output)
+
+    expect(buildMemorySystemPrompt).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(Array),
+      true,
+    )
+  })
+
+  it("passes connectionOk=false when connection has failed", async () => {
+    const { hooks } = await initPlugin({ systemPrompt: { enabled: true } })
+    vi.mocked(isConnectionFailed).mockReturnValue(true)
+
+    const output = { system: [] as string[] }
+    await hooks["experimental.chat.system.transform"]({}, output)
+
+    expect(buildMemorySystemPrompt).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(Array),
+      false,
+    )
   })
 })
 

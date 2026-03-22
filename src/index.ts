@@ -8,11 +8,14 @@ import {
   shouldInjectMemories,
   markSessionInjected,
   fetchAndFormatMemories,
+  fetchCodeIntelContext,
 } from "./services/context-inject.js"
 import { performAutoCapture } from "./services/auto-capture.js"
 import { buildCompactionRecoveryContext } from "./services/compaction.js"
-import { getMemoryClient, storeMemory, disconnectMemoryClient, discoverTools } from "./services/mcp-client.js"
+import { getMemoryClient, storeMemory, disconnectMemoryClient, discoverTools, tryReconnect } from "./services/mcp-client.js"
+import { isConnectionFailed, startRetryLoop, stopRetryLoop } from "./services/connection-state.js"
 import { summarizeExchange } from "./services/llm-client.js"
+import { callSessionLLM } from "./services/session-llm.js"
 import { detectMemoryKeyword, MEMORY_NUDGE_MESSAGE } from "./utils/keywords.js"
 import { stripPrivateContent, isFullyPrivate } from "./utils/privacy.js"
 import { initLogger, logger } from "./utils/logger.js"
@@ -54,17 +57,31 @@ const plugin: Plugin = async (input) => {
       logger.error("Memory server connection failed", { error: String(err) })
       await input.client.tui.showToast({
         body: {
-          message: "Memory server failed to connect",
+          message: "Memory server failed to connect — retrying in background",
           variant: "error",
           duration: 5000,
         },
       })
+      startRetryLoop(
+        () => tryReconnect(config),
+        30_000,
+        () => {
+          void input.client.tui.showToast({
+            body: {
+              message: "Memory server reconnected!",
+              variant: "success",
+              duration: 5000,
+            },
+          })
+        },
+      )
     }
   })()
 
   installCommand()
 
   const cleanup = async () => {
+    stopRetryLoop()
     await disconnectMemoryClient()
     await stopServer()
   }
@@ -124,6 +141,19 @@ const plugin: Plugin = async (input) => {
       }
 
       output.parts.unshift(syntheticPart as any)
+
+      const codeIntelContext = await fetchCodeIntelContext(config)
+      if (codeIntelContext) {
+        output.parts.push({
+          id: `prt-code-intel-${Date.now()}`,
+          sessionID: hookInput.sessionID,
+          messageID: output.message.id || `msg-memory-fallback-${Date.now()}`,
+          type: "text" as const,
+          text: codeIntelContext,
+          synthetic: true,
+        } as any)
+      }
+
       markSessionInjected(hookInput.sessionID)
     },
 
@@ -201,7 +231,7 @@ const plugin: Plugin = async (input) => {
     "experimental.chat.system.transform": async (_hookInput, output) => {
       if (!config.systemPrompt.enabled) return
       const tools = await getAvailableTools()
-      const promptText = buildMemorySystemPrompt(config, tools)
+      const promptText = buildMemorySystemPrompt(config, tools, !isConnectionFailed())
       output.system.push(promptText)
     },
 
@@ -217,9 +247,23 @@ const plugin: Plugin = async (input) => {
           "\n\nBest for general context retrieval. Uses hybrid search (semantic + keyword + knowledge graph).",
         invalidate:
           "\n\nUse when stored information becomes outdated. Provide replacement_id to link to the updated entry.",
+        // Code Intelligence hints
+        index_project:
+          "\n\nDo NOT call proactively — indexing is a one-time setup (via /init-mcp-memory). Only use if recall_code/search_symbols return empty and you suspect the project is not indexed. Use project_info(action: 'list') to check first.",
+        recall_code:
+          "\n\nUse for intent-based semantic code search (e.g. 'how is authentication handled?'). Prefer over grep when searching by concept rather than literal text. Requires the project to be indexed.",
+        search_symbols:
+          "\n\nFind symbols by name. Results include symbol_id which can be passed to symbol_graph to trace callers/callees. Requires the project to be indexed.",
+        symbol_graph:
+          "\n\nTraces call relationships between symbols — callers, callees, or related symbols. The symbol_id parameter comes from search_symbols results. Unique capability not available via grep or LSP.",
+        project_info:
+          "\n\nUse action: 'list' to check which projects are indexed before calling recall_code or search_symbols. Use action: 'stats' for code statistics.",
       }
 
-      for (const [toolName, hint] of Object.entries(TOOL_HINTS)) {
+      const sortedHints = Object.entries(TOOL_HINTS).sort(
+        ([a], [b]) => b.length - a.length,
+      )
+      for (const [toolName, hint] of sortedHints) {
         if (toolID.includes(toolName)) {
           output.description += hint
           break
@@ -281,8 +325,6 @@ async function handleIdleCapture(
   input: Parameters<Plugin>[0],
   sessionID: string,
 ): Promise<void> {
-  if (!config.captureModel.apiKey) return
-
   try {
     const messagesResponse = await input.client.session.messages({
       path: { id: sessionID },
@@ -292,7 +334,9 @@ async function handleIdleCapture(
 
     const messages = messagesResponse.data as any[]
 
-    const callLLM = (prompt: string) => summarizeExchange(config, prompt)
+    const callLLM = config.captureModel.apiKey
+      ? (prompt: string) => summarizeExchange(config, prompt)
+      : (prompt: string) => callSessionLLM(input.client as any, config, prompt, sessionID)
 
     const captured = await performAutoCapture(config, sessionID, messages, callLLM)
 

@@ -34,8 +34,9 @@ Ask the user these questions (adapt based on their answers — skip what's alrea
 
 ### Important
 
-2. **Auto-capture**: "Do you want the plugin to automatically capture important context from your conversations? (Requires an LLM API key)"
-   - If yes, ask for:
+2. **Auto-capture**: "Do you want the plugin to automatically capture important context from your conversations? (Works out of the box — no API key needed)"
+   - Auto-capture works by default using OpenCode's session API with your already-configured providers
+   - Optionally ask if they want to set a dedicated API key for faster direct HTTP mode:
      - API provider: OpenAI, Anthropic, or custom OpenAI-compatible endpoint
      - API key (remind them this stays local in the config file)
      - Model preference (default: `gpt-4o-mini` — cheap and fast)
@@ -107,7 +108,8 @@ Based on the user's answers, generate a `opencode-mmcp-1file.jsonc` file. Use th
     "enabled": true
   },
 
-  // LLM for auto-capture summarization (OpenAI-compatible API)
+  // LLM for auto-capture summarization
+  // apiKey set → direct HTTP; apiKey empty → OpenCode session API (zero-config)
   "captureModel": {
     "provider": "openai",
     "model": "gpt-4o-mini",
@@ -159,7 +161,7 @@ reload_config()
 After setup, suggest:
 - "Run `/init-mcp-memory` to index this codebase and build project memory"
 - "Your config is at `opencode-mmcp-1file.jsonc` — edit it anytime and call `reload_config()` to apply"
-- If auto-capture is enabled: "I'll automatically capture important context from our conversations"
+- If auto-capture is enabled: "I'll automatically capture important context from our conversations" (note: works out of the box even without a dedicated API key)
 - If auto-capture is disabled: "You can manually store memories using `store_memory()`"
 
 ## Your Task

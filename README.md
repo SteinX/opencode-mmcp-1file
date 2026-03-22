@@ -9,14 +9,14 @@ Persistent memory for OpenCode agents via [memory-mcp-1file](https://github.com/
 
 ## What it does
 
-This OpenCode plugin gives agents persistent memory across sessions. It connects to a `memory-mcp-1file` MCP server via stdio and registers **16 memory & code intelligence tools** as plugin tools, giving the agent direct access to store, search, and manage memories — plus index, search, and explore codebases. The plugin also provides automatic context injection, idle-time capture, compaction recovery, agent guidance via system prompt, a `/init-mcp-memory` bootstrap command for deep project onboarding, and a `/setup-mcp-memory` guided configuration wizard.
+This OpenCode plugin gives agents persistent memory across sessions. It connects to a `memory-mcp-1file` MCP server via stdio and registers **17 memory & code intelligence tools** as plugin tools, giving the agent direct access to store, search, and manage memories — plus index, search, and explore codebases. The plugin also provides automatic context injection, idle-time capture, compaction recovery, agent guidance via system prompt, a `/init-mcp-memory` bootstrap command for deep project onboarding, and a `/setup-mcp-memory` guided configuration wizard.
 
 ## Features
 
 ### Agent-facing (via plugin tool registration)
 
 - **Direct Memory Tools** — The plugin registers 11 core memory tools (`store_memory`, `recall`, `search_memory`, `update_memory`, `delete_memory`, `get_memory`, `list_memories`, `invalidate`, `get_valid`, `knowledge_graph`, `get_status`) as plugin tools. Each proxies to the MCP server via stdio.
-- **Code Intelligence Tools** — 4 additional tools for codebase understanding: `index_project` (index a directory for code search), `recall_code` (semantic/hybrid code retrieval), `search_symbols` (find symbols by name/type), `project_info` (list/status/stats for indexed projects).
+- **Code Intelligence Tools** — 5 additional tools for codebase understanding: `index_project` (index a directory for code search), `recall_code` (semantic/hybrid code retrieval), `search_symbols` (find symbols by name/type), `project_info` (list/status/stats for indexed projects), `symbol_graph` (navigate call graph — callers, callees, related symbols).
 - **Config Reload** — `reload_config` tool re-reads the configuration file and applies changes in-place without restart (except `mcpServer` changes which require restart).
 - **System Prompt Guidance** — Injects a Memory Protocol into the system prompt via `experimental.chat.system.transform`, teaching the agent when and how to use memory tools, prefix conventions (DECISION:, TASK:, PATTERN:, etc.), and memory lifecycle.
 - **Tool Description Enhancement** — Augments MCP tool descriptions via `tool.definition` hook with contextual hints (prefix guidance for `store_memory`, hybrid search notes for `recall`, etc.).
@@ -63,7 +63,7 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
 
   // Auto-capture on session idle (WRITE)
   "autoCapture": {
-    "enabled": true,
+    "enabled": false,
     "debounceMs": 10000,
     "language": "en"
   },
@@ -98,12 +98,14 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
     "enabled": true
   },
 
-  // LLM for auto-capture summarization (OpenAI-compatible API)
+  // LLM for auto-capture summarization
+  // When apiKey is set: uses direct HTTP to the specified API (fastest)
+  // When apiKey is empty: uses OpenCode's session API with your configured providers (zero-config)
   "captureModel": {
-    "provider": "openai",
-    "model": "gpt-4o-mini",
-    "apiUrl": "https://api.openai.com/v1",
-    "apiKey": ""                     // Required for auto-capture; leave empty to disable
+    "provider": "",                  // OpenCode provider ID (e.g. "openai", "anthropic"); empty = use default
+    "model": "",                     // Model ID (e.g. "gpt-4o-mini"); empty = use default
+    "apiUrl": "",                    // Only used with direct HTTP mode (when apiKey is set)
+    "apiKey": ""                     // Optional; leave empty to use OpenCode session API
   },
 
   // MCP server configuration (memory-mcp-1file)
@@ -133,7 +135,7 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
 | **preemptiveCompaction** | Early compaction trigger based on token estimates |
 | **privacy** | Redaction of `<private>` tagged content |
 | **compactionSummaryCapture** | Saves compaction summaries as memories |
-| **captureModel** | LLM used for auto-capture summarization |
+| **captureModel** | LLM for auto-capture summarization — uses direct HTTP when apiKey is set, otherwise OpenCode session API |
 | **mcpServer** | [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server command, data directory, and embedding model |
 | **systemPrompt** | Agent guidance via Memory Protocol in system prompt |
 
@@ -168,7 +170,7 @@ Plugin hooks (index.ts)
   └── tool:memory        → fallback memory tool (search/store/list)
         ↓
   Services layer (src/services/)
-    ├── tool-registry.ts  → register 16 memory + code intelligence tools as plugin tools
+    ├── tool-registry.ts  → register 17 memory + code intelligence tools as plugin tools
     ├── mcp-client.ts     → stdio transport to MCP server
     ├── system-prompt.ts  → Memory Protocol prompt builder
     ├── auto-capture.ts   → LLM summarization + store
@@ -183,7 +185,7 @@ Plugin hooks (index.ts)
 
 ## How It Works
 
-The plugin spawns a [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server via stdio and registers 16 memory and code intelligence tools as plugin tools. The agent calls these tools directly; each call is proxied to the MCP server.
+The plugin spawns a [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server via stdio and registers 17 memory and code intelligence tools as plugin tools. The agent calls these tools directly; each call is proxied to the MCP server.
 
 Memory context is also handled through **synthetic parts** — invisible in the OpenCode TUI but received by the LLM as part of the conversation. The agent has full access to past project context without cluttering the user's view.
 
@@ -231,7 +233,7 @@ In OpenCode, run:
 The agent will walk you through:
 
 1. **Memory namespace** — choosing a `tag` to isolate this project's memories
-2. **Auto-capture** — configuring the LLM provider and API key for automatic memory extraction
+2. **Auto-capture** — configuring the LLM provider and model for automatic memory extraction (API key optional)
 3. **Embedding model** — selecting the local embedding model for code search
 4. **Optional tuning** — memory injection frequency, context limits, privacy settings
 
@@ -243,12 +245,12 @@ You can also re-run `/setup-mcp-memory` anytime to update your configuration.
 
 - OpenCode v1.2.27+
 - Node.js 18+
-- For auto-capture: An OpenAI-compatible API key
+- For auto-capture: Works out of the box using OpenCode's session API; optionally set an API key for direct HTTP mode
 
 ## Limitations
 
 - **Stdio transport only** — The MCP server is accessed exclusively via stdio. HTTP/SSE transport is not implemented, so external tools cannot connect to the memory server directly.
-- **Auto-capture requires LLM API** — The session-idle auto-capture feature requires an OpenAI-compatible API endpoint and key configured in `captureModel`. Without it, automatic memory extraction is disabled.
+- **Auto-capture LLM routing** — When `captureModel.apiKey` is set, auto-capture uses direct HTTP to the specified API. When empty, it falls back to OpenCode's session API (creates an ephemeral session, prompts, then deletes). The session API approach is zero-config but slightly slower due to session lifecycle overhead.
 - **In-memory session tracking** — Duplicate-prevention state (`injectedSessions`, `capturedSessions`) is held in memory and resets on process restart. The first message after a restart may re-inject memories that were already injected in the previous session.
 - **Tag-based privacy only** — Content is redacted only when explicitly wrapped in `<private>…</private>` tags. There is no automatic PII or secret detection.
 - **Approximate token counting** — Preemptive compaction estimates token usage via `chars / 4`, not a real tokenizer. Thresholds may not trigger at the exact expected point.
