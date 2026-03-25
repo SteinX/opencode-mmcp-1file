@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest"
-import { formatMemoriesForInjection, formatMemoriesForRecovery } from "../../src/utils/format.js"
+import { formatMemoriesForInjection, formatProjectKnowledge, formatMemoriesForRecovery, formatTieredProjectKnowledge } from "../../src/utils/format.js"
 import type { MemoryEntry } from "../../src/utils/format.js"
+import type { TierConfig } from "../../src/config.js"
 
 describe("formatMemoriesForInjection", () => {
   it("returns empty string for empty array", () => {
@@ -14,8 +15,8 @@ describe("formatMemoriesForInjection", () => {
     const result = formatMemoriesForInjection(memories)
     expect(result).toContain("[MEMORY]")
     expect(result).toContain("Use React 18")
-    expect(result).toContain("[95%]")
-    expect(result).toContain("(semantic)")
+    expect(result).toContain("[high match]")
+    expect(result).toContain("[semantic]")
   })
 
   it("formats multiple memories as list items", () => {
@@ -24,8 +25,8 @@ describe("formatMemoriesForInjection", () => {
       { id: "2", content: "fact two", score: 0.6 },
     ]
     const result = formatMemoriesForInjection(memories)
-    expect(result).toContain("- fact one [80%]")
-    expect(result).toContain("- fact two [60%]")
+    expect(result).toContain("- [high match] fact one")
+    expect(result).toContain("- [medium match] fact two")
   })
 
   it("omits score when not present", () => {
@@ -34,7 +35,9 @@ describe("formatMemoriesForInjection", () => {
     ]
     const result = formatMemoriesForInjection(memories)
     expect(result).toContain("- no score")
-    expect(result).not.toMatch(/\[\d+%\]/)
+    expect(result).not.toContain("[high match]")
+    expect(result).not.toContain("[medium match]")
+    expect(result).not.toContain("[low match]")
   })
 
   it("omits memory_type when not present", () => {
@@ -42,24 +45,60 @@ describe("formatMemoriesForInjection", () => {
       { id: "1", content: "no type", score: 0.5 },
     ]
     const result = formatMemoriesForInjection(memories)
-    expect(result).not.toContain("()")
-    expect(result).not.toMatch(/\(semantic\)|\(episodic\)|\(procedural\)/)
+    expect(result).not.toContain("[semantic]")
+    expect(result).not.toContain("[episodic]")
+    expect(result).not.toContain("[procedural]")
   })
 
-  it("rounds score to nearest integer", () => {
+  it("formats high confidence for score >= 0.8", () => {
     const memories: MemoryEntry[] = [
       { id: "1", content: "test", score: 0.876 },
     ]
     const result = formatMemoriesForInjection(memories)
-    expect(result).toContain("[88%]")
+    expect(result).toContain("[high match]")
   })
 
-  it("handles zero score", () => {
+  it("formats low confidence for score < 0.5", () => {
     const memories: MemoryEntry[] = [
       { id: "1", content: "test", score: 0 },
     ]
     const result = formatMemoriesForInjection(memories)
-    expect(result).toContain("[0%]")
+    expect(result).toContain("[low match]")
+  })
+})
+
+describe("formatProjectKnowledge", () => {
+  it("returns empty string for empty array", () => {
+    expect(formatProjectKnowledge([])).toBe("")
+  })
+
+  it("formats memories without confidence scores", () => {
+    const memories: MemoryEntry[] = [
+      { id: "1", content: "DECISION: Use PostgreSQL", score: 0.95, memory_type: "semantic" },
+    ]
+    const result = formatProjectKnowledge(memories)
+    expect(result).toContain("[MEMORY] Project Knowledge")
+    expect(result).toContain("- DECISION: Use PostgreSQL (semantic)")
+    expect(result).not.toContain("[95%]")
+  })
+
+  it("formats multiple memories as list items", () => {
+    const memories: MemoryEntry[] = [
+      { id: "1", content: "fact one" },
+      { id: "2", content: "fact two" },
+    ]
+    const result = formatProjectKnowledge(memories)
+    expect(result).toContain("- fact one")
+    expect(result).toContain("- fact two")
+  })
+
+  it("omits memory_type when not present", () => {
+    const memories: MemoryEntry[] = [
+      { id: "1", content: "no type" },
+    ]
+    const result = formatProjectKnowledge(memories)
+    expect(result).toContain("- no type")
+    expect(result).not.toContain("()")
   })
 })
 
@@ -108,5 +147,90 @@ describe("formatMemoriesForRecovery", () => {
     ]
     const result = formatMemoriesForRecovery(tasks, [])
     expect(result).not.toContain("90%")
+  })
+})
+
+describe("formatTieredProjectKnowledge", () => {
+  const tiers: TierConfig[] = [
+    { categories: ["DECISION", "PATTERN"], limit: 5 },
+    { categories: ["TASK"], limit: 3 },
+    { categories: [], limit: 3 },
+  ]
+
+  it("returns empty string when all tiers are empty", () => {
+    const allocated = new Map<number, MemoryEntry[]>([
+      [0, []],
+      [1, []],
+      [2, []],
+    ])
+    expect(formatTieredProjectKnowledge(allocated, tiers)).toBe("")
+  })
+
+  it("formats tier headers using category names", () => {
+    const allocated = new Map<number, MemoryEntry[]>([
+      [0, [{ id: "1", content: "DECISION: Use PostgreSQL" }]],
+      [1, []],
+      [2, []],
+    ])
+    const result = formatTieredProjectKnowledge(allocated, tiers)
+    expect(result).toContain("### DECISION / PATTERN")
+    expect(result).toContain("- DECISION: Use PostgreSQL")
+  })
+
+  it("labels catch-all tier as 'Other'", () => {
+    const allocated = new Map<number, MemoryEntry[]>([
+      [0, []],
+      [1, []],
+      [2, [{ id: "1", content: "BUGFIX: fixed something" }]],
+    ])
+    const result = formatTieredProjectKnowledge(allocated, tiers)
+    expect(result).toContain("### Other")
+    expect(result).toContain("- BUGFIX: fixed something")
+  })
+
+  it("includes memory_type when present", () => {
+    const allocated = new Map<number, MemoryEntry[]>([
+      [0, [{ id: "1", content: "DECISION: Use PostgreSQL", memory_type: "semantic" }]],
+      [1, []],
+      [2, []],
+    ])
+    const result = formatTieredProjectKnowledge(allocated, tiers)
+    expect(result).toContain("DECISION: Use PostgreSQL (semantic)")
+  })
+
+  it("skips empty tiers in output", () => {
+    const allocated = new Map<number, MemoryEntry[]>([
+      [0, [{ id: "1", content: "DECISION: one" }]],
+      [1, []],
+      [2, [{ id: "2", content: "Random note" }]],
+    ])
+    const result = formatTieredProjectKnowledge(allocated, tiers)
+    expect(result).toContain("### DECISION / PATTERN")
+    expect(result).not.toContain("### TASK")
+    expect(result).toContain("### Other")
+  })
+
+  it("uses tiered header in output", () => {
+    const allocated = new Map<number, MemoryEntry[]>([
+      [0, [{ id: "1", content: "PATTERN: repo pattern" }]],
+      [1, []],
+      [2, []],
+    ])
+    const result = formatTieredProjectKnowledge(allocated, tiers)
+    expect(result).toContain("[MEMORY] Project Knowledge (tiered, always-on context):")
+  })
+
+  it("formats multiple memories within a tier", () => {
+    const allocated = new Map<number, MemoryEntry[]>([
+      [0, [
+        { id: "1", content: "DECISION: Use PostgreSQL" },
+        { id: "2", content: "PATTERN: Repository pattern" },
+      ]],
+      [1, []],
+      [2, []],
+    ])
+    const result = formatTieredProjectKnowledge(allocated, tiers)
+    expect(result).toContain("- DECISION: Use PostgreSQL")
+    expect(result).toContain("- PATTERN: Repository pattern")
   })
 })

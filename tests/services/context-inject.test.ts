@@ -5,11 +5,16 @@ import {
   markSessionCompacted,
   fetchAndFormatMemories,
   fetchCodeIntelContext,
+  fetchProjectKnowledge,
+  allocateToTiers,
 } from "../../src/services/context-inject.js"
+import type { TierConfig } from "../../src/config.js"
+import type { MemoryEntry } from "../../src/utils/format.js"
 import type { PluginConfig } from "../../src/config.js"
 
 vi.mock("../../src/services/mcp-client.js", () => ({
   recall: vi.fn().mockResolvedValue([]),
+  listMemories: vi.fn().mockResolvedValue([]),
   callMemoryTool: vi.fn().mockResolvedValue("{}"),
 }))
 
@@ -17,11 +22,18 @@ vi.mock("../../src/utils/logger.js", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }))
 
-const { recall, callMemoryTool } = await import("../../src/services/mcp-client.js")
+const { recall, listMemories, callMemoryTool } = await import("../../src/services/mcp-client.js")
+
+const DEFAULT_TIERS: TierConfig[] = [
+  { categories: ["DECISION", "PATTERN"], limit: 5 },
+  { categories: ["TASK"], limit: 3 },
+  { categories: ["CONTEXT"], limit: 4 },
+  { categories: [], limit: 3 },
+]
 
 function makeConfig(overrides?: Partial<Pick<PluginConfig, "chatMessage">>): PluginConfig {
   return {
-    chatMessage: { enabled: true, maxMemories: 5, injectOn: "first", ...overrides?.chatMessage },
+    chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 30, injectOn: "first", projectKnowledgeTiers: DEFAULT_TIERS, ...overrides?.chatMessage },
     autoCapture: { enabled: true, debounceMs: 10000, language: "en" },
     compaction: { enabled: true, memoryLimit: 10 },
     keywordDetection: { enabled: true, extraPatterns: [] },
@@ -36,17 +48,17 @@ function makeConfig(overrides?: Partial<Pick<PluginConfig, "chatMessage">>): Plu
 
 describe("shouldInjectMemories", () => {
   it("returns false when chatMessage is disabled", () => {
-    const config = makeConfig({ chatMessage: { enabled: false, maxMemories: 5, injectOn: "first" } })
+    const config = makeConfig({ chatMessage: { enabled: false, maxMemories: 5, maxProjectMemories: 30, injectOn: "first" } })
     expect(shouldInjectMemories(config, "s1", false)).toBe(false)
   })
 
   it("returns true after compaction regardless of injectOn mode", () => {
-    const config = makeConfig({ chatMessage: { enabled: true, maxMemories: 5, injectOn: "first" } })
+    const config = makeConfig({ chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 30, injectOn: "first" } })
     expect(shouldInjectMemories(config, "s-compact", true)).toBe(true)
   })
 
   it("returns true on 'always' mode", () => {
-    const config = makeConfig({ chatMessage: { enabled: true, maxMemories: 5, injectOn: "always" } })
+    const config = makeConfig({ chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 30, injectOn: "always" } })
     expect(shouldInjectMemories(config, "s-always", false)).toBe(true)
   })
 
@@ -101,14 +113,144 @@ describe("fetchAndFormatMemories", () => {
     const result = await fetchAndFormatMemories(config, "what database should I use?")
     expect(result).toContain("[MEMORY]")
     expect(result).toContain("Use PostgreSQL for production")
-    expect(result).toContain("[90%]")
+    expect(result).toContain("[high match]")
   })
 
   it("passes maxMemories from config to recall", async () => {
-    const config = makeConfig({ chatMessage: { enabled: true, maxMemories: 3, injectOn: "first" } })
+    const config = makeConfig({ chatMessage: { enabled: true, maxMemories: 3, maxProjectMemories: 30, injectOn: "first" } })
     vi.mocked(recall).mockResolvedValue([])
     await fetchAndFormatMemories(config, "some question about the project")
     expect(recall).toHaveBeenCalledWith(config, "some question about the project", 3)
+  })
+})
+
+describe("allocateToTiers", () => {
+  const tiers: TierConfig[] = [
+    { categories: ["DECISION", "PATTERN"], limit: 2 },
+    { categories: ["TASK"], limit: 2 },
+    { categories: [], limit: 2 },
+  ]
+
+  it("allocates memories to matching tiers by priority", () => {
+    const memories: MemoryEntry[] = [
+      { id: "1", content: "DECISION: Use PostgreSQL" },
+      { id: "2", content: "TASK: implement auth" },
+      { id: "3", content: "PATTERN: Repository pattern" },
+      { id: "4", content: "CONTEXT: Node 20" },
+    ]
+    const result = allocateToTiers(memories, tiers)
+    expect(result.get(0)!.map((m) => m.id)).toEqual(["1", "3"]) // DECISION + PATTERN
+    expect(result.get(1)!.map((m) => m.id)).toEqual(["2"])       // TASK
+    expect(result.get(2)!.map((m) => m.id)).toEqual(["4"])       // catch-all
+  })
+
+  it("respects tier limits", () => {
+    const memories: MemoryEntry[] = [
+      { id: "1", content: "DECISION: one" },
+      { id: "2", content: "DECISION: two" },
+      { id: "3", content: "DECISION: three" },
+    ]
+    const result = allocateToTiers(memories, tiers)
+    expect(result.get(0)!).toHaveLength(2) // limit is 2
+  })
+
+  it("prevents duplicate allocation across tiers", () => {
+    const memories: MemoryEntry[] = [
+      { id: "1", content: "DECISION: already used" },
+    ]
+    const result = allocateToTiers(memories, tiers)
+    expect(result.get(0)!).toHaveLength(1) // matched in tier 0
+    expect(result.get(2)!).toHaveLength(0) // not re-matched in catch-all
+  })
+
+  it("assigns unmatched memories to catch-all tier", () => {
+    const memories: MemoryEntry[] = [
+      { id: "1", content: "BUGFIX: fixed null pointer" },
+      { id: "2", content: "RESEARCH: investigated caching" },
+      { id: "3", content: "Random note" },
+    ]
+    const result = allocateToTiers(memories, tiers)
+    expect(result.get(0)!).toHaveLength(0)
+    expect(result.get(1)!).toHaveLength(0)
+    expect(result.get(2)!.map((m) => m.id)).toEqual(["1", "2"]) // limited to 2
+  })
+
+  it("is case-insensitive for category matching", () => {
+    const memories: MemoryEntry[] = [
+      { id: "1", content: "decision: lowercase prefix" },
+      { id: "2", content: "Pattern: mixed case" },
+    ]
+    const result = allocateToTiers(memories, tiers)
+    expect(result.get(0)!).toHaveLength(2)
+  })
+
+  it("returns empty buckets when no memories provided", () => {
+    const result = allocateToTiers([], tiers)
+    expect(result.get(0)!).toHaveLength(0)
+    expect(result.get(1)!).toHaveLength(0)
+    expect(result.get(2)!).toHaveLength(0)
+  })
+})
+
+describe("fetchProjectKnowledge", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("returns null when listMemories returns empty", async () => {
+    const config = makeConfig()
+    vi.mocked(listMemories).mockResolvedValue([])
+    const result = await fetchProjectKnowledge(config)
+    expect(result).toBeNull()
+  })
+
+  it("returns tiered project knowledge when tiers are configured", async () => {
+    const config = makeConfig()
+    vi.mocked(listMemories).mockResolvedValue([
+      { id: "1", content: "DECISION: Use PostgreSQL", memory_type: "semantic" },
+      { id: "2", content: "CONTEXT: ESM modules with .js extensions", memory_type: "semantic" },
+    ])
+    const result = await fetchProjectKnowledge(config)
+    expect(result).toContain("[MEMORY] Project Knowledge (tiered, always-on context):")
+    expect(result).toContain("### DECISION / PATTERN")
+    expect(result).toContain("DECISION: Use PostgreSQL")
+    expect(result).toContain("### CONTEXT")
+    expect(result).toContain("CONTEXT: ESM modules with .js extensions")
+  })
+
+  it("falls back to flat format when tiers are null", async () => {
+    const config = makeConfig({ chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 30, injectOn: "first", projectKnowledgeTiers: null } })
+    vi.mocked(listMemories).mockResolvedValue([
+      { id: "1", content: "Some knowledge", memory_type: "semantic" },
+    ])
+    const result = await fetchProjectKnowledge(config)
+    expect(result).toContain("[MEMORY] Project Knowledge (always-on context):")
+    expect(result).toContain("Some knowledge")
+    expect(result).not.toContain("###")
+  })
+
+  it("does not include confidence scores in project knowledge", async () => {
+    const config = makeConfig()
+    vi.mocked(listMemories).mockResolvedValue([
+      { id: "1", content: "DECISION: Some knowledge", score: 0.95, memory_type: "semantic" },
+    ])
+    const result = await fetchProjectKnowledge(config)
+    expect(result).not.toContain("[95%]")
+    expect(result).toContain("DECISION: Some knowledge")
+  })
+
+  it("passes maxProjectMemories from config to listMemories", async () => {
+    const config = makeConfig({ chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 7, injectOn: "first" } })
+    vi.mocked(listMemories).mockResolvedValue([])
+    await fetchProjectKnowledge(config)
+    expect(listMemories).toHaveBeenCalledWith(config, 7)
+  })
+
+  it("returns null and does not throw when listMemories fails", async () => {
+    const config = makeConfig()
+    vi.mocked(listMemories).mockRejectedValue(new Error("connection refused"))
+    const result = await fetchProjectKnowledge(config)
+    expect(result).toBeNull()
   })
 })
 

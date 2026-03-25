@@ -15,7 +15,7 @@ const { readFileSync, existsSync } = await import("fs")
 
 function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
   return {
-    chatMessage: { enabled: true, maxMemories: 5, injectOn: "first" },
+    chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 30, injectOn: "first", projectKnowledgeTiers: [{ categories: ["DECISION", "PATTERN"], limit: 5 }, { categories: ["TASK"], limit: 3 }, { categories: ["CONTEXT"], limit: 4 }, { categories: [], limit: 3 }] },
     autoCapture: { enabled: false, debounceMs: 10000, language: "en" },
     compaction: { enabled: true, memoryLimit: 10 },
     keywordDetection: { enabled: true, extraPatterns: [] },

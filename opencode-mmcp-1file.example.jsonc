@@ -3,7 +3,18 @@
   "chatMessage": {
     "enabled": true,
     "maxMemories": 5,
-    "injectOn": "first"            // "first" = first message only, "always" = every message
+    "maxProjectMemories": 30,       // Max memories to fetch for tiered allocation (pool size)
+    "injectOn": "first",           // "first" = first message only, "always" = every message
+    // Tiered injection: prioritize important categories over recency.
+    // Each tier defines category prefixes to match and a max slot count.
+    // Memories are allocated in tier order; unmatched go to catch-all (empty categories).
+    // Set to null to disable tiering and use flat recency-based list.
+    "projectKnowledgeTiers": [
+      { "categories": ["DECISION", "PATTERN"], "limit": 5 },
+      { "categories": ["TASK"], "limit": 3 },
+      { "categories": ["CONTEXT"], "limit": 4 },
+      { "categories": [], "limit": 3 }
+    ]
   },
 
   // Auto-capture on session idle (WRITE)

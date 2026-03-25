@@ -9,18 +9,25 @@ Persistent memory for OpenCode agents via [memory-mcp-1file](https://github.com/
 
 ## What it does
 
-This OpenCode plugin gives agents persistent memory across sessions. It connects to a `memory-mcp-1file` MCP server via stdio and registers **17 memory & code intelligence tools** as plugin tools, giving the agent direct access to store, search, and manage memories — plus index, search, and explore codebases. The plugin also provides automatic context injection, idle-time capture, compaction recovery, agent guidance via system prompt, a `/init-mcp-memory` bootstrap command for deep project onboarding, and a `/setup-mcp-memory` guided configuration wizard.
+This OpenCode plugin gives agents persistent memory across sessions. It connects to a `memory-mcp-1file` MCP server via stdio and registers **8 unified tools** as plugin tools — consolidating memory search, storage, lifecycle management, code intelligence, and project indexing into an ergonomic interface with automatic routing. The plugin also provides automatic context injection, idle-time capture, compaction recovery, smart trigger nudges, agent guidance via system prompt, a `/init-mcp-memory` bootstrap command for deep project onboarding, and a `/setup-mcp-memory` guided configuration wizard.
 
 ## Features
 
 ### Agent-facing (via plugin tool registration)
 
-- **Direct Memory Tools** — The plugin registers 11 core memory tools (`store_memory`, `recall`, `search_memory`, `update_memory`, `delete_memory`, `get_memory`, `list_memories`, `invalidate`, `get_valid`, `knowledge_graph`, `get_status`) as plugin tools. Each proxies to the MCP server via stdio.
-- **Code Intelligence Tools** — 5 additional tools for codebase understanding: `index_project` (index a directory for code search), `recall_code` (semantic/hybrid code retrieval), `search_symbols` (find symbols by name/type), `project_info` (list/status/stats for indexed projects), `symbol_graph` (navigate call graph — callers, callees, related symbols).
-- **Config Reload** — `reload_config` tool re-reads the configuration file and applies changes in-place without restart (except `mcpServer` changes which require restart).
-- **System Prompt Guidance** — Injects a Memory Protocol into the system prompt via `experimental.chat.system.transform`, teaching the agent when and how to use memory tools, prefix conventions (DECISION:, TASK:, PATTERN:, etc.), and memory lifecycle.
+- **Unified Memory Tools (8 tools)** — The plugin consolidates 17 underlying MCP operations into 8 ergonomic tools:
+  - `memory_query` — Unified search with auto/semantic/keyword/recent modes. Routes to the best search strategy automatically.
+  - `memory_save` — Smart storage with auto-categorization (DECISION, TASK, PATTERN, BUGFIX, etc.) and privacy filtering.
+  - `memory_manage` — Memory lifecycle: get, update, delete, or invalidate by ID.
+  - `code_search` — Unified code intelligence: intent-based search, symbol lookup, and call graph traversal (callers/callees/related).
+  - `project_status` — Project indexing: list indexed projects, index new ones, or view code statistics.
+  - `knowledge_graph` — Create entities/relations, query relationships, detect communities.
+  - `get_status` — Memory system status and startup progress.
+  - `reload_config` — Hot-reload configuration from disk without restart.
+- **System Prompt Guidance** — Injects a Memory Protocol into the system prompt via `experimental.chat.system.transform`, teaching the agent when and how to use memory tools, prefix conventions, memory lifecycle, action triggers, and anti-patterns.
 - **Tool Description Enhancement** — Augments MCP tool descriptions via `tool.definition` hook with contextual hints (prefix guidance for `store_memory`, hybrid search notes for `recall`, etc.).
-- **Keyword Detection** — Detects phrases like "remember this", "save this", "记住" in user messages and nudges the agent to use `store_memory`.
+- **Keyword Detection** — Detects phrases like "remember this", "save this", "记住" in user messages and nudges the agent to use memory tools.
+- **Smart Triggers** — Detects decision points, new task starts, and error/debugging contexts in conversations, nudging the agent to store or recall memories at the right time (with 5-minute cooldown per trigger type).
 
 ### Plugin-managed (automatic, behind the scenes)
 
@@ -58,7 +65,16 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
   "chatMessage": {
     "enabled": true,
     "maxMemories": 5,
-    "injectOn": "first"            // "first" = first message only, "always" = every message
+    "maxProjectMemories": 30,       // Max memories to fetch for tiered allocation (pool size)
+    "injectOn": "first",           // "first" = first message only, "always" = every message
+    // Tiered injection: prioritize important categories over recency.
+    // Set to null to disable and use flat recency-based list.
+    "projectKnowledgeTiers": [
+      { "categories": ["DECISION", "PATTERN"], "limit": 5 },
+      { "categories": ["TASK"], "limit": 3 },
+      { "categories": ["CONTEXT"], "limit": 4 },
+      { "categories": [], "limit": 3 }
+    ]
   },
 
   // Auto-capture on session idle (WRITE)
@@ -170,7 +186,7 @@ Plugin hooks (index.ts)
   └── tool:memory        → fallback memory tool (search/store/list)
         ↓
   Services layer (src/services/)
-    ├── tool-registry.ts  → register 17 memory + code intelligence tools as plugin tools
+    ├── tool-registry.ts  → register 8 unified tools (consolidating 17 MCP operations)
     ├── mcp-client.ts     → stdio transport to MCP server
     ├── system-prompt.ts  → Memory Protocol prompt builder
     ├── auto-capture.ts   → LLM summarization + store
@@ -185,7 +201,7 @@ Plugin hooks (index.ts)
 
 ## How It Works
 
-The plugin spawns a [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server via stdio and registers 17 memory and code intelligence tools as plugin tools. The agent calls these tools directly; each call is proxied to the MCP server.
+The plugin spawns a [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server via stdio and registers 8 unified tools that consolidate 17 underlying MCP operations into an ergonomic interface. The agent calls these tools directly; each call is automatically routed to the appropriate MCP operation.
 
 Memory context is also handled through **synthetic parts** — invisible in the OpenCode TUI but received by the LLM as part of the conversation. The agent has full access to past project context without cluttering the user's view.
 

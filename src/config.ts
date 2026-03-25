@@ -4,12 +4,21 @@ import { homedir } from "os"
 import { parse as parseJsonc } from "jsonc-parser"
 import { logger } from "./utils/logger.js"
 
+export interface TierConfig {
+  /** Category prefixes to match (e.g. ["DECISION", "PATTERN"]) */
+  categories: string[]
+  /** Max memories to inject from this tier */
+  limit: number
+}
+
 export interface PluginConfig {
   chatMessage: {
     enabled: boolean
     maxMemories: number
+    maxProjectMemories: number
     injectOn: "first" | "always"
-
+    /** Tiered injection: prioritize important categories over recency. Set to null/undefined to disable (flat list fallback). */
+    projectKnowledgeTiers?: TierConfig[] | null
   }
   autoCapture: {
     enabled: boolean
@@ -58,7 +67,14 @@ const DEFAULT_CONFIG: PluginConfig = {
   chatMessage: {
     enabled: true,
     maxMemories: 5,
+    maxProjectMemories: 30,
     injectOn: "first",
+    projectKnowledgeTiers: [
+      { categories: ["DECISION", "PATTERN"], limit: 5 },
+      { categories: ["TASK"], limit: 3 },
+      { categories: ["CONTEXT"], limit: 4 },
+      { categories: [], limit: 3 },
+    ],
   },
   autoCapture: {
     enabled: false,

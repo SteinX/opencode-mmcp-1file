@@ -1,6 +1,7 @@
-import type { PluginConfig } from "../config.js"
-import { recall, callMemoryTool } from "./mcp-client.js"
-import { formatMemoriesForInjection } from "../utils/format.js"
+import type { PluginConfig, TierConfig } from "../config.js"
+import { recall, listMemories, callMemoryTool } from "./mcp-client.js"
+import { formatMemoriesForInjection, formatProjectKnowledge, formatTieredProjectKnowledge } from "../utils/format.js"
+import type { MemoryEntry } from "../utils/format.js"
 import { logger } from "../utils/logger.js"
 
 const injectedSessions = new Set<string>()
@@ -82,4 +83,58 @@ export async function fetchAndFormatMemories(
   if (memories.length === 0) return null
 
   return formatMemoriesForInjection(memories)
+}
+
+function matchesTier(memory: MemoryEntry, tier: TierConfig): boolean {
+  if (tier.categories.length === 0) return true
+  const upper = memory.content.toUpperCase()
+  return tier.categories.some((cat) => upper.startsWith(cat.toUpperCase()))
+}
+
+export function allocateToTiers(
+  memories: MemoryEntry[],
+  tiers: TierConfig[],
+): Map<number, MemoryEntry[]> {
+  const result = new Map<number, MemoryEntry[]>()
+  const used = new Set<string>()
+
+  for (let i = 0; i < tiers.length; i++) {
+    result.set(i, [])
+  }
+
+  for (let i = 0; i < tiers.length; i++) {
+    const tier = tiers[i]
+    const bucket = result.get(i)!
+    for (const m of memories) {
+      if (used.has(m.id)) continue
+      if (bucket.length >= tier.limit) break
+      if (matchesTier(m, tier)) {
+        bucket.push(m)
+        used.add(m.id)
+      }
+    }
+  }
+
+  return result
+}
+
+export async function fetchProjectKnowledge(
+  config: PluginConfig,
+): Promise<string | null> {
+  try {
+    const maxProjectMemories = config.chatMessage.maxProjectMemories ?? 30
+    const memories = await listMemories(config, maxProjectMemories)
+    if (memories.length === 0) return null
+
+    const tiers = config.chatMessage.projectKnowledgeTiers
+    if (!tiers || tiers.length === 0) {
+      return formatProjectKnowledge(memories)
+    }
+
+    const allocated = allocateToTiers(memories, tiers)
+    return formatTieredProjectKnowledge(allocated, tiers)
+  } catch (err) {
+    logger.debug("Failed to fetch project knowledge", { error: String(err) })
+    return null
+  }
 }
