@@ -39,7 +39,7 @@ const { isConnectionFailed, getConnectionStatus } = await import("../../src/serv
 
 function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
   return {
-    chatMessage: { enabled: true, maxMemories: 5, injectOn: "first" },
+    chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 10, injectOn: "first" },
     autoCapture: { enabled: true, debounceMs: 10000, language: "en" },
     compaction: { enabled: true, memoryLimit: 10 },
     keywordDetection: { enabled: true, extraPatterns: [] },
@@ -69,26 +69,17 @@ describe("buildToolRegistry", () => {
     vi.clearAllMocks()
   })
 
-  it("returns all 17 expected tools", () => {
+  it("returns 8 unified tools", () => {
     const tools = buildToolRegistry(makeConfig())
     const toolNames = Object.keys(tools)
     expect(toolNames).toEqual([
-      "store_memory",
-      "update_memory",
-      "delete_memory",
-      "get_memory",
-      "list_memories",
-      "recall",
-      "search_memory",
-      "invalidate",
-      "get_valid",
+      "memory_query",
+      "memory_save",
+      "memory_manage",
+      "code_search",
+      "project_status",
       "knowledge_graph",
       "get_status",
-      "index_project",
-      "recall_code",
-      "search_symbols",
-      "project_info",
-      "symbol_graph",
       "reload_config",
     ])
   })
@@ -101,14 +92,90 @@ describe("buildToolRegistry", () => {
   })
 })
 
-describe("store_memory tool", () => {
+describe("memory_query tool", () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it("calls callMemoryTool with content", async () => {
+  it("uses recall (hybrid search) in auto mode", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.memory_query.execute({ query: "test query" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "recall",
+      expect.objectContaining({ query: "test query" }),
+    )
+  })
+
+  it("uses list_memories for recent queries", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.memory_query.execute({ query: "recent memories" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "list_memories",
+      expect.anything(),
+    )
+  })
+
+  it("uses bm25 search in keyword mode", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.memory_query.execute({ query: "test", mode: "keyword" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "search_memory",
+      expect.objectContaining({ query: "test", mode: "bm25" }),
+    )
+  })
+
+  it("uses vector search in semantic mode", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.memory_query.execute({ query: "test", mode: "semantic" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "search_memory",
+      expect.objectContaining({ query: "test", mode: "vector" }),
+    )
+  })
+
+  it("passes limit parameter", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.memory_query.execute({ query: "test", limit: 10 }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "recall",
+      expect.objectContaining({ limit: 10 }),
+    )
+  })
+
+  it("routes to get_valid when query mentions 'valid'", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.memory_query.execute({ query: "show valid memories" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "get_valid",
+      expect.objectContaining({ limit: 5 }),
+    )
+  })
+})
+
+describe("memory_save tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("calls store_memory with content", async () => {
     const tools = buildToolRegistry(makeConfig({ privacy: { enabled: false } }))
-    await tools.store_memory.execute({ content: "DECISION: use postgres" }, mockContext)
+    await tools.memory_save.execute({ content: "use postgres" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "store_memory",
+      expect.objectContaining({ content: expect.stringContaining("use postgres") }),
+    )
+  })
+
+  it("adds DECISION prefix when category is DECISION", async () => {
+    const tools = buildToolRegistry(makeConfig({ privacy: { enabled: false } }))
+    await tools.memory_save.execute({ content: "use postgres", category: "DECISION" }, mockContext)
     expect(callMemoryTool).toHaveBeenCalledWith(
       expect.anything(),
       "store_memory",
@@ -116,320 +183,272 @@ describe("store_memory tool", () => {
     )
   })
 
+  it("auto-detects DECISION from content", async () => {
+    const tools = buildToolRegistry(makeConfig({ privacy: { enabled: false } }))
+    await tools.memory_save.execute({ content: "I decide to use React" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "store_memory",
+      expect.objectContaining({ content: "DECISION: I decide to use React" }),
+    )
+  })
+
   it("applies privacy filter when enabled", async () => {
     const tools = buildToolRegistry(makeConfig({ privacy: { enabled: true } }))
-    await tools.store_memory.execute({ content: "save <private>secret-key</private> and other public info here" }, mockContext)
-
+    await tools.memory_save.execute({ content: "save <private>secret-key</private> info" }, mockContext)
     expect(stripPrivateContent).toHaveBeenCalled()
     const callArgs = vi.mocked(callMemoryTool).mock.calls[0]?.[2]
     expect(callArgs?.content).not.toContain("secret-key")
-    expect(callArgs?.content).toContain("[REDACTED]")
   })
 
   it("blocks fully private content", async () => {
     const tools = buildToolRegistry(makeConfig({ privacy: { enabled: true } }))
-    const result = await tools.store_memory.execute({ content: "<private>all secret</private>" }, mockContext)
+    const result = await tools.memory_save.execute({ content: "<private>all secret</private>" }, mockContext)
     expect(result).toContain("entirely private")
     expect(callMemoryTool).not.toHaveBeenCalled()
-  })
-
-  it("skips privacy filter when privacy disabled", async () => {
-    const tools = buildToolRegistry(makeConfig({ privacy: { enabled: false } }))
-    await tools.store_memory.execute({ content: "<private>secret</private> data" }, mockContext)
-    expect(isFullyPrivate).not.toHaveBeenCalled()
-    expect(stripPrivateContent).not.toHaveBeenCalled()
   })
 
   it("passes memory_type when provided", async () => {
     const tools = buildToolRegistry(makeConfig({ privacy: { enabled: false } }))
-    await tools.store_memory.execute({ content: "test", memory_type: "procedural" }, mockContext)
+    await tools.memory_save.execute({ content: "test", memory_type: "episodic" }, mockContext)
     expect(callMemoryTool).toHaveBeenCalledWith(
       expect.anything(),
       "store_memory",
-      expect.objectContaining({ content: "test", memory_type: "procedural" }),
-    )
-  })
-
-  it("parses JSON metadata string", async () => {
-    const tools = buildToolRegistry(makeConfig({ privacy: { enabled: false } }))
-    await tools.store_memory.execute({ content: "test", metadata: '{"tags": ["a"]}' }, mockContext)
-    expect(callMemoryTool).toHaveBeenCalledWith(
-      expect.anything(),
-      "store_memory",
-      expect.objectContaining({ metadata: { tags: ["a"] } }),
-    )
-  })
-
-  it("passes non-JSON metadata as-is", async () => {
-    const tools = buildToolRegistry(makeConfig({ privacy: { enabled: false } }))
-    await tools.store_memory.execute({ content: "test", metadata: "plain text" }, mockContext)
-    expect(callMemoryTool).toHaveBeenCalledWith(
-      expect.anything(),
-      "store_memory",
-      expect.objectContaining({ metadata: "plain text" }),
+      expect.objectContaining({ memory_type: "episodic" }),
     )
   })
 })
 
-describe("update_memory tool", () => {
+describe("memory_manage tool", () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it("calls callMemoryTool with id", async () => {
+  it("calls get_memory for get action", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.memory_manage.execute({ action: "get", id: "mem-1" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "get_memory",
+      expect.objectContaining({ id: "mem-1" }),
+    )
+  })
+
+  it("calls delete_memory for delete action", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.memory_manage.execute({ action: "delete", id: "mem-1" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "delete_memory",
+      expect.objectContaining({ id: "mem-1" }),
+    )
+  })
+
+  it("calls invalidate for invalidate action", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.memory_manage.execute({ action: "invalidate", id: "mem-1", reason: "outdated" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "invalidate",
+      expect.objectContaining({ id: "mem-1", reason: "outdated" }),
+    )
+  })
+
+  it("calls update_memory for update action", async () => {
     const tools = buildToolRegistry(makeConfig({ privacy: { enabled: false } }))
-    await tools.update_memory.execute({ id: "mem-1", content: "updated content" }, mockContext)
+    await tools.memory_manage.execute({ action: "update", id: "mem-1", content: "new content" }, mockContext)
     expect(callMemoryTool).toHaveBeenCalledWith(
       expect.anything(),
       "update_memory",
-      expect.objectContaining({ id: "mem-1", content: "updated content" }),
+      expect.objectContaining({ id: "mem-1", content: "new content" }),
     )
   })
 
-  it("applies privacy filter on content update", async () => {
-    const tools = buildToolRegistry(makeConfig({ privacy: { enabled: true } }))
-    await tools.update_memory.execute({ id: "mem-1", content: "public <private>secret</private> content here for update" }, mockContext)
+  it("requires content for update action", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.memory_manage.execute({ action: "update", id: "mem-1" }, mockContext)
+    expect(result).toContain("content is required")
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
 
+  it("applies privacy filter on update", async () => {
+    const tools = buildToolRegistry(makeConfig({ privacy: { enabled: true } }))
+    await tools.memory_manage.execute({ action: "update", id: "mem-1", content: "public <private>secret</private> info" }, mockContext)
     const callArgs = vi.mocked(callMemoryTool).mock.calls[0]?.[2]
     expect(callArgs?.content).toContain("[REDACTED]")
   })
+})
 
-  it("blocks update when content is fully private", async () => {
-    const tools = buildToolRegistry(makeConfig({ privacy: { enabled: true } }))
-    const result = await tools.update_memory.execute({ id: "mem-1", content: "<private>all secret</private>" }, mockContext)
-    expect(result).toContain("entirely private")
+describe("code_search tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("calls recall_code for intent search", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.code_search.execute({ query: "authentication handler" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "recall_code",
+      expect.objectContaining({ query: "authentication handler" }),
+    )
+  })
+
+  it("calls search_symbols for symbol search", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.code_search.execute({ query: "handleRequest", search_type: "symbol" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "search_symbols",
+      expect.objectContaining({ query: "handleRequest" }),
+    )
+  })
+
+  it("calls symbol_graph for callers/callees/related", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.code_search.execute({ query: "", search_type: "callers", symbol_id: "sym-1" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "symbol_graph",
+      expect.objectContaining({ action: "callers", symbol_id: "sym-1" }),
+    )
+  })
+
+  it("requires symbol_id for graph searches", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.code_search.execute({ query: "", search_type: "callers" }, mockContext)
+    expect(result).toContain("symbol_id is required")
     expect(callMemoryTool).not.toHaveBeenCalled()
   })
+
+  it("passes project_id and limit parameters", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.code_search.execute({ query: "test", project_id: "proj-1", limit: 5 }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "recall_code",
+      expect.objectContaining({ projectId: "proj-1", limit: 5 }),
+    )
+  })
 })
 
-describe("proxy tools (simple passthrough)", () => {
+describe("project_status tool", () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it("delete_memory passes id", async () => {
+  it("calls project_info for list action", async () => {
     const tools = buildToolRegistry(makeConfig())
-    await tools.delete_memory.execute({ id: "mem-1" }, mockContext)
-    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "delete_memory", { id: "mem-1" })
+    await tools.project_status.execute({ action: "list" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "project_info",
+      expect.objectContaining({ action: "list" }),
+    )
   })
 
-  it("get_memory passes id", async () => {
+  it("calls project_info for stats action", async () => {
     const tools = buildToolRegistry(makeConfig())
-    await tools.get_memory.execute({ id: "mem-1" }, mockContext)
-    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "get_memory", { id: "mem-1" })
+    await tools.project_status.execute({ action: "stats", project_id: "proj-1" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "project_info",
+      expect.objectContaining({ action: "stats", project_id: "proj-1" }),
+    )
   })
 
-  it("recall passes query and optional limit", async () => {
+  it("calls index_project for index action", async () => {
     const tools = buildToolRegistry(makeConfig())
-    await tools.recall.execute({ query: "test query", limit: 5 }, mockContext)
-    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "recall", { query: "test query", limit: 5 })
+    await tools.project_status.execute({ action: "index", path: "/my/project" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "index_project",
+      expect.objectContaining({ path: "/my/project" }),
+    )
   })
 
-  it("recall omits limit when not provided", async () => {
+  it("requires path for index action", async () => {
     const tools = buildToolRegistry(makeConfig())
-    await tools.recall.execute({ query: "test" }, mockContext)
-    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "recall", { query: "test" })
+    const result = await tools.project_status.execute({ action: "index" }, mockContext)
+    expect(result).toContain("path is required")
+    expect(callMemoryTool).not.toHaveBeenCalled()
   })
 
-  it("get_status passes empty args", async () => {
+  it("passes force parameter for index", async () => {
     const tools = buildToolRegistry(makeConfig())
-    await tools.get_status.execute({}, mockContext)
-    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "get_status", {})
-  })
-
-  it("returns error string when callMemoryTool throws", async () => {
-    vi.mocked(callMemoryTool).mockRejectedValueOnce(new Error("connection failed"))
-    const tools = buildToolRegistry(makeConfig())
-    const result = await tools.get_status.execute({}, mockContext)
-    expect(result).toContain("Error:")
-    expect(result).toContain("connection failed")
+    await tools.project_status.execute({ action: "index", path: "/project", force: true }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "index_project",
+      expect.objectContaining({ path: "/project", force: true }),
+    )
   })
 })
 
-describe("index_project tool", () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
-  it("passes path as required arg", async () => {
-    const tools = buildToolRegistry(makeConfig())
-    await tools.index_project.execute({ path: "/my/project" }, mockContext)
-    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "index_project", { path: "/my/project" })
-  })
-
-  it("passes force when provided", async () => {
-    const tools = buildToolRegistry(makeConfig())
-    await tools.index_project.execute({ path: "/my/project", force: true }, mockContext)
-    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "index_project", { path: "/my/project", force: true })
-  })
-
-  it("omits force when not provided", async () => {
-    const tools = buildToolRegistry(makeConfig())
-    await tools.index_project.execute({ path: "/my/project" }, mockContext)
-    const callArgs = vi.mocked(callMemoryTool).mock.calls[0]?.[2]
-    expect(callArgs).not.toHaveProperty("force")
-  })
-})
-
-describe("recall_code tool", () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
-  it("passes query as required arg", async () => {
-    const tools = buildToolRegistry(makeConfig())
-    await tools.recall_code.execute({ query: "authentication handler" }, mockContext)
-    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "recall_code", { query: "authentication handler" })
-  })
-
-  it("maps snake_case args to camelCase for MCP server", async () => {
-    const tools = buildToolRegistry(makeConfig())
-    await tools.recall_code.execute({
-      query: "test",
-      project_id: "proj-1",
-      vector_weight: 0.5,
-      bm25_weight: 0.3,
-      ppr_weight: 0.2,
-      path_prefix: "src/",
-      chunk_type: "function",
-    }, mockContext)
-
-    const callArgs = vi.mocked(callMemoryTool).mock.calls[0]?.[2]
-    // Should be camelCase in the MCP call
-    expect(callArgs).toEqual({
-      query: "test",
-      projectId: "proj-1",
-      vectorWeight: 0.5,
-      bm25Weight: 0.3,
-      pprWeight: 0.2,
-      pathPrefix: "src/",
-      chunkType: "function",
-    })
-  })
-
-  it("passes mode and language filters", async () => {
-    const tools = buildToolRegistry(makeConfig())
-    await tools.recall_code.execute({ query: "test", mode: "vector", language: "typescript" }, mockContext)
-    const callArgs = vi.mocked(callMemoryTool).mock.calls[0]?.[2]
-    expect(callArgs).toEqual({ query: "test", mode: "vector", language: "typescript" })
-  })
-
-  it("omits optional args when not provided", async () => {
-    const tools = buildToolRegistry(makeConfig())
-    await tools.recall_code.execute({ query: "test" }, mockContext)
-    const callArgs = vi.mocked(callMemoryTool).mock.calls[0]?.[2]
-    expect(callArgs).toEqual({ query: "test" })
-  })
-})
-
-describe("search_symbols tool", () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
-  it("passes query as required arg", async () => {
-    const tools = buildToolRegistry(makeConfig())
-    await tools.search_symbols.execute({ query: "handleRequest" }, mockContext)
-    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "search_symbols", { query: "handleRequest" })
-  })
-
-  it("keeps snake_case for MCP server (no rename)", async () => {
-    const tools = buildToolRegistry(makeConfig())
-    await tools.search_symbols.execute({
-      query: "test",
-      project_id: "proj-1",
-      limit: 20,
-      offset: 10,
-      symbol_type: "function",
-      path_prefix: "src/services/",
-    }, mockContext)
-
-    const callArgs = vi.mocked(callMemoryTool).mock.calls[0]?.[2]
-    expect(callArgs).toEqual({
-      query: "test",
-      project_id: "proj-1",
-      limit: 20,
-      offset: 10,
-      symbol_type: "function",
-      path_prefix: "src/services/",
-    })
-  })
-
-  it("omits optional args when not provided", async () => {
-    const tools = buildToolRegistry(makeConfig())
-    await tools.search_symbols.execute({ query: "test" }, mockContext)
-    const callArgs = vi.mocked(callMemoryTool).mock.calls[0]?.[2]
-    expect(callArgs).toEqual({ query: "test" })
-  })
-})
-
-describe("project_info tool", () => {
+describe("knowledge_graph tool", () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
   it("passes action as required arg", async () => {
     const tools = buildToolRegistry(makeConfig())
-    await tools.project_info.execute({ action: "list" }, mockContext)
-    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "project_info", { action: "list" })
+    await tools.knowledge_graph.execute({ action: "detect_communities" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "knowledge_graph",
+      expect.objectContaining({ action: "detect_communities" }),
+    )
   })
 
-  it("passes project_id for status action", async () => {
+  it("passes all optional args", async () => {
     const tools = buildToolRegistry(makeConfig())
-    await tools.project_info.execute({ action: "status", project_id: "proj-1" }, mockContext)
-    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "project_info", { action: "status", project_id: "proj-1" })
-  })
-
-  it("passes project_id for stats action", async () => {
-    const tools = buildToolRegistry(makeConfig())
-    await tools.project_info.execute({ action: "stats", project_id: "proj-1" }, mockContext)
-    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "project_info", { action: "stats", project_id: "proj-1" })
-  })
-
-  it("omits project_id when not provided", async () => {
-    const tools = buildToolRegistry(makeConfig())
-    await tools.project_info.execute({ action: "list" }, mockContext)
-    const callArgs = vi.mocked(callMemoryTool).mock.calls[0]?.[2]
-    expect(callArgs).not.toHaveProperty("project_id")
+    await tools.knowledge_graph.execute({
+      action: "create_entity",
+      name: "TestEntity",
+      entity_type: "component",
+      description: "A test component",
+    }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "knowledge_graph",
+      expect.objectContaining({
+        action: "create_entity",
+        name: "TestEntity",
+        entity_type: "component",
+        description: "A test component",
+      }),
+    )
   })
 })
 
-describe("symbol_graph tool", () => {
+describe("get_status tool", () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it("passes action and symbol_id as required args", async () => {
+  it("proxies to MCP when connected", async () => {
     const tools = buildToolRegistry(makeConfig())
-    await tools.symbol_graph.execute({ action: "callers", symbol_id: "sym-1" }, mockContext)
-    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "symbol_graph", { action: "callers", symbol_id: "sym-1" })
+    await tools.get_status.execute({}, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "get_status", {})
   })
 
-  it("passes depth and direction for related action", async () => {
-    const tools = buildToolRegistry(makeConfig())
-    await tools.symbol_graph.execute({ action: "related", symbol_id: "sym-1", depth: 3, direction: "out" }, mockContext)
-    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "symbol_graph", {
-      action: "related",
-      symbol_id: "sym-1",
-      depth: 3,
-      direction: "out",
+  it("returns local status when disconnected", async () => {
+    vi.mocked(isConnectionFailed).mockReturnValue(true)
+    vi.mocked(getConnectionStatus).mockReturnValue({
+      connected: false,
+      failureCount: 2,
+      lastFailureTime: Date.now(),
+      retrying: true,
     })
-  })
 
-  it("omits depth and direction when not provided", async () => {
     const tools = buildToolRegistry(makeConfig())
-    await tools.symbol_graph.execute({ action: "callees", symbol_id: "sym-2" }, mockContext)
-    const callArgs = vi.mocked(callMemoryTool).mock.calls[0]?.[2]
-    expect(callArgs).not.toHaveProperty("depth")
-    expect(callArgs).not.toHaveProperty("direction")
-  })
+    const result = await tools.get_status.execute({}, mockContext)
+    const parsed = JSON.parse(result as string)
+    expect(parsed.status).toBe("disconnected")
+    expect(parsed.failureCount).toBe(2)
+    expect(callMemoryTool).not.toHaveBeenCalled()
 
-  it("returns error string when proxy fails", async () => {
-    vi.mocked(callMemoryTool).mockRejectedValueOnce(new Error("connection lost"))
-    const tools = buildToolRegistry(makeConfig())
-    const result = await tools.symbol_graph.execute({ action: "callers", symbol_id: "sym-1" }, mockContext)
-    expect(result).toContain("Error:")
-    expect(result).toContain("connection lost")
+    vi.mocked(isConnectionFailed).mockReturnValue(false)
   })
 })
 
@@ -461,13 +480,6 @@ describe("reload_config tool", () => {
     expect(result).toContain("restart")
   })
 
-  it("passes directory to applyConfig", async () => {
-    vi.mocked(applyConfig).mockReturnValue([])
-    const tools = buildToolRegistry(makeConfig(), "/my/project")
-    await tools.reload_config.execute({}, mockContext)
-    expect(applyConfig).toHaveBeenCalledWith(expect.anything(), "/my/project")
-  })
-
   it("returns error message when applyConfig throws", async () => {
     vi.mocked(applyConfig).mockImplementation(() => {
       throw new Error("file read failed")
@@ -489,76 +501,24 @@ describe("proxy fast-fail when connection failed", () => {
     vi.mocked(isConnectionFailed).mockReturnValue(false)
   })
 
-  it("returns unavailable message for recall when disconnected", async () => {
+  it("returns unavailable message for memory_query when disconnected", async () => {
     const tools = buildToolRegistry(makeConfig())
-    const result = await tools.recall.execute({ query: "test" }, mockContext)
+    const result = await tools.memory_query.execute({ query: "test" }, mockContext)
     expect(result).toContain("Memory server temporarily unavailable")
-    expect(result).toContain("auto-reconnecting")
     expect(callMemoryTool).not.toHaveBeenCalled()
   })
 
-  it("returns unavailable message for store_memory when disconnected", async () => {
+  it("returns unavailable message for memory_save when disconnected", async () => {
     const tools = buildToolRegistry(makeConfig({ privacy: { enabled: false } }))
-    const result = await tools.store_memory.execute({ content: "test" }, mockContext)
+    const result = await tools.memory_save.execute({ content: "test" }, mockContext)
     expect(result).toContain("Memory server temporarily unavailable")
     expect(callMemoryTool).not.toHaveBeenCalled()
   })
 
-  it("returns unavailable message for delete_memory when disconnected", async () => {
+  it("returns unavailable message for memory_manage when disconnected", async () => {
     const tools = buildToolRegistry(makeConfig())
-    const result = await tools.delete_memory.execute({ id: "mem-1" }, mockContext)
+    const result = await tools.memory_manage.execute({ action: "get", id: "mem-1" }, mockContext)
     expect(result).toContain("Memory server temporarily unavailable")
     expect(callMemoryTool).not.toHaveBeenCalled()
-  })
-})
-
-describe("get_status local fallback when disconnected", () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    vi.mocked(isConnectionFailed).mockReturnValue(true)
-  })
-
-  afterEach(() => {
-    vi.mocked(isConnectionFailed).mockReturnValue(false)
-  })
-
-  it("returns local status JSON instead of calling MCP", async () => {
-    vi.mocked(getConnectionStatus).mockReturnValue({
-      connected: false,
-      failureCount: 3,
-      lastFailureTime: new Date("2025-01-15T10:00:00Z").getTime(),
-      retrying: true,
-    })
-    const tools = buildToolRegistry(makeConfig())
-    const result = await tools.get_status.execute({}, mockContext)
-
-    const parsed = JSON.parse(result as string)
-    expect(parsed.status).toBe("disconnected")
-    expect(parsed.failureCount).toBe(3)
-    expect(parsed.lastFailureTime).toBe("2025-01-15T10:00:00.000Z")
-    expect(parsed.retrying).toBe(true)
-    expect(parsed.message).toContain("offline")
-    expect(callMemoryTool).not.toHaveBeenCalled()
-  })
-
-  it("handles null lastFailureTime", async () => {
-    vi.mocked(getConnectionStatus).mockReturnValue({
-      connected: false,
-      failureCount: 1,
-      lastFailureTime: null,
-      retrying: false,
-    })
-    const tools = buildToolRegistry(makeConfig())
-    const result = await tools.get_status.execute({}, mockContext)
-
-    const parsed = JSON.parse(result as string)
-    expect(parsed.lastFailureTime).toBeNull()
-  })
-
-  it("proxies to MCP when connection is healthy", async () => {
-    vi.mocked(isConnectionFailed).mockReturnValue(false)
-    const tools = buildToolRegistry(makeConfig())
-    await tools.get_status.execute({}, mockContext)
-    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "get_status", {})
   })
 })

@@ -29,16 +29,16 @@ describe("buildMemorySystemPrompt", () => {
   })
 
   it("appends Available Memory Tools section when tools provided", () => {
-    const result = buildMemorySystemPrompt(makeConfig(), ["store_memory", "recall", "search_memory"])
+    const result = buildMemorySystemPrompt(makeConfig(), ["memory_save", "memory_query", "memory_manage"])
     expect(result).toContain("### Available Memory Tools")
-    expect(result).toContain("`store_memory`")
-    expect(result).toContain("`recall`")
-    expect(result).toContain("`search_memory`")
+    expect(result).toContain("`memory_save`")
+    expect(result).toContain("`memory_query`")
+    expect(result).toContain("`memory_manage`")
   })
 
   it("formats tools as backtick-wrapped comma-separated list", () => {
-    const result = buildMemorySystemPrompt(makeConfig(), ["recall", "store_memory"])
-    expect(result).toContain("`recall`, `store_memory`")
+    const result = buildMemorySystemPrompt(makeConfig(), ["memory_query", "memory_save"])
+    expect(result).toContain("`memory_query`, `memory_save`")
   })
 
   it("includes single tool correctly", () => {
@@ -48,48 +48,48 @@ describe("buildMemorySystemPrompt", () => {
   })
 
   it("always includes base Memory Protocol content regardless of tools", () => {
-    const withTools = buildMemorySystemPrompt(makeConfig(), ["recall"])
+    const withTools = buildMemorySystemPrompt(makeConfig(), ["memory_query"])
     const withoutTools = buildMemorySystemPrompt(makeConfig(), [])
 
-    expect(withTools).toContain("DECISION:")
-    expect(withoutTools).toContain("DECISION:")
-    expect(withTools).toContain("store_memory")
-    expect(withoutTools).toContain("store_memory")
+    expect(withTools).toContain("DECISION")
+    expect(withoutTools).toContain("DECISION")
+    expect(withTools).toContain("memory_save")
+    expect(withoutTools).toContain("memory_save")
   })
 
   it("appends Code Intelligence section when code intel tools present", () => {
-    const result = buildMemorySystemPrompt(makeConfig(), ["recall", "index_project", "recall_code"])
+    const result = buildMemorySystemPrompt(makeConfig(), ["memory_query", "code_search", "project_status"])
     expect(result).toContain("### Code Intelligence Tools")
-    expect(result).toContain("index_project")
-    expect(result).toContain("recall_code")
+    expect(result).toContain("code_search")
+    expect(result).toContain("project_status")
     expect(result).toContain("/init-mcp-memory")
   })
 
   it("does not include Code Intelligence section without code intel tools", () => {
-    const result = buildMemorySystemPrompt(makeConfig(), ["recall", "store_memory"])
+    const result = buildMemorySystemPrompt(makeConfig(), ["memory_query", "memory_save"])
     expect(result).not.toContain("### Code Intelligence Tools")
     expect(result).not.toContain("/init-mcp-memory")
   })
 
-  it("includes Code Intelligence with any single code intel tool", () => {
-    const result = buildMemorySystemPrompt(makeConfig(), ["search_symbols"])
+  it("includes Code Intelligence with code intel tools", () => {
+    const result = buildMemorySystemPrompt(makeConfig(), ["code_search"])
     expect(result).toContain("### Code Intelligence Tools")
   })
 
   it("includes connection warning when connectionOk is false", () => {
-    const result = buildMemorySystemPrompt(makeConfig(), ["recall", "store_memory"], false)
+    const result = buildMemorySystemPrompt(makeConfig(), ["memory_query", "memory_save"], false)
     expect(result).toContain("### MEMORY SERVER OFFLINE")
     expect(result).toContain("Do NOT call memory tools")
     expect(result).toContain("get_status")
   })
 
   it("does not include connection warning when connectionOk is true", () => {
-    const result = buildMemorySystemPrompt(makeConfig(), ["recall", "store_memory"], true)
+    const result = buildMemorySystemPrompt(makeConfig(), ["memory_query", "memory_save"], true)
     expect(result).not.toContain("### MEMORY SERVER OFFLINE")
   })
 
   it("defaults connectionOk to true (no warning)", () => {
-    const result = buildMemorySystemPrompt(makeConfig(), ["recall"])
+    const result = buildMemorySystemPrompt(makeConfig(), ["memory_query"])
     expect(result).not.toContain("### MEMORY SERVER OFFLINE")
   })
 
@@ -100,7 +100,7 @@ describe("buildMemorySystemPrompt", () => {
   })
 
   it("places warning between base protocol and available tools", () => {
-    const result = buildMemorySystemPrompt(makeConfig(), ["recall"], false)
+    const result = buildMemorySystemPrompt(makeConfig(), ["memory_query"], false)
     const warningIndex = result.indexOf("### MEMORY SERVER OFFLINE")
     const toolsIndex = result.indexOf("### Available Memory Tools")
     const baseIndex = result.indexOf("### Prefix Format")
