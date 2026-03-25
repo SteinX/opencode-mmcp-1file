@@ -9,6 +9,7 @@ import {
   markSessionInjected,
   fetchAndFormatMemories,
   fetchCodeIntelContext,
+  fetchProjectKnowledge,
 } from "./services/context-inject.js"
 import { performAutoCapture } from "./services/auto-capture.js"
 import { buildCompactionRecoveryContext } from "./services/compaction.js"
@@ -17,6 +18,7 @@ import { isConnectionFailed, startRetryLoop, stopRetryLoop } from "./services/co
 import { summarizeExchange } from "./services/llm-client.js"
 import { callSessionLLM } from "./services/session-llm.js"
 import { detectMemoryKeyword, MEMORY_NUDGE_MESSAGE } from "./utils/keywords.js"
+import { checkTriggers, clearNudgeHistory } from "./utils/triggers.js"
 import { stripPrivateContent, isFullyPrivate } from "./utils/privacy.js"
 import { initLogger, logger } from "./utils/logger.js"
 import {
@@ -122,6 +124,21 @@ const plugin: Plugin = async (input) => {
         }
       }
 
+      if (userText) {
+        const assistantText = extractAssistantText(output)
+        const trigger = checkTriggers(hookInput.sessionID, assistantText || "", userText)
+        if (trigger.triggered) {
+          output.parts.push({
+            id: `prt-smart-nudge-${Date.now()}`,
+            sessionID: hookInput.sessionID,
+            messageID: output.message.id || `msg-memory-fallback-${Date.now()}`,
+            type: "text" as const,
+            text: trigger.message,
+            synthetic: true,
+          } as any)
+        }
+      }
+
       if (!shouldInjectMemories(config, hookInput.sessionID, isAfterCompaction)) {
         return
       }
@@ -142,7 +159,22 @@ const plugin: Plugin = async (input) => {
 
       output.parts.unshift(syntheticPart as any)
 
-      const codeIntelContext = await fetchCodeIntelContext(config)
+      const [projectKnowledge, codeIntelContext] = await Promise.all([
+        fetchProjectKnowledge(config),
+        fetchCodeIntelContext(config),
+      ])
+
+      if (projectKnowledge) {
+        output.parts.push({
+          id: `prt-project-knowledge-${Date.now()}`,
+          sessionID: hookInput.sessionID,
+          messageID: output.message.id || `msg-memory-fallback-${Date.now()}`,
+          type: "text" as const,
+          text: projectKnowledge,
+          synthetic: true,
+        } as any)
+      }
+
       if (codeIntelContext) {
         output.parts.push({
           id: `prt-code-intel-${Date.now()}`,
@@ -181,6 +213,7 @@ const plugin: Plugin = async (input) => {
 
         compactedSessions.add(sessionID)
         resetSessionState(sessionID)
+        clearNudgeHistory(sessionID)
         await handleCompactionRecovery(config, input, sessionID)
       }
 
@@ -301,6 +334,14 @@ const plugin: Plugin = async (input) => {
 function extractUserText(output: { parts: Array<{ type: string; text?: string }> }): string | null {
   const textParts = output.parts.filter(
     (p) => p.type === "text" && p.text && !(p as any).synthetic,
+  )
+  const text = textParts.map((p) => p.text!).join("\n")
+  return text.length >= 10 ? text : null
+}
+
+function extractAssistantText(output: { parts: Array<{ type: string; text?: string }> }): string | null {
+  const textParts = output.parts.filter(
+    (p) => p.type === "text" && p.text && (p as any).synthetic,
   )
   const text = textParts.map((p) => p.text!).join("\n")
   return text.length >= 10 ? text : null

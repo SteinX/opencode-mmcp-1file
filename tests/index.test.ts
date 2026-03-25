@@ -23,6 +23,7 @@ vi.mock("../src/services/context-inject.js", () => ({
   markSessionInjected: vi.fn(),
   fetchAndFormatMemories: vi.fn().mockResolvedValue(null),
   fetchCodeIntelContext: vi.fn().mockResolvedValue(null),
+  fetchProjectKnowledge: vi.fn().mockResolvedValue(null),
 }))
 
 vi.mock("../src/services/auto-capture.js", () => ({
@@ -115,7 +116,7 @@ const { default: plugin } = await import("../src/index.js")
 
 function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
   return {
-    chatMessage: { enabled: true, maxMemories: 5, injectOn: "first" },
+    chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 10, injectOn: "first" },
     autoCapture: { enabled: true, debounceMs: 10, language: "en" },
     compaction: { enabled: true, memoryLimit: 10 },
     keywordDetection: { enabled: true, extraPatterns: [] },
