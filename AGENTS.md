@@ -27,7 +27,7 @@ Plugin hooks (index.ts)
   └── tool:memory        → fallback memory tool (search/store/list)
         ↓
   Services layer (src/services/)
-    ├── tool-registry.ts  → register 17 memory + code intelligence tools as plugin tools
+    ├── tool-registry.ts  → register 8 unified tools (consolidating 17 MCP operations)
     ├── mcp-client.ts     → stdio transport to MCP server
     └── ...other services
         ↓
@@ -59,7 +59,7 @@ Plugin hooks (index.ts)
 | `src/config.ts` | Config schema + loader + hot-reload | `PluginConfig`, `loadConfig()`, `resolveDataDir()`, `applyConfig()` |
 | `src/services/server-process.ts` | MCP server spawn + lifecycle (placeholder) | `stopServer()` (no-op placeholder) |
 | `src/services/mcp-client.ts` | MCP connection singleton (stdio) | `recall()`, `searchMemory()`, `storeMemory()`, `listMemories()`, `discoverTools()`, `disconnectMemoryClient()` |
-| `src/services/tool-registry.ts` | Register 17 memory + code intelligence tools as plugin tools | `buildToolRegistry()` |
+| `src/services/tool-registry.ts` | Register 8 unified tools (consolidating 17 MCP operations) | `buildToolRegistry()` |
 | `src/services/system-prompt.ts` | Memory Protocol system prompt builder | `buildMemorySystemPrompt()` |
 | `src/services/auto-capture.ts` | Session-idle memory extraction | `performAutoCapture()` |
 | `src/services/context-inject.ts` | Chat message memory injection | `shouldInjectMemories()`, `fetchAndFormatMemories()` |
@@ -67,6 +67,7 @@ Plugin hooks (index.ts)
 | `src/services/compaction.ts` | Post-compaction recovery guidance + data | `buildCompactionRecoveryContext()` |
 | `src/services/llm-client.ts` | OpenAI-compatible completions | `chatCompletion()` |
 | `src/utils/format.ts` | Memory formatting helpers | `MemoryEntry`, `formatMemoriesForInjection()`, `formatMemoriesForRecovery()` |
+| `src/utils/triggers.ts` | Smart trigger detection for decision/task/error nudges | `checkTriggers()`, `clearNudgeHistory()` |
 | `src/utils/keywords.ts` | Memory keyword detection (EN+CN) | `detectMemoryKeyword()`, `MEMORY_NUDGE_MESSAGE` |
 | `src/utils/privacy.ts` | Content privacy filtering | `stripPrivateContent()`, `isFullyPrivate()`, `containsPrivateTag()` |
 | `src/utils/logger.ts` | Logging wrapper | `initLogger()`, `logger` |

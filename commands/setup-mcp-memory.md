@@ -68,6 +68,7 @@ Based on the user's answers, generate a `opencode-mmcp-1file.jsonc` file. Use th
   "chatMessage": {
     "enabled": true,
     "maxMemories": 5,
+    "maxProjectMemories": 10,       // Latest N memories injected as project knowledge (always-on context)
     "injectOn": "first"            // "first" = first message only, "always" = every message
   },
 
