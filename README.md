@@ -71,9 +71,7 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
     // Set to null to disable and use flat recency-based list.
     "projectKnowledgeTiers": [
       { "categories": ["DECISION", "PATTERN"], "limit": 5 },
-      { "categories": ["TASK"], "limit": 3 },
-      { "categories": ["CONTEXT"], "limit": 4 },
-      { "categories": [], "limit": 3 }
+      { "categories": ["CONTEXT"], "limit": 5 }
     ]
   },
 

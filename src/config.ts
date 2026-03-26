@@ -71,9 +71,7 @@ const DEFAULT_CONFIG: PluginConfig = {
     injectOn: "first",
     projectKnowledgeTiers: [
       { categories: ["DECISION", "PATTERN"], limit: 5 },
-      { categories: ["TASK"], limit: 3 },
-      { categories: ["CONTEXT"], limit: 4 },
-      { categories: [], limit: 3 },
+      { categories: ["CONTEXT"], limit: 5 },
     ],
   },
   autoCapture: {
