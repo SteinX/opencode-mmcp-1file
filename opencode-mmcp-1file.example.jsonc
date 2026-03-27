@@ -67,7 +67,11 @@
     "tag": "default",                // Memory namespace; derives dataDir as ~/.local/share/opencode-mmcp-1file/{tag}
     // "dataDir": "",               // Override: explicit data directory (takes precedence over tag)
     "model": "qwen3",
-    "mcpServerName": "memory-mcp-1file"  // Cosmetic name for logging
+    "mcpServerName": "memory-mcp-1file",  // Cosmetic name for logging
+    // "commandPath": "",            // Override: path to custom binary (replaces command array, plugin still appends flags)
+    "transport": "stdio",            // "stdio" = one server per plugin process; "http" = shared server via HTTP
+    "port": 23817,                   // HTTP mode: server port (ignored in stdio mode)
+    "bind": "127.0.0.1"             // HTTP mode: server bind address (ignored in stdio mode)
   },
 
   // System prompt injection — guides agent on memory tool usage

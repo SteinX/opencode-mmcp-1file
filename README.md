@@ -128,7 +128,11 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
     "tag": "default",                // Memory namespace; derives dataDir as ~/.local/share/opencode-mmcp-1file/{tag}
     // "dataDir": "",               // Override: explicit data directory (takes precedence over tag)
     "model": "qwen3",               // Embedding model for vector search
-    "mcpServerName": "memory-mcp-1file"  // Cosmetic name for logging
+    "mcpServerName": "memory-mcp-1file",  // Cosmetic name for logging
+    // "commandPath": "",            // Override: path to custom binary (plugin appends flags automatically)
+    "transport": "stdio",            // "stdio" or "http" — HTTP mode shares one server across processes
+    "port": 23817,                   // HTTP mode: server listen port
+    "bind": "127.0.0.1"             // HTTP mode: server bind address
   },
 
   // System prompt injection — guides agent on memory tool usage
@@ -150,7 +154,7 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
 | **privacy** | Redaction of `<private>` tagged content |
 | **compactionSummaryCapture** | Saves compaction summaries as memories |
 | **captureModel** | LLM for auto-capture summarization — uses direct HTTP when apiKey is set, otherwise OpenCode session API |
-| **mcpServer** | [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server command, data directory, and embedding model |
+| **mcpServer** | [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server command, data directory, embedding model, and transport mode (stdio or HTTP) |
 | **systemPrompt** | Agent guidance via Memory Protocol in system prompt |
 
 ### Memory Namespaces via `tag`
@@ -263,7 +267,7 @@ You can also re-run `/setup-mcp-memory` anytime to update your configuration.
 
 ## Limitations
 
-- **Stdio transport only** — The MCP server is accessed exclusively via stdio. HTTP/SSE transport is not implemented, so external tools cannot connect to the memory server directly.
+- **HTTP transport sharing** — In HTTP mode (`"transport": "http"`), multiple plugin processes share one MCP server instance with file-based reference counting. The lock file (`{dataDir}/.server-lock`) uses rename-based atomic writes but does not use OS-level file locks, so a narrow race window exists during concurrent startup. In practice this is harmless — the second spawn attempt fails because the port is already taken, and the retry health check succeeds.
 - **Auto-capture LLM routing** — When `captureModel.apiKey` is set, auto-capture uses direct HTTP to the specified API. When empty, it falls back to OpenCode's session API (creates an ephemeral session, prompts, then deletes). The session API approach is zero-config but slightly slower due to session lifecycle overhead.
 - **In-memory session tracking** — Duplicate-prevention state (`injectedSessions`, `capturedSessions`) is held in memory and resets on process restart. The first message after a restart may re-inject memories that were already injected in the previous session.
 - **Tag-based privacy only** — Content is redacted only when explicitly wrapped in `<private>…</private>` tags. There is no automatic PII or secret detection.
