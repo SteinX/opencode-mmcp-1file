@@ -223,7 +223,7 @@ describe("applyConfig", () => {
   })
 
   it("returns empty array when nothing changed", () => {
-    const target = makeConfig({ mcpServer: { command: ["npm", "exec", "-y", "memory-mcp-1file", "--"], tag: "", model: "qwen3", mcpServerName: "memory-mcp-1file" } })
+    const target = makeConfig({ mcpServer: { command: ["npm", "exec", "-y", "memory-mcp-1file", "--"], tag: "", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1" } })
     const changed = applyConfig(target)
     expect(changed).toEqual([])
   })

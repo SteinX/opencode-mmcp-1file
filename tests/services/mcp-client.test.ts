@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import type { PluginConfig } from "../../src/config.js"
 
-function makeConfig(): PluginConfig {
+function makeConfig(transportOverride?: "stdio" | "http"): PluginConfig {
   return {
-    chatMessage: { enabled: true, maxMemories: 5, injectOn: "first" },
+    chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 30, injectOn: "first" },
     autoCapture: { enabled: true, debounceMs: 10000, language: "en" },
     compaction: { enabled: true, memoryLimit: 10 },
     keywordDetection: { enabled: true, extraPatterns: [] },
@@ -11,7 +11,7 @@ function makeConfig(): PluginConfig {
     privacy: { enabled: true },
     compactionSummaryCapture: { enabled: true },
     captureModel: { provider: "openai", model: "gpt-4o-mini", apiUrl: "", apiKey: "" },
-    mcpServer: { command: ["npx", "-y", "memory-mcp-1file"], tag: "default", model: "qwen3", transport: "stdio", port: 23817, registerInOpencode: true, mcpServerName: "memory-mcp-1file" },
+    mcpServer: { command: ["npx", "-y", "memory-mcp-1file"], tag: "default", model: "qwen3", transport: transportOverride ?? "stdio", port: 23817, bind: "127.0.0.1", mcpServerName: "memory-mcp-1file" },
     systemPrompt: { enabled: true },
   } as PluginConfig
 }
@@ -51,9 +51,14 @@ async function setupModule() {
   vi.doMock("@modelcontextprotocol/sdk/client/sse.js", () => ({
     SSEClientTransport: vi.fn(),
   }))
+  vi.doMock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
+    StreamableHTTPClientTransport: vi.fn(),
+  }))
   vi.doMock("../../src/services/server-process.js", () => ({
-    getServerUrl: vi.fn(() => "http://localhost:23817/sse"),
-    isServerRunning: vi.fn(() => false),
+    getServerUrl: vi.fn(() => "http://127.0.0.1:23817"),
+    isServerRunning: vi.fn(() => Promise.resolve(false)),
+    ensureServerRunning: vi.fn(() => Promise.resolve("http://127.0.0.1:23817")),
+    stopServer: vi.fn(() => Promise.resolve()),
   }))
   vi.doMock("../../src/utils/logger.js", () => ({
     logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -281,5 +286,164 @@ describe("tryReconnect", () => {
 
     await mod.tryReconnect(config)
     expect(mockClient.connect).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe("commandPath override", () => {
+  it("uses commandPath with --stdio flag for stdio transport", async () => {
+    vi.resetModules()
+    const mockClient = createMockClient()
+    const mockStdioTransport = vi.fn()
+
+    mockConnectionState = {
+      isConnectionFailed: vi.fn().mockReturnValue(false),
+      markConnectionFailed: vi.fn(),
+      markConnectionHealthy: vi.fn(),
+    }
+
+    vi.doMock("@modelcontextprotocol/sdk/client/index.js", () => ({
+      Client: function () { return mockClient },
+    }))
+    vi.doMock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
+      StdioClientTransport: mockStdioTransport,
+    }))
+    vi.doMock("@modelcontextprotocol/sdk/client/sse.js", () => ({
+      SSEClientTransport: vi.fn(),
+    }))
+    vi.doMock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
+      StreamableHTTPClientTransport: vi.fn(),
+    }))
+    vi.doMock("../../src/services/server-process.js", () => ({
+      getServerUrl: vi.fn(() => "http://127.0.0.1:23817"),
+      isServerRunning: vi.fn(() => Promise.resolve(false)),
+      ensureServerRunning: vi.fn(() => Promise.resolve("http://127.0.0.1:23817")),
+      stopServer: vi.fn(() => Promise.resolve()),
+    }))
+    vi.doMock("../../src/utils/logger.js", () => ({
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    }))
+    vi.doMock("../../src/config.js", async (importOriginal) => {
+      const original = await importOriginal<typeof import("../../src/config.js")>()
+      return { ...original, resolveDataDir: vi.fn(() => "/tmp/test-data") }
+    })
+    vi.doMock("../../src/services/connection-state.js", () => mockConnectionState)
+
+    const mod = await import("../../src/services/mcp-client.js")
+    const config = makeConfig("stdio")
+    ;(config.mcpServer as any).commandPath = "/usr/local/bin/memory-mcp-1file"
+
+    await mod.getMemoryClient(config)
+
+    expect(mockStdioTransport).toHaveBeenCalledWith({
+      command: "/usr/local/bin/memory-mcp-1file",
+      args: ["--stdio", "--data-dir", "/tmp/test-data", "--model", "qwen3"],
+      stderr: "pipe",
+    })
+  })
+})
+
+describe("HTTP transport", () => {
+  it("connects via StreamableHTTPClientTransport when transport is http", async () => {
+    const { mod } = await setupModule()
+    const config = makeConfig("http")
+
+    const client = await mod.getMemoryClient(config)
+    expect(client).toBeDefined()
+  })
+
+  it("calls stopServer on disconnect when transport is http", async () => {
+    vi.resetModules()
+    const mockClient = createMockClient()
+    const mockStopServer = vi.fn().mockResolvedValue(undefined)
+
+    mockConnectionState = {
+      isConnectionFailed: vi.fn().mockReturnValue(false),
+      markConnectionFailed: vi.fn(),
+      markConnectionHealthy: vi.fn(),
+    }
+
+    vi.doMock("@modelcontextprotocol/sdk/client/index.js", () => ({
+      Client: function () { return mockClient },
+    }))
+    vi.doMock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
+      StdioClientTransport: vi.fn(),
+    }))
+    vi.doMock("@modelcontextprotocol/sdk/client/sse.js", () => ({
+      SSEClientTransport: vi.fn(),
+    }))
+    vi.doMock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
+      StreamableHTTPClientTransport: vi.fn(),
+    }))
+    vi.doMock("../../src/services/server-process.js", () => ({
+      getServerUrl: vi.fn(() => "http://127.0.0.1:23817"),
+      isServerRunning: vi.fn(() => Promise.resolve(false)),
+      ensureServerRunning: vi.fn(() => Promise.resolve("http://127.0.0.1:23817")),
+      stopServer: mockStopServer,
+    }))
+    vi.doMock("../../src/utils/logger.js", () => ({
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    }))
+    vi.doMock("../../src/config.js", async (importOriginal) => {
+      const original = await importOriginal<typeof import("../../src/config.js")>()
+      return { ...original, resolveDataDir: vi.fn(() => "/tmp/test-data") }
+    })
+    vi.doMock("../../src/services/connection-state.js", () => mockConnectionState)
+
+    const mod = await import("../../src/services/mcp-client.js")
+    const config = makeConfig("http")
+
+    await mod.getMemoryClient(config)
+    await mod.disconnectMemoryClient(config)
+
+    expect(mockClient.close).toHaveBeenCalled()
+    expect(mockStopServer).toHaveBeenCalledWith(config)
+  })
+
+  it("does not call stopServer on disconnect when transport is stdio", async () => {
+    vi.resetModules()
+    const mockClient = createMockClient()
+    const mockStopServer = vi.fn().mockResolvedValue(undefined)
+
+    mockConnectionState = {
+      isConnectionFailed: vi.fn().mockReturnValue(false),
+      markConnectionFailed: vi.fn(),
+      markConnectionHealthy: vi.fn(),
+    }
+
+    vi.doMock("@modelcontextprotocol/sdk/client/index.js", () => ({
+      Client: function () { return mockClient },
+    }))
+    vi.doMock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
+      StdioClientTransport: vi.fn(),
+    }))
+    vi.doMock("@modelcontextprotocol/sdk/client/sse.js", () => ({
+      SSEClientTransport: vi.fn(),
+    }))
+    vi.doMock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
+      StreamableHTTPClientTransport: vi.fn(),
+    }))
+    vi.doMock("../../src/services/server-process.js", () => ({
+      getServerUrl: vi.fn(() => "http://127.0.0.1:23817"),
+      isServerRunning: vi.fn(() => Promise.resolve(false)),
+      ensureServerRunning: vi.fn(() => Promise.resolve("http://127.0.0.1:23817")),
+      stopServer: mockStopServer,
+    }))
+    vi.doMock("../../src/utils/logger.js", () => ({
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    }))
+    vi.doMock("../../src/config.js", async (importOriginal) => {
+      const original = await importOriginal<typeof import("../../src/config.js")>()
+      return { ...original, resolveDataDir: vi.fn(() => "/tmp/test-data") }
+    })
+    vi.doMock("../../src/services/connection-state.js", () => mockConnectionState)
+
+    const mod = await import("../../src/services/mcp-client.js")
+    const config = makeConfig("stdio")
+
+    await mod.getMemoryClient(config)
+    await mod.disconnectMemoryClient(config)
+
+    expect(mockClient.close).toHaveBeenCalled()
+    expect(mockStopServer).not.toHaveBeenCalled()
   })
 })

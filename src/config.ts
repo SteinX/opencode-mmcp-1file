@@ -57,6 +57,14 @@ export interface PluginConfig {
     dataDir?: string
     model: string
     mcpServerName: string
+    /** Override binary path — when set, replaces the `command` array with this single binary. Plugin still appends managed flags (--data-dir, --model, --stdio/--port/--bind). */
+    commandPath?: string
+    /** Transport mode: "stdio" (default) or "http" (shared server via Streamable HTTP) */
+    transport: "stdio" | "http"
+    /** Port for HTTP transport (default: 23817) */
+    port: number
+    /** Bind address for HTTP transport (default: "127.0.0.1") */
+    bind: string
   }
   systemPrompt: {
     enabled: boolean
@@ -110,6 +118,9 @@ const DEFAULT_CONFIG: PluginConfig = {
     tag: "",
     model: "qwen3",
     mcpServerName: "memory-mcp-1file",
+    transport: "stdio",
+    port: 23817,
+    bind: "127.0.0.1",
   },
   systemPrompt: {
     enabled: true,

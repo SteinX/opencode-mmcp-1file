@@ -1,9 +1,11 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { PluginConfig, resolveDataDir } from "../config.js"
 import type { MemoryEntry } from "../utils/format.js"
 import { logger } from "../utils/logger.js"
 import { isConnectionFailed, markConnectionFailed, markConnectionHealthy } from "./connection-state.js"
+import { ensureServerRunning, stopServer } from "./server-process.js"
 
 let mcpClient: Client | null = null
 let connectionPromise: Promise<Client> | null = null
@@ -46,12 +48,20 @@ async function connectToServer(config: PluginConfig): Promise<Client> {
     version: "0.1.0",
   })
 
-  const cmdParts = buildStdioCommand(config)
-  if (!cmdParts) throw new Error("Cannot build stdio command: no data directory configured")
-  const [command, ...args] = cmdParts
-  logger.info(`Connecting to MCP server via stdio: ${command} ${args.join(" ")}`)
-  const transport = new StdioClientTransport({ command, args, stderr: "pipe" })
-  await client.connect(transport)
+  if (config.mcpServer.transport === "http") {
+    const serverUrl = await ensureServerRunning(config)
+    const url = new URL("/mcp", serverUrl)
+    logger.info(`Connecting to MCP server via HTTP: ${url.href}`)
+    const transport = new StreamableHTTPClientTransport(url)
+    await client.connect(transport)
+  } else {
+    const cmdParts = buildStdioCommand(config)
+    if (!cmdParts) throw new Error("Cannot build stdio command: no data directory configured")
+    const [command, ...args] = cmdParts
+    logger.info(`Connecting to MCP server via stdio: ${command} ${args.join(" ")}`)
+    const transport = new StdioClientTransport({ command, args, stderr: "pipe" })
+    await client.connect(transport)
+  }
 
   return client
 }
@@ -60,8 +70,8 @@ function buildStdioCommand(config: PluginConfig): string[] | null {
   const dataDir = resolveDataDir(config)
   if (!dataDir) return null
 
-  const { command, model } = config.mcpServer
-  const fullCommand = [...command]
+  const { command, commandPath, model } = config.mcpServer
+  const fullCommand = commandPath ? [commandPath, "--stdio"] : [...command]
 
   if (!fullCommand.some((a) => a === "--data-dir")) {
     fullCommand.push("--data-dir", dataDir)
@@ -190,7 +200,7 @@ export async function callMemoryTool(
   return extractTextResult(result)
 }
 
-export async function disconnectMemoryClient(): Promise<void> {
+export async function disconnectMemoryClient(config?: PluginConfig): Promise<void> {
   if (mcpClient) {
     try {
       await mcpClient.close()
@@ -198,5 +208,8 @@ export async function disconnectMemoryClient(): Promise<void> {
       logger.debug("mcp client close error", { error: String(err) })
     }
     mcpClient = null
+  }
+  if (config?.mcpServer.transport === "http") {
+    await stopServer(config)
   }
 }

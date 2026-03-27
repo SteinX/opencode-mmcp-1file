@@ -154,8 +154,8 @@ async function initPlugin(configOverrides?: Partial<PluginConfig>, directoryOver
 
   const input = makePluginInput(directoryOverride)
   const hooks = await plugin(input)
-  // Flush the eager-connect IIFE so its showToast call doesn't leak into later assertions
-  await vi.advanceTimersByTimeAsync(0)
+  // Flush the eager-connect IIFE (includes 1500ms TUI-ready delay) so its showToast call doesn't leak
+  await vi.advanceTimersByTimeAsync(1500)
   vi.mocked(input.client.tui.showToast).mockClear()
   return { hooks: hooks as any, input, config }
 }
@@ -219,7 +219,7 @@ describe("plugin factory", () => {
     vi.mocked(resolveDataDir).mockReturnValue("/mock-data-dir")
     const input = makePluginInput()
     await plugin(input)
-    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(1500)
     expect(input.client.tui.showToast).toHaveBeenCalledWith({
       body: expect.objectContaining({ variant: "success" }),
     })
@@ -232,7 +232,7 @@ describe("plugin factory", () => {
     vi.mocked(resolveDataDir).mockReturnValue("/mock-data-dir")
     const input = makePluginInput()
     await plugin(input)
-    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(1500)
     expect(input.client.tui.showToast).toHaveBeenCalledWith({
       body: expect.objectContaining({ variant: "error" }),
     })
@@ -245,7 +245,7 @@ describe("plugin factory", () => {
     vi.mocked(resolveDataDir).mockReturnValue("/mock-data-dir")
     const input = makePluginInput()
     await plugin(input)
-    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(1500)
 
     expect(startRetryLoop).toHaveBeenCalledWith(
       expect.any(Function),
@@ -260,7 +260,7 @@ describe("plugin factory", () => {
     vi.mocked(resolveDataDir).mockReturnValue("/mock-data-dir")
     const input = makePluginInput()
     await plugin(input)
-    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(1500)
 
     expect(startRetryLoop).not.toHaveBeenCalled()
   })
@@ -755,6 +755,76 @@ describe("event handler: session.idle", () => {
     await vi.advanceTimersByTimeAsync(10)
 
     expect(logger.error).toHaveBeenCalledWith("idle capture failed", expect.objectContaining({ sessionID: "s-err" }))
+  })
+
+  it("blocks repeated capture for same session until new user message", async () => {
+    const { hooks, input } = await initPlugin({
+      autoCapture: { enabled: true, debounceMs: 10, language: "en" },
+    })
+
+    input.client.session.messages.mockResolvedValue({
+      data: [
+        { info: { id: "m1", role: "user" }, parts: [{ type: "text", text: "question" }] },
+        { info: { id: "m2", role: "assistant" }, parts: [{ type: "text", text: "answer" }] },
+      ],
+    })
+    vi.mocked(performAutoCapture).mockResolvedValue(true)
+
+    // First idle → should trigger capture
+    await hooks.event({
+      event: { type: "session.idle", properties: { sessionID: "s-guard" } },
+    })
+    await vi.advanceTimersByTimeAsync(10)
+    expect(performAutoCapture).toHaveBeenCalledTimes(1)
+
+    // Second idle (same session) → should be blocked by guard
+    await hooks.event({
+      event: { type: "session.idle", properties: { sessionID: "s-guard" } },
+    })
+    await vi.advanceTimersByTimeAsync(10)
+    expect(performAutoCapture).toHaveBeenCalledTimes(1)
+
+    // New user message resets the guard
+    vi.mocked(shouldInjectMemories).mockReturnValue(false)
+    await hooks["chat.message"](
+      { sessionID: "s-guard" },
+      { parts: [{ type: "text", text: "new question here" }] },
+    )
+
+    // Third idle (after reset) → should trigger capture again
+    await hooks.event({
+      event: { type: "session.idle", properties: { sessionID: "s-guard" } },
+    })
+    await vi.advanceTimersByTimeAsync(10)
+    expect(performAutoCapture).toHaveBeenCalledTimes(2)
+  })
+
+  it("guards per-session independently", async () => {
+    const { hooks, input } = await initPlugin({
+      autoCapture: { enabled: true, debounceMs: 10, language: "en" },
+    })
+
+    input.client.session.messages.mockResolvedValue({
+      data: [
+        { info: { id: "m1", role: "user" }, parts: [{ type: "text", text: "q" }] },
+        { info: { id: "m2", role: "assistant" }, parts: [{ type: "text", text: "a" }] },
+      ],
+    })
+    vi.mocked(performAutoCapture).mockResolvedValue(true)
+
+    // Capture session A
+    await hooks.event({
+      event: { type: "session.idle", properties: { sessionID: "s-a" } },
+    })
+    await vi.advanceTimersByTimeAsync(10)
+    expect(performAutoCapture).toHaveBeenCalledTimes(1)
+
+    // Session B should still work (independent guard)
+    await hooks.event({
+      event: { type: "session.idle", properties: { sessionID: "s-b" } },
+    })
+    await vi.advanceTimersByTimeAsync(10)
+    expect(performAutoCapture).toHaveBeenCalledTimes(2)
   })
 })
 

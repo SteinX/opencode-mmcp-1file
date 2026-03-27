@@ -27,7 +27,7 @@ import {
   performPreemptiveCompaction,
   resetSessionState,
 } from "./services/preemptive-compaction.js"
-import { stopServer } from "./services/server-process.js"
+
 import { buildMemorySystemPrompt } from "./services/system-prompt.js"
 import { buildToolRegistry } from "./services/tool-registry.js"
 import type { PluginConfig } from "./config.js"
@@ -46,17 +46,29 @@ const plugin: Plugin = async (input) => {
   void (async () => {
     try {
       await getMemoryClient(config)
-      const tag = config.mcpServer.tag || "custom"
-      logger.info(`Memory server connected (${tag})`)
+      const tag = config.mcpServer.tag
+      let connLabel: string
+      if (config.mcpServer.transport === "http") {
+        const endpoint = `${config.mcpServer.bind}:${config.mcpServer.port}`
+        connLabel = tag ? `${endpoint} · ${tag}` : endpoint
+      } else {
+        connLabel = tag || "custom"
+      }
+      logger.info(`Memory server connected (${connLabel})`)
+      // Brief delay so the TUI is ready to display toasts — without this,
+      // fast HTTP connections (joining an already-running server) finish
+      // before the UI is initialised and the toast is silently dropped.
+      await new Promise((r) => setTimeout(r, 1500))
       await input.client.tui.showToast({
         body: {
-          message: `Memory server connected (${tag})`,
+          message: `Memory server connected (${connLabel})`,
           variant: "success",
           duration: 3000,
         },
       })
     } catch (err) {
       logger.error("Memory server connection failed", { error: String(err) })
+      await new Promise((r) => setTimeout(r, 1500))
       await input.client.tui.showToast({
         body: {
           message: "Memory server failed to connect — retrying in background",
@@ -84,13 +96,13 @@ const plugin: Plugin = async (input) => {
 
   const cleanup = async () => {
     stopRetryLoop()
-    await disconnectMemoryClient()
-    await stopServer()
+    await disconnectMemoryClient(config)
   }
   process.on("SIGTERM", () => void cleanup())
   process.on("SIGINT", () => void cleanup())
 
   const idleTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const capturedSessions = new Set<string>()
   const compactedSessions = new Set<string>()
 
   let cachedTools: string[] | null = null
@@ -102,6 +114,9 @@ const plugin: Plugin = async (input) => {
 
   return {
     "chat.message": async (hookInput, output) => {
+      // Reset auto-capture guard so next idle can capture new exchange
+      capturedSessions.delete(hookInput.sessionID)
+
       const isAfterCompaction = compactedSessions.has(hookInput.sessionID)
       if (isAfterCompaction) {
         compactedSessions.delete(hookInput.sessionID)
@@ -195,12 +210,14 @@ const plugin: Plugin = async (input) => {
       if (event.type === "session.idle" && config.autoCapture.enabled) {
         const sessionID = event.properties?.sessionID
         if (!sessionID) return
+        if (capturedSessions.has(sessionID)) return
 
         const existingTimer = idleTimers.get(sessionID)
         if (existingTimer) clearTimeout(existingTimer)
 
         const timer = setTimeout(async () => {
           idleTimers.delete(sessionID)
+          capturedSessions.add(sessionID)
           await handleIdleCapture(config, input, sessionID)
         }, config.autoCapture.debounceMs)
 
