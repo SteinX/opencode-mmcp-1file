@@ -29,6 +29,26 @@ function makeConfig(overrides: Partial<PluginConfig["mcpServer"]> = {}): PluginC
   } as PluginConfig
 }
 
+function writeLegacyLock(lockPath: string, pid: number, refCount: number): void {
+  writeFileSync(lockPath, JSON.stringify({
+    pid,
+    port: 23817,
+    bind: "127.0.0.1",
+    refCount,
+    startedAt: new Date().toISOString(),
+  }))
+}
+
+function writeNewLock(lockPath: string, pid: number, holders: number[]): void {
+  writeFileSync(lockPath, JSON.stringify({
+    pid,
+    port: 23817,
+    bind: "127.0.0.1",
+    holders,
+    startedAt: new Date().toISOString(),
+  }))
+}
+
 let testDir: string
 let mockFetch: ReturnType<typeof vi.fn>
 
@@ -130,7 +150,7 @@ describe("stopServer", () => {
     await expect(stopServer(config)).resolves.toBeUndefined()
   })
 
-  it("decrements refCount and keeps lock file when refCount > 0", async () => {
+  it("removes own PID from holders and keeps lock file when other holders remain", async () => {
     vi.resetModules()
     vi.doMock("../../src/config.js", async (importOriginal) => {
       const original = await importOriginal<typeof import("../../src/config.js")>()
@@ -140,21 +160,20 @@ describe("stopServer", () => {
     const config = makeConfig()
 
     const lockPath = join(testDir, ".server-lock")
-    writeFileSync(lockPath, JSON.stringify({
-      pid: 999999,
-      port: 23817,
-      bind: "127.0.0.1",
-      refCount: 3,
-      startedAt: new Date().toISOString(),
-    }))
+    const myPid = process.pid
+    const otherPid = myPid + 1
+    writeNewLock(lockPath, 999999, [myPid, otherPid])
+
+    vi.spyOn(process, "kill").mockImplementation((_pid, _sig) => true)
 
     await stopServer(config)
 
     const updated = JSON.parse(readFileSync(lockPath, "utf-8"))
-    expect(updated.refCount).toBe(2)
+    expect(updated.holders).not.toContain(myPid)
+    expect(updated.holders).toContain(otherPid)
   })
 
-  it("removes lock file when refCount reaches 0", async () => {
+  it("removes lock file when removing own PID leaves no live holders", async () => {
     vi.resetModules()
     vi.doMock("../../src/config.js", async (importOriginal) => {
       const original = await importOriginal<typeof import("../../src/config.js")>()
@@ -164,13 +183,25 @@ describe("stopServer", () => {
     const config = makeConfig()
 
     const lockPath = join(testDir, ".server-lock")
-    writeFileSync(lockPath, JSON.stringify({
-      pid: 0,
-      port: 23817,
-      bind: "127.0.0.1",
-      refCount: 1,
-      startedAt: new Date().toISOString(),
-    }))
+    writeNewLock(lockPath, 0, [process.pid])
+
+    await stopServer(config)
+
+    expect(existsSync(lockPath)).toBe(false)
+  })
+
+  it("prunes dead holder PIDs and removes lock file when no live holders remain", async () => {
+    vi.resetModules()
+    vi.doMock("../../src/config.js", async (importOriginal) => {
+      const original = await importOriginal<typeof import("../../src/config.js")>()
+      return { ...original, resolveDataDir: () => testDir }
+    })
+    const { stopServer } = await import("../../src/services/server-process.js")
+    const config = makeConfig()
+
+    const lockPath = join(testDir, ".server-lock")
+    const deadPid = 999999999
+    writeNewLock(lockPath, 0, [process.pid, deadPid])
 
     await stopServer(config)
 
@@ -187,10 +218,31 @@ describe("stopServer", () => {
     const config = makeConfig()
     await expect(stopServer(config)).resolves.toBeUndefined()
   })
+
+  it("migrates legacy refCount lock on release by preserving unknown holder count", async () => {
+    vi.resetModules()
+    vi.doMock("../../src/config.js", async (importOriginal) => {
+      const original = await importOriginal<typeof import("../../src/config.js")>()
+      return { ...original, resolveDataDir: () => testDir }
+    })
+    const { stopServer } = await import("../../src/services/server-process.js")
+    const config = makeConfig()
+
+    const lockPath = join(testDir, ".server-lock")
+    writeLegacyLock(lockPath, 12345, 2)
+    vi.spyOn(process, "kill").mockImplementation((_pid, _sig) => true)
+
+    await stopServer(config)
+
+    const updated = JSON.parse(readFileSync(lockPath, "utf-8"))
+    expect(updated.holders).toEqual([])
+    expect(updated.unknownHolders).toBe(1)
+    expect(updated.refCount).toBeUndefined()
+  })
 })
 
 describe("ensureServerRunning", () => {
-  it("joins existing server when health check passes", async () => {
+  it("adds own PID to holders when joining existing server", async () => {
     vi.resetModules()
     vi.doMock("../../src/config.js", async (importOriginal) => {
       const original = await importOriginal<typeof import("../../src/config.js")>()
@@ -200,13 +252,9 @@ describe("ensureServerRunning", () => {
     const config = makeConfig()
 
     const lockPath = join(testDir, ".server-lock")
-    writeFileSync(lockPath, JSON.stringify({
-      pid: 12345,
-      port: 23817,
-      bind: "127.0.0.1",
-      refCount: 1,
-      startedAt: new Date().toISOString(),
-    }))
+    const otherPid = process.pid + 1
+    writeNewLock(lockPath, 12345, [otherPid])
+    vi.spyOn(process, "kill").mockImplementation((_pid, _sig) => true)
 
     mockFetch.mockResolvedValue({
       ok: true,
@@ -217,10 +265,34 @@ describe("ensureServerRunning", () => {
     expect(url).toBe("http://127.0.0.1:23817")
 
     const updated = JSON.parse(readFileSync(lockPath, "utf-8"))
-    expect(updated.refCount).toBe(2)
+    expect(updated.holders).toContain(process.pid)
+    expect(updated.holders).toContain(otherPid)
   })
 
-  it("creates lock file with refCount=1 when joining without existing lock", async () => {
+  it("does not duplicate own PID when called twice", async () => {
+    vi.resetModules()
+    vi.doMock("../../src/config.js", async (importOriginal) => {
+      const original = await importOriginal<typeof import("../../src/config.js")>()
+      return { ...original, resolveDataDir: () => testDir }
+    })
+    const { ensureServerRunning } = await import("../../src/services/server-process.js")
+    const config = makeConfig()
+
+    const lockPath = join(testDir, ".server-lock")
+    writeNewLock(lockPath, 12345, [process.pid])
+
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ status: "ok" }),
+    })
+
+    await ensureServerRunning(config)
+    const updated = JSON.parse(readFileSync(lockPath, "utf-8"))
+    const ownPidEntries = updated.holders.filter((h: number) => h === process.pid)
+    expect(ownPidEntries).toHaveLength(1)
+  })
+
+  it("creates lock file with own PID when joining without existing lock", async () => {
     vi.resetModules()
     vi.doMock("../../src/config.js", async (importOriginal) => {
       const original = await importOriginal<typeof import("../../src/config.js")>()
@@ -239,8 +311,59 @@ describe("ensureServerRunning", () => {
 
     const lockPath = join(testDir, ".server-lock")
     const lock = JSON.parse(readFileSync(lockPath, "utf-8"))
-    expect(lock.refCount).toBe(1)
+    expect(lock.holders).toContain(process.pid)
     expect(lock.pid).toBe(0)
+  })
+
+  it("migrates legacy refCount lock when joining existing server", async () => {
+    vi.resetModules()
+    vi.doMock("../../src/config.js", async (importOriginal) => {
+      const original = await importOriginal<typeof import("../../src/config.js")>()
+      return { ...original, resolveDataDir: () => testDir }
+    })
+    const { ensureServerRunning } = await import("../../src/services/server-process.js")
+    const config = makeConfig()
+
+    const lockPath = join(testDir, ".server-lock")
+    writeLegacyLock(lockPath, 12345, 2)
+
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ status: "ok" }),
+    })
+
+    await ensureServerRunning(config)
+
+    const updated = JSON.parse(readFileSync(lockPath, "utf-8"))
+    expect(Array.isArray(updated.holders)).toBe(true)
+    expect(updated.holders).toContain(process.pid)
+    expect(updated.unknownHolders).toBe(2)
+    expect(updated.refCount).toBeUndefined()
+  })
+
+  it("prunes dead holder PIDs when joining existing server", async () => {
+    vi.resetModules()
+    vi.doMock("../../src/config.js", async (importOriginal) => {
+      const original = await importOriginal<typeof import("../../src/config.js")>()
+      return { ...original, resolveDataDir: () => testDir }
+    })
+    const { ensureServerRunning } = await import("../../src/services/server-process.js")
+    const config = makeConfig()
+
+    const lockPath = join(testDir, ".server-lock")
+    const deadPid = 999999999
+    writeNewLock(lockPath, 12345, [deadPid])
+
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ status: "ok" }),
+    })
+
+    await ensureServerRunning(config)
+
+    const updated = JSON.parse(readFileSync(lockPath, "utf-8"))
+    expect(updated.holders).not.toContain(deadPid)
+    expect(updated.holders).toContain(process.pid)
   })
 
   it("throws when data directory cannot be resolved", async () => {

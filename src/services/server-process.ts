@@ -1,7 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync, renameSync } from "node:fs"
 import { join, dirname } from "node:path"
-import { tmpdir } from "node:os"
 import { randomBytes } from "node:crypto"
 import type { PluginConfig } from "../config.js"
 import { resolveDataDir } from "../config.js"
@@ -11,8 +10,19 @@ interface LockFileData {
   pid: number
   port: number
   bind: string
-  refCount: number
+  holders: number[]
+  unknownHolders: number
   startedAt: string
+}
+
+interface RawLockFileData {
+  pid?: number
+  port?: number
+  bind?: string
+  holders?: number[]
+  unknownHolders?: number
+  refCount?: number
+  startedAt?: string
 }
 
 function getLockFilePath(config: PluginConfig): string | null {
@@ -24,8 +34,29 @@ function getLockFilePath(config: PluginConfig): string | null {
 function readLockFile(lockPath: string): LockFileData | null {
   try {
     if (!existsSync(lockPath)) return null
-    const raw = readFileSync(lockPath, "utf-8")
-    return JSON.parse(raw) as LockFileData
+    const raw = JSON.parse(readFileSync(lockPath, "utf-8")) as RawLockFileData
+    if (typeof raw.pid !== "number") return null
+
+    const holders: number[] =
+      Array.isArray(raw.holders)
+        ? (raw.holders as unknown[]).filter((h): h is number => typeof h === "number")
+        : []
+
+    const unknownHolders =
+      typeof raw.unknownHolders === "number" && raw.unknownHolders > 0
+        ? raw.unknownHolders
+        : typeof raw.refCount === "number" && raw.refCount > 0
+          ? raw.refCount
+          : 0
+
+    return {
+      pid: raw.pid,
+      port: raw.port ?? 0,
+      bind: raw.bind ?? "",
+      holders,
+      unknownHolders,
+      startedAt: raw.startedAt ?? new Date().toISOString(),
+    }
   } catch {
     return null
   }
@@ -35,7 +66,15 @@ function writeLockFileAtomic(lockPath: string, data: LockFileData): void {
   const dir = dirname(lockPath)
   mkdirSync(dir, { recursive: true })
   const tmpPath = join(dir, `.server-lock.${randomBytes(4).toString("hex")}.tmp`)
-  writeFileSync(tmpPath, JSON.stringify(data, null, 2), "utf-8")
+  const serialized = {
+    pid: data.pid,
+    port: data.port,
+    bind: data.bind,
+    holders: data.holders,
+    ...(data.unknownHolders > 0 ? { unknownHolders: data.unknownHolders } : {}),
+    startedAt: data.startedAt,
+  }
+  writeFileSync(tmpPath, JSON.stringify(serialized, null, 2), "utf-8")
   renameSync(tmpPath, lockPath)
 }
 
@@ -46,6 +85,10 @@ function isProcessAlive(pid: number): boolean {
   } catch {
     return false
   }
+}
+
+function pruneDeadHolders(holders: number[]): number[] {
+  return holders.filter((pid) => pid > 0 && isProcessAlive(pid))
 }
 
 export function getServerUrl(config: PluginConfig): string {
@@ -129,19 +172,24 @@ export async function ensureServerRunning(config: PluginConfig): Promise<string>
   if (!lockPath) throw new Error("Cannot resolve data directory for server lock file")
 
   const url = getServerUrl(config)
+  const myPid = process.pid
 
   if (await isServerRunning(config)) {
     const lock = readLockFile(lockPath)
     if (lock) {
-      lock.refCount += 1
-      writeLockFileAtomic(lockPath, lock)
-      logger.info(`Joined existing MCP server (pid=${lock.pid}, refCount=${lock.refCount})`)
+      const liveHolders = pruneDeadHolders(lock.holders)
+      if (!liveHolders.includes(myPid)) {
+        liveHolders.push(myPid)
+      }
+      writeLockFileAtomic(lockPath, { ...lock, holders: liveHolders })
+      logger.info(`Joined existing MCP server (pid=${lock.pid}, holders=${liveHolders.length})`)
     } else {
       writeLockFileAtomic(lockPath, {
         pid: 0,
         port: config.mcpServer.port,
         bind: config.mcpServer.bind,
-        refCount: 1,
+        holders: [myPid],
+        unknownHolders: 0,
         startedAt: new Date().toISOString(),
       })
     }
@@ -171,7 +219,8 @@ export async function ensureServerRunning(config: PluginConfig): Promise<string>
     pid: child.pid,
     port: config.mcpServer.port,
     bind: config.mcpServer.bind,
-    refCount: 1,
+    holders: [myPid],
+    unknownHolders: 0,
     startedAt: new Date().toISOString(),
   })
 
@@ -188,9 +237,15 @@ export async function stopServer(config?: PluginConfig): Promise<void> {
   const lock = readLockFile(lockPath)
   if (!lock) return
 
-  lock.refCount -= 1
+  const myPid = process.pid
+  const knownHolders = pruneDeadHolders(lock.holders)
+  const hadKnownOwnership = knownHolders.includes(myPid)
+  const liveHolders = knownHolders.filter((pid) => pid !== myPid)
+  const unknownHolders = !hadKnownOwnership && lock.unknownHolders > 0
+    ? lock.unknownHolders - 1
+    : lock.unknownHolders
 
-  if (lock.refCount <= 0) {
+  if (liveHolders.length === 0 && unknownHolders === 0) {
     logger.info(`Last client disconnecting — shutting down MCP server (pid=${lock.pid})`)
     if (lock.pid > 0 && isProcessAlive(lock.pid)) {
       try { process.kill(lock.pid, "SIGTERM") } catch {}
@@ -205,7 +260,7 @@ export async function stopServer(config?: PluginConfig): Promise<void> {
     }
     try { unlinkSync(lockPath) } catch {}
   } else {
-    writeLockFileAtomic(lockPath, lock)
-    logger.info(`Decremented server refCount to ${lock.refCount}`)
+    writeLockFileAtomic(lockPath, { ...lock, holders: liveHolders, unknownHolders })
+    logger.info(`Removed from holders; ${liveHolders.length} known holder(s) and ${unknownHolders} unknown holder(s) remain`)
   }
 }
