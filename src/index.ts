@@ -30,6 +30,7 @@ import {
 
 import { buildMemorySystemPrompt } from "./services/system-prompt.js"
 import { buildToolRegistry } from "./services/tool-registry.js"
+import { ensureCodeIndexFresh, resetCodeIndexSyncState } from "./services/code-index-sync.js"
 import type { PluginConfig } from "./config.js"
 
 const plugin: Plugin = async (input) => {
@@ -92,9 +93,12 @@ const plugin: Plugin = async (input) => {
     }
   })()
 
+  void ensureCodeIndexFresh(config, input.directory, "startup")
+
   installCommand()
 
   const cleanup = async () => {
+    resetCodeIndexSyncState()
     stopRetryLoop()
     await disconnectMemoryClient(config)
   }
@@ -231,6 +235,10 @@ const plugin: Plugin = async (input) => {
         compactedSessions.add(sessionID)
         resetSessionState(sessionID)
         clearNudgeHistory(sessionID)
+      if (event.type === "session.idle") {
+        void ensureCodeIndexFresh(config, input.directory, "session.idle")
+      }
+
         await handleCompactionRecovery(config, input, sessionID)
       }
 
@@ -299,7 +307,7 @@ const plugin: Plugin = async (input) => {
           "\n\nUse when stored information becomes outdated. Provide replacement_id to link to the updated entry.",
         // Code Intelligence hints
         index_project:
-          "\n\nDo NOT call proactively — indexing is a one-time setup (via /init-mcp-memory). Only use if recall_code/search_symbols return empty and you suspect the project is not indexed. Use project_info(action: 'list') to check first.",
+          "\n\nUse for initial indexing, manual recovery, or when code intelligence appears stale. The plugin may refresh indexes in the background after workspace changes, so prefer checking project_info(action: 'list') before re-indexing manually.",
         recall_code:
           "\n\nUse for intent-based semantic code search (e.g. 'how is authentication handled?'). Prefer over grep when searching by concept rather than literal text. Requires the project to be indexed.",
         search_symbols:

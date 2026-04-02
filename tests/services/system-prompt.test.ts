@@ -2,18 +2,20 @@ import { describe, it, expect } from "vitest"
 import { buildMemorySystemPrompt } from "../../src/services/system-prompt.js"
 import type { PluginConfig } from "../../src/config.js"
 
-function makeConfig(): PluginConfig {
+function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
   return {
-    chatMessage: { enabled: true, maxMemories: 5, injectOn: "first" },
+    chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 30, injectOn: "first" },
     autoCapture: { enabled: true, debounceMs: 10000, language: "en" },
     compaction: { enabled: true, memoryLimit: 10 },
     keywordDetection: { enabled: true, extraPatterns: [] },
     preemptiveCompaction: { enabled: true, thresholdPercent: 80, modelContextLimit: 200000, autoContinue: true },
     privacy: { enabled: true },
     compactionSummaryCapture: { enabled: true },
+    codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
     captureModel: { provider: "openai", model: "gpt-4o-mini", apiUrl: "", apiKey: "" },
-    mcpServer: { command: [], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file" },
+    mcpServer: { command: [], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1" },
     systemPrompt: { enabled: true },
+    ...overrides,
   } as PluginConfig
 }
 
@@ -63,6 +65,17 @@ describe("buildMemorySystemPrompt", () => {
     expect(result).toContain("code_search")
     expect(result).toContain("project_status")
     expect(result).toContain("/init-mcp-memory")
+    expect(result).toContain("Background refresh")
+  })
+
+  it("uses one-time setup guidance when code index sync is disabled", () => {
+    const result = buildMemorySystemPrompt(
+      makeConfig({ codeIndexSync: { enabled: false, debounceMs: 10000, minReindexIntervalMs: 300000 } }),
+      ["code_search", "project_status"],
+    )
+
+    expect(result).toContain("one-time setup")
+    expect(result).not.toContain("Background refresh")
   })
 
   it("does not include Code Intelligence section without code intel tools", () => {

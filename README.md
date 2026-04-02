@@ -9,7 +9,7 @@ Persistent memory for OpenCode agents via [memory-mcp-1file](https://github.com/
 
 ## What it does
 
-This OpenCode plugin gives agents persistent memory across sessions. It connects to a `memory-mcp-1file` MCP server via stdio and registers **8 unified tools** as plugin tools — consolidating memory search, storage, lifecycle management, code intelligence, and project indexing into an ergonomic interface with automatic routing. The plugin also provides automatic context injection, idle-time capture, compaction recovery, smart trigger nudges, agent guidance via system prompt, a `/init-mcp-memory` bootstrap command for deep project onboarding, and a `/setup-mcp-memory` guided configuration wizard.
+This OpenCode plugin gives agents persistent memory across sessions. It connects to a `memory-mcp-1file` MCP server via stdio and registers **8 unified tools** as plugin tools — consolidating memory search, storage, lifecycle management, code intelligence, and project indexing into an ergonomic interface with automatic routing. The plugin also provides automatic context injection, idle-time capture, background code-index refresh, compaction recovery, smart trigger nudges, agent guidance via system prompt, a `/init-mcp-memory` bootstrap command for deep project onboarding, and a `/setup-mcp-memory` guided configuration wizard.
 
 ## Features
 
@@ -33,6 +33,7 @@ This OpenCode plugin gives agents persistent memory across sessions. It connects
 
 - **Memory Injection** — On first user message (or every message), recalls relevant memories via hybrid search and injects them as synthetic context the LLM sees but the user doesn't.
 - **Auto-Capture** — When session goes idle (10s default), extracts the latest exchange, summarizes it via an external LLM, and stores with AGENTS.md-compatible prefixes.
+- **Code Index Sync** — On startup and idle, computes a lightweight workspace fingerprint and refreshes stale code indexes in the background with debounce, cooldown, and single-flight locking.
 - **Compaction Recovery** — After context compaction, injects recovery guidance and relevant memories via `experimental.session.compacting` hook. Instructs the agent to recall in-progress tasks and restore context.
 - **Preemptive Compaction** — Tracks estimated token usage per session. When approaching model context limit (default 80%), triggers early compaction with memory context preserved.
 - **Privacy Filtering** — Content wrapped in `<private>...</private>` is stripped to `[REDACTED]` before storing. Also intercepts agent's direct `store_memory`/`update_memory` calls via `tool.execute.before`.
@@ -114,6 +115,13 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
 
   // LLM for auto-capture summarization
   // When apiKey is set: uses direct HTTP to the specified API (fastest)
+  // Plugin-managed code intelligence refresh
+  "codeIndexSync": {
+    "enabled": true,
+    "debounceMs": 10000,            // Wait after detecting staleness before re-indexing
+    "minReindexIntervalMs": 300000  // Cooldown between successful force re-indexes
+  },
+
   // When apiKey is empty: uses OpenCode's session API with your configured providers (zero-config)
   "captureModel": {
     "provider": "",                  // OpenCode provider ID (e.g. "openai", "anthropic"); empty = use default
@@ -155,6 +163,7 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
 | **compactionSummaryCapture** | Saves compaction summaries as memories |
 | **captureModel** | LLM for auto-capture summarization — uses direct HTTP when apiKey is set, otherwise OpenCode session API |
 | **mcpServer** | [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server command, data directory, embedding model, and transport mode (stdio or HTTP) |
+| **codeIndexSync** | Detects stale workspace indexes and refreshes code intelligence in the background |
 | **systemPrompt** | Agent guidance via Memory Protocol in system prompt |
 
 ### Memory Namespaces via `tag`
@@ -182,7 +191,7 @@ Plugin hooks (index.ts)
   ├── tool.definition    → MCP tool description enhancement
   ├── tool.execute.before → privacy filtering on agent store/update calls
   ├── experimental.session.compacting → compaction recovery context
-  ├── event:session.idle → auto-capture via LLM
+  ├── event:session.idle → auto-capture + code-index freshness check
   ├── event:compacted    → inject recovery context
   ├── event:message.updated → preemptive compaction + summary capture
   └── tool:memory        → fallback memory tool (search/store/list)
@@ -196,6 +205,7 @@ Plugin hooks (index.ts)
     ├── compaction.ts     → recovery guidance + data
     ├── preemptive-compaction.ts → token tracking
     └── llm-client.ts     → OpenAI-compatible API
+    ├── code-index-sync.ts → fingerprinting + background re-index
         ↓
   MCP Server (memory-mcp-1file)
     └── stdio: plugin spawns server, proxies tool calls

@@ -54,6 +54,13 @@
 
   // LLM for auto-capture summarization
   // apiKey set → direct HTTP to apiUrl; apiKey empty → OpenCode session API (zero-config)
+  // Plugin-managed code intelligence refresh
+  "codeIndexSync": {
+    "enabled": true,
+    "debounceMs": 10000,            // Wait after detecting staleness before re-indexing
+    "minReindexIntervalMs": 300000  // Cooldown between successful force re-indexes
+  },
+
   "captureModel": {
     "provider": "",                  // OpenCode provider ID (e.g. "openai", "anthropic"); empty = use default
     "model": "",                     // Model ID (e.g. "gpt-4o-mini"); empty = use default

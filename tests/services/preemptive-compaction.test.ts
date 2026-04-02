@@ -23,7 +23,7 @@ const { recall } = await import("../../src/services/mcp-client.js")
 
 function makeConfig(overrides?: Partial<Pick<PluginConfig, "preemptiveCompaction">>): PluginConfig {
   return {
-    chatMessage: { enabled: true, maxMemories: 5, injectOn: "first" },
+    chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 30, injectOn: "first" },
     autoCapture: { enabled: true, debounceMs: 10000, language: "en" },
     compaction: { enabled: true, memoryLimit: 10 },
     keywordDetection: { enabled: true, extraPatterns: [] },
@@ -36,8 +36,9 @@ function makeConfig(overrides?: Partial<Pick<PluginConfig, "preemptiveCompaction
     },
     privacy: { enabled: true },
     compactionSummaryCapture: { enabled: true },
+    codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
     captureModel: { provider: "openai", model: "gpt-4o-mini", apiUrl: "", apiKey: "" },
-    mcpServer: { command: ["npx", "-y", "memory-mcp-1file"], tag: "default", model: "qwen3", transport: "http", port: 23817, registerInOpencode: true, mcpServerName: "memory-mcp-1file" },
+    mcpServer: { command: ["npx", "-y", "memory-mcp-1file"], tag: "default", model: "qwen3", transport: "http", port: 23817, bind: "127.0.0.1", mcpServerName: "memory-mcp-1file" },
     systemPrompt: { enabled: true },
   } as PluginConfig
 }

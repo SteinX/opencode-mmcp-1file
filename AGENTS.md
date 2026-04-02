@@ -21,7 +21,7 @@ Plugin hooks (index.ts)
   ├── tool.definition    → MCP tool description enhancement
   ├── tool.execute.before → privacy filtering on agent store/update calls
   ├── experimental.session.compacting → compaction recovery context
-  ├── event:session.idle → auto-capture via LLM
+  ├── event:session.idle → auto-capture + code-index freshness check
   ├── event:compacted    → inject recovery context
   ├── event:message.updated → preemptive compaction + summary capture
   └── tool:memory        → fallback memory tool (search/store/list)
@@ -47,7 +47,7 @@ Plugin hooks (index.ts)
 - **Error handling**: try/catch with `logger.error()`, return `false`/`null` on failure — never throw to callers
 - **Privacy**: Content passes through `privacy.ts` filters before memory storage. Also intercepted via `tool.execute.before` hook for agent's direct MCP calls.
 - **SDK types**: `as any` casts used where OpenCode SDK type declarations are incomplete — this is intentional, not sloppy
-- **Config**: JSONC format (`opencode-mmcp-1file.jsonc`), loaded via `loadConfig()` with 10 sections (chatMessage, autoCapture, compaction, keywordDetection, preemptiveCompaction, privacy, compactionSummaryCapture, captureModel, mcpServer, systemPrompt)
+- **Config**: JSONC format (`opencode-mmcp-1file.jsonc`), loaded via `loadConfig()` with 11 sections (chatMessage, autoCapture, compaction, keywordDetection, preemptiveCompaction, privacy, compactionSummaryCapture, codeIndexSync, captureModel, mcpServer, systemPrompt)
 - **Transport**: Stdio (default) or HTTP. Stdio spawns one server per plugin process via `StdioClientTransport`. HTTP mode uses `StreamableHTTPClientTransport` with a shared server managed by `server-process.ts` (spawn, health check, file-based refcount).
 - **Testing**: When adding or modifying functionality, the corresponding unit tests in `tests/` **must** be created or updated in the same change. Follow existing test patterns (vitest, `vi.mock()` for dependencies). Run `npm run test` to verify before considering work complete.
 - **Sync rule**: Any change to config schema (`src/config.ts` `PluginConfig`), default values (`DEFAULT_CONFIG`), or config-driven behavior **must** be reflected in all three places in the same commit: (1) code implementation, (2) `README.md` Configuration section (both the JSONC example block and the config sections table), (3) example config file `opencode-mmcp-1file.example.jsonc`. If a section is added/removed/renamed, update the section count in this file's Conventions → Config bullet as well.
@@ -64,6 +64,7 @@ Plugin hooks (index.ts)
 | `src/services/tool-registry.ts` | Register 8 unified tools (consolidating 17 MCP operations) | `buildToolRegistry()` |
 | `src/services/system-prompt.ts` | Memory Protocol system prompt builder | `buildMemorySystemPrompt()` |
 | `src/services/auto-capture.ts` | Session-idle memory extraction | `performAutoCapture()` |
+| `src/services/code-index-sync.ts` | Workspace fingerprinting + deferred re-index | `ensureCodeIndexFresh()`, `computeWorkspaceFingerprint()` |
 | `src/services/context-inject.ts` | Chat message memory injection | `shouldInjectMemories()`, `fetchAndFormatMemories()` |
 | `src/services/preemptive-compaction.ts` | Token-based early compaction | `checkAndTriggerPreemptiveCompaction()` |
 | `src/services/compaction.ts` | Post-compaction recovery guidance + data | `buildCompactionRecoveryContext()` |

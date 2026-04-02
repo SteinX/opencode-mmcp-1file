@@ -60,7 +60,12 @@ Always prefix stored content with the appropriate category:
 - **Do not leave tasks unfinished** — use memory_manage to update TASK memories to [completed] when done
 `
 
-const CODE_INTELLIGENCE = `
+function buildCodeIntelligenceSection(config: PluginConfig): string {
+  const reindexGuidance = config.codeIndexSync.enabled
+    ? "4. Background refresh: the plugin may re-index stale projects after workspace changes during idle periods\n5. Manual fallback: call project_status(action: \"index\") only if results still look stale or indexing never completed"
+    : "4. Do NOT call project_status(action: \"index\") proactively — indexing is a one-time setup via /init-mcp-memory"
+
+  return `
 ### Code Intelligence Tools
 When a project has been indexed (via /init-mcp-memory or project_status), these tools provide **semantic code understanding** beyond what grep/LSP offer — intent-based search, cross-session persistence, and call graph traversal.
 
@@ -76,11 +81,12 @@ When a project has been indexed (via /init-mcp-memory or project_status), these 
 1. **Search by intent**: Use code_search with search_type "intent" for semantic queries
 2. **Find symbols**: Use code_search with search_type "symbol" for exact name lookup
 3. **Trace relationships**: Use code_search with search_type "callers"/"callees"/"related" and the symbol_id from step 2
-4. **Do NOT** call project_status(action: "index") proactively — indexing is a one-time setup via /init-mcp-memory
+${reindexGuidance}
 
 Use /init-mcp-memory command to bootstrap full project memory with code indexing + deep research + knowledge graph.
 Use /setup-mcp-memory command to configure or update the plugin settings for this project.
 `
+}
 
 const CONNECTION_WARNING = `
 ### MEMORY SERVER OFFLINE
@@ -113,7 +119,7 @@ export function buildMemorySystemPrompt(
 ${toolList}
 `
   if (hasCodeIntel) {
-    prompt += CODE_INTELLIGENCE
+    prompt += buildCodeIntelligenceSection(_config)
   }
   return prompt
 }

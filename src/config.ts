@@ -45,6 +45,11 @@ export interface PluginConfig {
   compactionSummaryCapture: {
     enabled: boolean
   }
+  codeIndexSync: {
+    enabled: boolean
+    debounceMs: number
+    minReindexIntervalMs: number
+  }
   captureModel: {
     provider: string
     model: string
@@ -108,6 +113,11 @@ const DEFAULT_CONFIG: PluginConfig = {
     enabled: true,
   },
   captureModel: {
+  codeIndexSync: {
+    enabled: true,
+    debounceMs: 10_000,
+    minReindexIntervalMs: 300_000,
+  },
     provider: "",
     model: "",
     apiUrl: "",
@@ -170,6 +180,7 @@ function mergeConfig(defaults: PluginConfig, overrides: Partial<any>): PluginCon
     privacy: { ...defaults.privacy, ...overrides.privacy },
     compactionSummaryCapture: { ...defaults.compactionSummaryCapture, ...overrides.compactionSummaryCapture },
     captureModel: { ...defaults.captureModel, ...overrides.captureModel },
+    codeIndexSync: { ...defaults.codeIndexSync, ...overrides.codeIndexSync },
     mcpServer: { ...defaults.mcpServer, ...overrides.mcpServer },
     systemPrompt: { ...defaults.systemPrompt, ...overrides.systemPrompt },
   }

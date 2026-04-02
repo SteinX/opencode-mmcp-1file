@@ -90,6 +90,11 @@ vi.mock("../src/services/tool-registry.js", () => ({
   buildToolRegistry: vi.fn().mockReturnValue({}),
 }))
 
+vi.mock("../src/services/code-index-sync.js", () => ({
+  ensureCodeIndexFresh: vi.fn().mockResolvedValue(undefined),
+  resetCodeIndexSyncState: vi.fn(),
+}))
+
 // ─── Import mocked modules for assertions ──────────────────────────
 
 const { loadConfig, resolveDataDir } = await import("../src/config.js")
@@ -106,6 +111,7 @@ const { initLogger, logger } = await import("../src/utils/logger.js")
 const { trackMessageTokens, shouldTriggerCompaction, performPreemptiveCompaction, resetSessionState } = await import("../src/services/preemptive-compaction.js")
 const { buildMemorySystemPrompt } = await import("../src/services/system-prompt.js")
 const { buildToolRegistry } = await import("../src/services/tool-registry.js")
+const { ensureCodeIndexFresh, resetCodeIndexSyncState } = await import("../src/services/code-index-sync.js")
 const { existsSync, mkdirSync, copyFileSync } = await import("node:fs")
 
 // ─── Import the plugin under test ──────────────────────────────────
@@ -123,8 +129,9 @@ function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
     preemptiveCompaction: { enabled: true, thresholdPercent: 80, modelContextLimit: 200000, autoContinue: true },
     privacy: { enabled: true },
     compactionSummaryCapture: { enabled: true },
+    codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
     captureModel: { provider: "openai", model: "gpt-4o-mini", apiUrl: "", apiKey: "test-key" },
-    mcpServer: { command: ["npx", "-y", "memory-mcp-1file"], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file" },
+    mcpServer: { command: ["npx", "-y", "memory-mcp-1file"], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1" },
     systemPrompt: { enabled: true },
     ...overrides,
   } as PluginConfig
@@ -213,6 +220,17 @@ describe("plugin factory", () => {
     expect(getMemoryClient).toHaveBeenCalled()
   })
 
+  it("checks code index freshness on startup", async () => {
+    const config = makeConfig()
+    vi.mocked(loadConfig).mockReturnValue(config)
+    vi.mocked(resolveDataDir).mockReturnValue("/mock-data-dir")
+    const input = makePluginInput()
+
+    await plugin(input)
+
+    expect(ensureCodeIndexFresh).toHaveBeenCalledWith(config, input.directory, "startup")
+  })
+
   it("shows success toast on memory server connection", async () => {
     const config = makeConfig()
     vi.mocked(loadConfig).mockReturnValue(config)
@@ -278,6 +296,7 @@ describe("plugin factory", () => {
     expect(sigterm).toBeDefined()
     sigterm!.handler()
     await vi.advanceTimersByTimeAsync(0)
+    expect(resetCodeIndexSyncState).toHaveBeenCalled()
     expect(stopRetryLoop).toHaveBeenCalled()
     expect(disconnectMemoryClient).toHaveBeenCalled()
   })
@@ -661,6 +680,18 @@ describe("event handler: session.idle", () => {
 
     // Fire idle twice rapidly
     await hooks.event({
+  it("checks code index freshness on idle", async () => {
+    const { hooks, config, input } = await initPlugin({
+      autoCapture: { enabled: false, debounceMs: 10, language: "en" },
+    })
+
+    await hooks.event({
+      event: { type: "session.idle", properties: { sessionID: "s-idle" } },
+    })
+
+    expect(ensureCodeIndexFresh).toHaveBeenCalledWith(config, input.directory, "session.idle")
+  })
+
       event: { type: "session.idle", properties: { sessionID: "s-debounce" } },
     })
     await vi.advanceTimersByTimeAsync(100)

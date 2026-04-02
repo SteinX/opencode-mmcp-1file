@@ -22,8 +22,9 @@ function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
     preemptiveCompaction: { enabled: true, thresholdPercent: 80, modelContextLimit: 200000, autoContinue: true },
     privacy: { enabled: true },
     compactionSummaryCapture: { enabled: true },
+    codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
     captureModel: { provider: "", model: "", apiUrl: "", apiKey: "" },
-    mcpServer: { command: ["npm", "exec", "-y", "memory-mcp-1file", "--"], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file" },
+    mcpServer: { command: ["npm", "exec", "-y", "memory-mcp-1file", "--"], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1" },
     systemPrompt: { enabled: true },
     ...overrides,
   } as PluginConfig
@@ -70,6 +71,7 @@ describe("loadConfig", () => {
   it("loads and merges JSONC config file", () => {
     vi.mocked(existsSync).mockImplementation((p) =>
       String(p).endsWith("opencode-mmcp-1file.jsonc"),
+    expect(config.codeIndexSync.enabled).toBe(true)
     )
     vi.mocked(readFileSync).mockReturnValue(
       `{

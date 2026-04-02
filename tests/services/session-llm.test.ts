@@ -8,13 +8,14 @@ vi.mock("../../src/utils/logger.js", () => ({
 
 function makeConfig(overrides?: Partial<PluginConfig["captureModel"]>): PluginConfig {
   return {
-    chatMessage: { enabled: true, maxMemories: 5, injectOn: "first" },
+    chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 30, injectOn: "first" },
     autoCapture: { enabled: true, debounceMs: 10000, language: "en" },
     compaction: { enabled: true, memoryLimit: 10 },
     keywordDetection: { enabled: true, extraPatterns: [] },
     preemptiveCompaction: { enabled: true, thresholdPercent: 80, modelContextLimit: 200000, autoContinue: true },
     privacy: { enabled: true },
     compactionSummaryCapture: { enabled: true },
+    codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
     captureModel: {
       provider: "openai",
       model: "gpt-4o-mini",
@@ -22,7 +23,7 @@ function makeConfig(overrides?: Partial<PluginConfig["captureModel"]>): PluginCo
       apiKey: "",
       ...overrides,
     },
-    mcpServer: { command: [], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file" },
+    mcpServer: { command: [], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1" },
     systemPrompt: { enabled: true },
   } as PluginConfig
 }
