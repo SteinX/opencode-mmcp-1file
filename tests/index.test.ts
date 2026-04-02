@@ -98,7 +98,7 @@ vi.mock("../src/services/code-index-sync.js", () => ({
 // ─── Import mocked modules for assertions ──────────────────────────
 
 const { loadConfig, resolveDataDir } = await import("../src/config.js")
-const { shouldInjectMemories, markSessionInjected, fetchAndFormatMemories } = await import("../src/services/context-inject.js")
+const { shouldInjectMemories, markSessionInjected, fetchAndFormatMemories, fetchCodeIntelContext, fetchProjectKnowledge } = await import("../src/services/context-inject.js")
 const { performAutoCapture } = await import("../src/services/auto-capture.js")
 const { buildCompactionRecoveryContext } = await import("../src/services/compaction.js")
 const { getMemoryClient, storeMemory, disconnectMemoryClient, discoverTools, tryReconnect } = await import("../src/services/mcp-client.js")
@@ -476,6 +476,37 @@ describe("chat.message hook", () => {
     expect(markSessionInjected).toHaveBeenCalledWith("s1")
   })
 
+  it("injects project knowledge and code intel when relevant memories are unavailable", async () => {
+    const { hooks } = await initPlugin()
+    vi.mocked(shouldInjectMemories).mockReturnValue(true)
+    vi.mocked(fetchAndFormatMemories).mockResolvedValue(null)
+    vi.mocked(fetchProjectKnowledge).mockResolvedValue("[MEMORY] project knowledge")
+    vi.mocked(fetchCodeIntelContext).mockResolvedValue("[CODE INTELLIGENCE] indexed project")
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "tell me about this project setup" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+    expect(output.parts).toHaveLength(3)
+    expect(output.parts[0]).toMatchObject({
+      type: "text",
+      text: "tell me about this project setup",
+    })
+    expect(output.parts[1]).toMatchObject({
+      type: "text",
+      text: "[MEMORY] project knowledge",
+      synthetic: true,
+    })
+    expect(output.parts[2]).toMatchObject({
+      type: "text",
+      text: "[CODE INTELLIGENCE] indexed project",
+      synthetic: true,
+    })
+    expect(markSessionInjected).toHaveBeenCalledWith("s1")
+  })
+
   it("skips injection when shouldInjectMemories returns false", async () => {
     const { hooks } = await initPlugin()
     vi.mocked(shouldInjectMemories).mockReturnValue(false)
@@ -489,10 +520,12 @@ describe("chat.message hook", () => {
     expect(fetchAndFormatMemories).not.toHaveBeenCalled()
   })
 
-  it("skips injection when fetchAndFormatMemories returns null", async () => {
+  it("skips injection when all injection sources are empty", async () => {
     const { hooks } = await initPlugin()
     vi.mocked(shouldInjectMemories).mockReturnValue(true)
     vi.mocked(fetchAndFormatMemories).mockResolvedValue(null)
+    vi.mocked(fetchProjectKnowledge).mockResolvedValue(null)
+    vi.mocked(fetchCodeIntelContext).mockResolvedValue(null)
 
     const output = {
       message: { id: "msg1" },
@@ -647,6 +680,18 @@ describe("event handler: session.idle", () => {
     expect(performAutoCapture).toHaveBeenCalled()
   })
 
+  it("checks code index freshness on idle", async () => {
+    const { hooks, config, input } = await initPlugin({
+      autoCapture: { enabled: false, debounceMs: 10, language: "en" },
+    })
+
+    await hooks.event({
+      event: { type: "session.idle", properties: { sessionID: "s-idle" } },
+    })
+
+    expect(ensureCodeIndexFresh).toHaveBeenCalledWith(config, input.directory, "session.idle")
+  })
+
   it("skips capture when sessionID missing", async () => {
     const { hooks } = await initPlugin()
 
@@ -680,18 +725,6 @@ describe("event handler: session.idle", () => {
 
     // Fire idle twice rapidly
     await hooks.event({
-  it("checks code index freshness on idle", async () => {
-    const { hooks, config, input } = await initPlugin({
-      autoCapture: { enabled: false, debounceMs: 10, language: "en" },
-    })
-
-    await hooks.event({
-      event: { type: "session.idle", properties: { sessionID: "s-idle" } },
-    })
-
-    expect(ensureCodeIndexFresh).toHaveBeenCalledWith(config, input.directory, "session.idle")
-  })
-
       event: { type: "session.idle", properties: { sessionID: "s-debounce" } },
     })
     await vi.advanceTimersByTimeAsync(100)

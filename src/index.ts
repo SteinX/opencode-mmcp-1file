@@ -165,23 +165,26 @@ const plugin: Plugin = async (input) => {
       if (!userText) return
 
       const formatted = await fetchAndFormatMemories(config, userText)
-      if (!formatted) return
-
-      const syntheticPart = {
-        id: `prt-memory-context-${Date.now()}`,
-        sessionID: hookInput.sessionID,
-        messageID: output.message.id || `msg-memory-fallback-${Date.now()}`,
-        type: "text" as const,
-        text: formatted,
-        synthetic: true,
-      }
-
-      output.parts.unshift(syntheticPart as any)
-
       const [projectKnowledge, codeIntelContext] = await Promise.all([
         fetchProjectKnowledge(config),
         fetchCodeIntelContext(config),
       ])
+
+      let injected = false
+
+      if (formatted) {
+        const syntheticPart = {
+          id: `prt-memory-context-${Date.now()}`,
+          sessionID: hookInput.sessionID,
+          messageID: output.message.id || `msg-memory-fallback-${Date.now()}`,
+          type: "text" as const,
+          text: formatted,
+          synthetic: true,
+        }
+
+        output.parts.unshift(syntheticPart as any)
+        injected = true
+      }
 
       if (projectKnowledge) {
         output.parts.push({
@@ -192,6 +195,7 @@ const plugin: Plugin = async (input) => {
           text: projectKnowledge,
           synthetic: true,
         } as any)
+        injected = true
       }
 
       if (codeIntelContext) {
@@ -203,7 +207,10 @@ const plugin: Plugin = async (input) => {
           text: codeIntelContext,
           synthetic: true,
         } as any)
+        injected = true
       }
+
+      if (!injected) return
 
       markSessionInjected(hookInput.sessionID)
     },
@@ -228,6 +235,10 @@ const plugin: Plugin = async (input) => {
         idleTimers.set(sessionID, timer)
       }
 
+      if (event.type === "session.idle") {
+        void ensureCodeIndexFresh(config, input.directory, "session.idle")
+      }
+
       if (event.type === "session.compacted" && config.compaction.enabled) {
         const sessionID = event.properties?.sessionID
         if (!sessionID) return
@@ -235,10 +246,6 @@ const plugin: Plugin = async (input) => {
         compactedSessions.add(sessionID)
         resetSessionState(sessionID)
         clearNudgeHistory(sessionID)
-      if (event.type === "session.idle") {
-        void ensureCodeIndexFresh(config, input.directory, "session.idle")
-      }
-
         await handleCompactionRecovery(config, input, sessionID)
       }
 
