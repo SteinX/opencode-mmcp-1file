@@ -26,7 +26,7 @@ This OpenCode plugin gives agents persistent memory across sessions. It connects
   - `reload_config` — Hot-reload configuration from disk without restart.
 - **System Prompt Guidance** — Injects a Memory Protocol into the system prompt via `experimental.chat.system.transform`, teaching the agent when and how to use memory tools, prefix conventions, memory lifecycle, action triggers, and anti-patterns.
 - **Tool Description Enhancement** — Augments MCP tool descriptions via `tool.definition` hook with contextual hints (prefix guidance for `store_memory`, hybrid search notes for `recall`, etc.).
-- **Keyword Detection** — Detects phrases like "remember this", "save this", "记住" in user messages and nudges the agent to use memory tools.
+- **Keyword Detection** — Detects phrases like "remember this", "save this", "记住" in user messages and nudges the agent to store explicit user-requested memories with a `USER:` prefix.
 - **Smart Triggers** — Detects decision points, new task starts, and error/debugging contexts in conversations, nudging the agent to store or recall memories at the right time (with 5-minute cooldown per trigger type).
 
 ### Plugin-managed (automatic, behind the scenes)
@@ -68,9 +68,10 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
     "maxMemories": 5,
     "maxProjectMemories": 30,       // Max memories to fetch for tiered allocation (pool size)
     "injectOn": "first",           // "first" = first message only, "always" = every message
-    // Tiered injection: prioritize important categories over recency.
+    // Tiered injection: prioritize explicit user-requested memories first, then project guidance.
     // Set to null to disable and use flat recency-based list.
     "projectKnowledgeTiers": [
+      { "categories": ["USER"], "limit": 5 },
       { "categories": ["DECISION", "PATTERN"], "limit": 5 },
       { "categories": ["CONTEXT"], "limit": 5 }
     ]
@@ -90,6 +91,7 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
   },
 
   // Keyword detection for explicit memory requests
+  // Agent should store these with a USER: prefix when they are direct user instructions to remember something.
   "keywordDetection": {
     "enabled": true,
     "extraPatterns": []              // Additional regex patterns to detect
@@ -113,8 +115,6 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
     "enabled": true
   },
 
-  // LLM for auto-capture summarization
-  // When apiKey is set: uses direct HTTP to the specified API (fastest)
   // Plugin-managed code intelligence refresh
   "codeIndexSync": {
     "enabled": true,
@@ -122,6 +122,8 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
     "minReindexIntervalMs": 300000  // Cooldown between successful force re-indexes
   },
 
+  // LLM for auto-capture summarization
+  // When apiKey is set: uses direct HTTP to the specified API (fastest)
   // When apiKey is empty: uses OpenCode's session API with your configured providers (zero-config)
   "captureModel": {
     "provider": "",                  // OpenCode provider ID (e.g. "openai", "anthropic"); empty = use default
@@ -161,10 +163,12 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
 | **preemptiveCompaction** | Early compaction trigger based on token estimates |
 | **privacy** | Redaction of `<private>` tagged content |
 | **compactionSummaryCapture** | Saves compaction summaries as memories |
+| **codeIndexSync** | Detects stale workspace indexes and refreshes code intelligence in the background |
 | **captureModel** | LLM for auto-capture summarization — uses direct HTTP when apiKey is set, otherwise OpenCode session API |
 | **mcpServer** | [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server command, data directory, embedding model, and transport mode (stdio or HTTP) |
-| **codeIndexSync** | Detects stale workspace indexes and refreshes code intelligence in the background |
 | **systemPrompt** | Agent guidance via Memory Protocol in system prompt |
+
+By default, `USER:` memories are prioritized ahead of `DECISION:`, `PATTERN:`, and `CONTEXT:` in always-on Project Knowledge. This makes explicit user requests to remember something more likely to remain visible to the agent across turns.
 
 ### Memory Namespaces via `tag`
 
@@ -201,11 +205,11 @@ Plugin hooks (index.ts)
     ├── mcp-client.ts     → stdio transport to MCP server
     ├── system-prompt.ts  → Memory Protocol prompt builder
     ├── auto-capture.ts   → LLM summarization + store
+    ├── code-index-sync.ts → fingerprinting + background re-index
     ├── context-inject.ts → memory injection
     ├── compaction.ts     → recovery guidance + data
     ├── preemptive-compaction.ts → token tracking
     └── llm-client.ts     → OpenAI-compatible API
-    ├── code-index-sync.ts → fingerprinting + background re-index
         ↓
   MCP Server (memory-mcp-1file)
     └── stdio: plugin spawns server, proxies tool calls

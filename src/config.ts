@@ -83,6 +83,7 @@ const DEFAULT_CONFIG: PluginConfig = {
     maxProjectMemories: 30,
     injectOn: "first",
     projectKnowledgeTiers: [
+      { categories: ["USER"], limit: 5 },
       { categories: ["DECISION", "PATTERN"], limit: 5 },
       { categories: ["CONTEXT"], limit: 5 },
     ],
@@ -112,12 +113,12 @@ const DEFAULT_CONFIG: PluginConfig = {
   compactionSummaryCapture: {
     enabled: true,
   },
-  captureModel: {
   codeIndexSync: {
     enabled: true,
     debounceMs: 10_000,
     minReindexIntervalMs: 300_000,
   },
+  captureModel: {
     provider: "",
     model: "",
     apiUrl: "",
@@ -179,8 +180,8 @@ function mergeConfig(defaults: PluginConfig, overrides: Partial<any>): PluginCon
     preemptiveCompaction: { ...defaults.preemptiveCompaction, ...overrides.preemptiveCompaction },
     privacy: { ...defaults.privacy, ...overrides.privacy },
     compactionSummaryCapture: { ...defaults.compactionSummaryCapture, ...overrides.compactionSummaryCapture },
-    captureModel: { ...defaults.captureModel, ...overrides.captureModel },
     codeIndexSync: { ...defaults.codeIndexSync, ...overrides.codeIndexSync },
+    captureModel: { ...defaults.captureModel, ...overrides.captureModel },
     mcpServer: { ...defaults.mcpServer, ...overrides.mcpServer },
     systemPrompt: { ...defaults.systemPrompt, ...overrides.systemPrompt },
   }

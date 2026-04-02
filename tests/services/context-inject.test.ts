@@ -25,6 +25,7 @@ vi.mock("../../src/utils/logger.js", () => ({
 const { recall, listMemories, callMemoryTool } = await import("../../src/services/mcp-client.js")
 
 const DEFAULT_TIERS: TierConfig[] = [
+  { categories: ["USER"], limit: 5 },
   { categories: ["DECISION", "PATTERN"], limit: 5 },
   { categories: ["CONTEXT"], limit: 5 },
 ]
@@ -38,8 +39,9 @@ function makeConfig(overrides?: Partial<Pick<PluginConfig, "chatMessage">>): Plu
     preemptiveCompaction: { enabled: true, thresholdPercent: 80, modelContextLimit: 200000, autoContinue: true },
     privacy: { enabled: true },
     compactionSummaryCapture: { enabled: true },
+    codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
     captureModel: { provider: "openai", model: "gpt-4o-mini", apiUrl: "", apiKey: "" },
-    mcpServer: { command: ["npx", "-y", "memory-mcp-1file"], tag: "default", model: "qwen3", transport: "http", port: 23817, registerInOpencode: true, mcpServerName: "memory-mcp-1file" },
+    mcpServer: { command: ["npx", "-y", "memory-mcp-1file"], tag: "default", model: "qwen3", transport: "http", port: 23817, bind: "127.0.0.1", mcpServerName: "memory-mcp-1file" },
     systemPrompt: { enabled: true },
   } as PluginConfig
 }
@@ -124,6 +126,7 @@ describe("fetchAndFormatMemories", () => {
 
 describe("allocateToTiers", () => {
   const tiers: TierConfig[] = [
+    { categories: ["USER"], limit: 1 },
     { categories: ["DECISION", "PATTERN"], limit: 2 },
     { categories: ["TASK"], limit: 2 },
     { categories: [], limit: 2 },
@@ -131,15 +134,17 @@ describe("allocateToTiers", () => {
 
   it("allocates memories to matching tiers by priority", () => {
     const memories: MemoryEntry[] = [
-      { id: "1", content: "DECISION: Use PostgreSQL" },
-      { id: "2", content: "TASK: implement auth" },
-      { id: "3", content: "PATTERN: Repository pattern" },
-      { id: "4", content: "CONTEXT: Node 20" },
+      { id: "1", content: "USER: Remember deployment constraints" },
+      { id: "2", content: "DECISION: Use PostgreSQL" },
+      { id: "3", content: "TASK: implement auth" },
+      { id: "4", content: "PATTERN: Repository pattern" },
+      { id: "5", content: "CONTEXT: Node 20" },
     ]
     const result = allocateToTiers(memories, tiers)
-    expect(result.get(0)!.map((m) => m.id)).toEqual(["1", "3"]) // DECISION + PATTERN
-    expect(result.get(1)!.map((m) => m.id)).toEqual(["2"])       // TASK
-    expect(result.get(2)!.map((m) => m.id)).toEqual(["4"])       // catch-all
+    expect(result.get(0)!.map((m) => m.id)).toEqual(["1"])
+    expect(result.get(1)!.map((m) => m.id)).toEqual(["2", "4"])
+    expect(result.get(2)!.map((m) => m.id)).toEqual(["3"])
+    expect(result.get(3)!.map((m) => m.id)).toEqual(["5"])
   })
 
   it("respects tier limits", () => {
@@ -149,16 +154,16 @@ describe("allocateToTiers", () => {
       { id: "3", content: "DECISION: three" },
     ]
     const result = allocateToTiers(memories, tiers)
-    expect(result.get(0)!).toHaveLength(2) // limit is 2
+    expect(result.get(1)!).toHaveLength(2)
   })
 
   it("prevents duplicate allocation across tiers", () => {
     const memories: MemoryEntry[] = [
-      { id: "1", content: "DECISION: already used" },
+      { id: "1", content: "USER: already used" },
     ]
     const result = allocateToTiers(memories, tiers)
     expect(result.get(0)!).toHaveLength(1) // matched in tier 0
-    expect(result.get(2)!).toHaveLength(0) // not re-matched in catch-all
+    expect(result.get(3)!).toHaveLength(0) // not re-matched in catch-all
   })
 
   it("assigns unmatched memories to catch-all tier", () => {
@@ -170,7 +175,8 @@ describe("allocateToTiers", () => {
     const result = allocateToTiers(memories, tiers)
     expect(result.get(0)!).toHaveLength(0)
     expect(result.get(1)!).toHaveLength(0)
-    expect(result.get(2)!.map((m) => m.id)).toEqual(["1", "2"]) // limited to 2
+    expect(result.get(2)!).toHaveLength(0)
+    expect(result.get(3)!.map((m) => m.id)).toEqual(["1", "2"]) // limited to 2
   })
 
   it("is case-insensitive for category matching", () => {
@@ -179,7 +185,7 @@ describe("allocateToTiers", () => {
       { id: "2", content: "Pattern: mixed case" },
     ]
     const result = allocateToTiers(memories, tiers)
-    expect(result.get(0)!).toHaveLength(2)
+    expect(result.get(1)!).toHaveLength(2)
   })
 
   it("returns empty buckets when no memories provided", () => {
@@ -187,6 +193,7 @@ describe("allocateToTiers", () => {
     expect(result.get(0)!).toHaveLength(0)
     expect(result.get(1)!).toHaveLength(0)
     expect(result.get(2)!).toHaveLength(0)
+    expect(result.get(3)!).toHaveLength(0)
   })
 })
 
@@ -205,11 +212,14 @@ describe("fetchProjectKnowledge", () => {
   it("returns tiered project knowledge when tiers are configured", async () => {
     const config = makeConfig()
     vi.mocked(listMemories).mockResolvedValue([
-      { id: "1", content: "DECISION: Use PostgreSQL", memory_type: "semantic" },
-      { id: "2", content: "CONTEXT: ESM modules with .js extensions", memory_type: "semantic" },
+      { id: "1", content: "USER: Keep deployment notes visible", memory_type: "semantic" },
+      { id: "2", content: "DECISION: Use PostgreSQL", memory_type: "semantic" },
+      { id: "3", content: "CONTEXT: ESM modules with .js extensions", memory_type: "semantic" },
     ])
     const result = await fetchProjectKnowledge(config)
     expect(result).toContain("[MEMORY] Project Knowledge (tiered, always-on context):")
+    expect(result).toContain("### USER")
+    expect(result).toContain("USER: Keep deployment notes visible")
     expect(result).toContain("### DECISION / PATTERN")
     expect(result).toContain("DECISION: Use PostgreSQL")
     expect(result).toContain("### CONTEXT")

@@ -5,11 +5,12 @@
     "maxMemories": 5,
     "maxProjectMemories": 30,       // Max memories to fetch for tiered allocation (pool size)
     "injectOn": "first",           // "first" = first message only, "always" = every message
-    // Tiered injection: prioritize important categories over recency.
+    // Tiered injection: prioritize explicit user-requested memories first, then project guidance.
     // Each tier defines category prefixes to match and a max slot count.
     // Memories are allocated in tier order; unmatched go to catch-all (empty categories).
     // Set to null to disable tiering and use flat recency-based list.
     "projectKnowledgeTiers": [
+      { "categories": ["USER"], "limit": 5 },
       { "categories": ["DECISION", "PATTERN"], "limit": 5 },
       { "categories": ["CONTEXT"], "limit": 5 }
     ]
@@ -29,6 +30,7 @@
   },
 
   // Keyword detection for explicit memory requests
+  // Agent should store these with a USER: prefix when they are direct user instructions to remember something.
   "keywordDetection": {
     "enabled": true,
     "extraPatterns": []              // Additional regex patterns to detect
@@ -52,8 +54,6 @@
     "enabled": true
   },
 
-  // LLM for auto-capture summarization
-  // apiKey set → direct HTTP to apiUrl; apiKey empty → OpenCode session API (zero-config)
   // Plugin-managed code intelligence refresh
   "codeIndexSync": {
     "enabled": true,
@@ -61,6 +61,8 @@
     "minReindexIntervalMs": 300000  // Cooldown between successful force re-indexes
   },
 
+  // LLM for auto-capture summarization
+  // apiKey set → direct HTTP to apiUrl; apiKey empty → OpenCode session API (zero-config)
   "captureModel": {
     "provider": "",                  // OpenCode provider ID (e.g. "openai", "anthropic"); empty = use default
     "model": "",                     // Model ID (e.g. "gpt-4o-mini"); empty = use default

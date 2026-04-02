@@ -140,4 +140,8 @@ describe("MEMORY_NUDGE_MESSAGE", () => {
   it("mentions store_memory", () => {
     expect(MEMORY_NUDGE_MESSAGE).toContain("store_memory")
   })
+
+  it("mentions the USER prefix for explicit user memory requests", () => {
+    expect(MEMORY_NUDGE_MESSAGE).toContain("USER:")
+  })
 })

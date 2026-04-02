@@ -69,7 +69,12 @@ Based on the user's answers, generate a `opencode-mmcp-1file.jsonc` file. Use th
     "enabled": true,
     "maxMemories": 5,
     "maxProjectMemories": 10,       // Latest N memories injected as project knowledge (always-on context)
-    "injectOn": "first"            // "first" = first message only, "always" = every message
+    "injectOn": "first",           // "first" = first message only, "always" = every message
+    "projectKnowledgeTiers": [
+      { "categories": ["USER"], "limit": 5 },
+      { "categories": ["DECISION", "PATTERN"], "limit": 5 },
+      { "categories": ["CONTEXT"], "limit": 5 }
+    ]
   },
 
   // Auto-capture on session idle
@@ -86,6 +91,7 @@ Based on the user's answers, generate a `opencode-mmcp-1file.jsonc` file. Use th
   },
 
   // Keyword detection for explicit memory requests
+  // Agent should store direct user memory requests with a USER: prefix.
   "keywordDetection": {
     "enabled": true,
     "extraPatterns": []

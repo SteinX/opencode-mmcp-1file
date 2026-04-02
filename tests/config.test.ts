@@ -15,7 +15,7 @@ const { readFileSync, existsSync } = await import("fs")
 
 function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
   return {
-    chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 30, injectOn: "first", projectKnowledgeTiers: [{ categories: ["DECISION", "PATTERN"], limit: 5 }, { categories: ["CONTEXT"], limit: 5 }] },
+    chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 30, injectOn: "first", projectKnowledgeTiers: [{ categories: ["USER"], limit: 5 }, { categories: ["DECISION", "PATTERN"], limit: 5 }, { categories: ["CONTEXT"], limit: 5 }] },
     autoCapture: { enabled: false, debounceMs: 10000, language: "en" },
     compaction: { enabled: true, memoryLimit: 10 },
     keywordDetection: { enabled: true, extraPatterns: [] },
@@ -64,14 +64,19 @@ describe("loadConfig", () => {
     const config = loadConfig("/some/dir")
     expect(config.chatMessage.enabled).toBe(true)
     expect(config.chatMessage.maxMemories).toBe(5)
+    expect(config.chatMessage.projectKnowledgeTiers).toEqual([
+      { categories: ["USER"], limit: 5 },
+      { categories: ["DECISION", "PATTERN"], limit: 5 },
+      { categories: ["CONTEXT"], limit: 5 },
+    ])
     expect(config.mcpServer.tag).toBe("")
     expect(config.privacy.enabled).toBe(true)
+    expect(config.codeIndexSync.enabled).toBe(true)
   })
 
   it("loads and merges JSONC config file", () => {
     vi.mocked(existsSync).mockImplementation((p) =>
       String(p).endsWith("opencode-mmcp-1file.jsonc"),
-    expect(config.codeIndexSync.enabled).toBe(true)
     )
     vi.mocked(readFileSync).mockReturnValue(
       `{
