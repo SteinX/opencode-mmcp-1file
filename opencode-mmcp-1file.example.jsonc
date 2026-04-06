@@ -3,8 +3,14 @@
   "chatMessage": {
     "enabled": true,
     "maxMemories": 5,
+    "maxInjectedMemories": 6,       // Max query-recall memories injected after filtering/dedupe
     "maxProjectMemories": 30,       // Max memories to fetch for tiered allocation (pool size)
-    "injectOn": "first",           // "first" = first message only, "always" = every message
+    "injectOn": "first",           // Query recall only: "first" or "always"
+    "projectKnowledgeInjectOn": "first", // "first" | "always" | "compaction" | "never"
+    "codeIntelInjectOn": "first",  // "first" | "always" | "compaction" | "never"
+    "shortQueryMinLength": 3,       // Skip query recall for very short queries
+    "minScore": 0.35,               // Query recall score threshold before injection
+    "projectKnowledgeValidOnly": false, // Use only valid project memories when true
     // Tiered injection: prioritize explicit user-requested memories first, then project guidance.
     // Each tier defines category prefixes to match and a max slot count.
     // Memories are allocated in tier order; unmatched go to catch-all (empty categories).

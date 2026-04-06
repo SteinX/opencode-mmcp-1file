@@ -31,4 +31,4 @@ export function detectMemoryKeyword(
   return null
 }
 
-export const MEMORY_NUDGE_MESSAGE = `[MEMORY HINT] The user explicitly asked you to remember or save something. Use \`store_memory\` to persist the key fact for future sessions. Store explicit user-requested memories with the \`USER:\` prefix so they stay prioritized in always-on project knowledge. Use other prefixes only when they fit better (DECISION:, TASK:, PATTERN:, BUGFIX:, CONTEXT:, RESEARCH:).`
+export const MEMORY_NUDGE_MESSAGE = `[MEMORY HINT] The user explicitly asked you to remember or save something. Use \`memory_save\` to persist the key fact for future sessions. Store explicit user-requested memories with the \`USER:\` prefix so they stay prioritized in project knowledge. Use other prefixes only when they fit better (DECISION:, TASK:, PATTERN:, BUGFIX:, CONTEXT:, RESEARCH:).`

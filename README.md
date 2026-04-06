@@ -25,20 +25,19 @@ This OpenCode plugin gives agents persistent memory across sessions. It connects
   - `get_status` — Memory system status and startup progress.
   - `reload_config` — Hot-reload configuration from disk without restart.
 - **System Prompt Guidance** — Injects a Memory Protocol into the system prompt via `experimental.chat.system.transform`, teaching the agent when and how to use memory tools, prefix conventions, memory lifecycle, action triggers, and anti-patterns.
-- **Tool Description Enhancement** — Augments MCP tool descriptions via `tool.definition` hook with contextual hints (prefix guidance for `store_memory`, hybrid search notes for `recall`, etc.).
+- **Tool Description Enhancement** — Augments raw MCP tool descriptions via `tool.definition` hook with guidance that points agents back to the unified plugin tools first.
 - **Keyword Detection** — Detects phrases like "remember this", "save this", "记住" in user messages and nudges the agent to store explicit user-requested memories with a `USER:` prefix.
 - **Smart Triggers** — Detects decision points, new task starts, and error/debugging contexts in conversations, nudging the agent to store or recall memories at the right time (with 5-minute cooldown per trigger type).
 
 ### Plugin-managed (automatic, behind the scenes)
 
-- **Memory Injection** — On first user message (or every message), recalls relevant memories via hybrid search and injects them as synthetic context the LLM sees but the user doesn't.
+- **Memory Injection** — Injects query recall, project knowledge, and code-intelligence guidance independently, with per-source injection strategies, score filtering, dedupe, and source-specific budgets before synthetic context is added.
 - **Auto-Capture** — When session goes idle (10s default), extracts the latest exchange, summarizes it via an external LLM, and stores with AGENTS.md-compatible prefixes.
 - **Code Index Sync** — On startup and idle, computes a lightweight workspace fingerprint and refreshes stale code indexes in the background with debounce, cooldown, and single-flight locking.
-- **Compaction Recovery** — After context compaction, injects recovery guidance and relevant memories via `experimental.session.compacting` hook. Instructs the agent to recall in-progress tasks and restore context.
+- **Compaction Recovery** — After context compaction, injects recovery guidance and relevant memories via `experimental.session.compacting` hook. Instructs the agent to use `memory_query` to restore in-progress tasks and project context.
 - **Preemptive Compaction** — Tracks estimated token usage per session. When approaching model context limit (default 80%), triggers early compaction with memory context preserved.
-- **Privacy Filtering** — Content wrapped in `<private>...</private>` is stripped to `[REDACTED]` before storing. Also intercepts agent's direct `store_memory`/`update_memory` calls via `tool.execute.before`.
+- **Privacy Filtering** — Content wrapped in `<private>...</private>` is stripped to `[REDACTED]` before storing. Also intercepts agent's direct raw MCP `store_memory`/`update_memory` calls via `tool.execute.before`.
 - **Compaction Summary Capture** — After compaction completes, stores the summary as a CONTEXT: memory for future reference.
-- **Fallback Memory Tool** — Exposes a `memory` tool (search/store/list) as fallback in case MCP registration fails.
 
 ## Install
 
@@ -66,8 +65,14 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
   "chatMessage": {
     "enabled": true,
     "maxMemories": 5,
+    "maxInjectedMemories": 6,       // Max query-recall memories injected after filtering/dedupe
     "maxProjectMemories": 30,       // Max memories to fetch for tiered allocation (pool size)
-    "injectOn": "first",           // "first" = first message only, "always" = every message
+    "injectOn": "first",           // Query recall only: "first" or "always"
+    "projectKnowledgeInjectOn": "first", // "first" | "always" | "compaction" | "never"
+    "codeIntelInjectOn": "first",  // "first" | "always" | "compaction" | "never"
+    "shortQueryMinLength": 3,       // Skip query recall for very short queries
+    "minScore": 0.35,               // Query recall score threshold before injection
+    "projectKnowledgeValidOnly": false, // Use only valid project memories when true
     // Tiered injection: prioritize explicit user-requested memories first, then project guidance.
     // Set to null to disable and use flat recency-based list.
     "projectKnowledgeTiers": [
@@ -168,7 +173,7 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
 | **mcpServer** | [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server command, data directory, embedding model, and transport mode (stdio or HTTP) |
 | **systemPrompt** | Agent guidance via Memory Protocol in system prompt |
 
-By default, `USER:` memories are prioritized ahead of `DECISION:`, `PATTERN:`, and `CONTEXT:` in always-on Project Knowledge. This makes explicit user requests to remember something more likely to remain visible to the agent across turns.
+By default, `USER:` memories are prioritized ahead of `DECISION:`, `PATTERN:`, and `CONTEXT:` in Project Knowledge. This keeps explicit user-requested memories more visible during session bootstrap and compaction recovery.
 
 ### Memory Namespaces via `tag`
 
@@ -192,27 +197,27 @@ Set `dataDir` to override the derived path entirely. If neither `tag` nor `dataD
 Plugin hooks (index.ts)
   ├── experimental.chat.system.transform → Memory Protocol system prompt
   ├── chat.message       → context injection + keyword nudge
-  ├── tool.definition    → MCP tool description enhancement
+  ├── tool.definition    → raw MCP tool hint enhancement
   ├── tool.execute.before → privacy filtering on agent store/update calls
   ├── experimental.session.compacting → compaction recovery context
   ├── event:session.idle → auto-capture + code-index freshness check
   ├── event:compacted    → inject recovery context
   ├── event:message.updated → preemptive compaction + summary capture
-  └── tool:memory        → fallback memory tool (search/store/list)
+  └── tool              → 8 unified plugin tools
         ↓
   Services layer (src/services/)
     ├── tool-registry.ts  → register 8 unified tools (consolidating 17 MCP operations)
-    ├── mcp-client.ts     → stdio transport to MCP server
+    ├── mcp-client.ts     → stdio/HTTP transport + retrieval status contract
     ├── system-prompt.ts  → Memory Protocol prompt builder
     ├── auto-capture.ts   → LLM summarization + store
     ├── code-index-sync.ts → fingerprinting + background re-index
-    ├── context-inject.ts → memory injection
+    ├── context-inject.ts → per-source memory injection assembly
     ├── compaction.ts     → recovery guidance + data
     ├── preemptive-compaction.ts → token tracking
     └── llm-client.ts     → OpenAI-compatible API
         ↓
   MCP Server (memory-mcp-1file)
-    └── stdio: plugin spawns server, proxies tool calls
+    └── stdio or HTTP: plugin proxies tool calls
 ```
 
 ## How It Works

@@ -88,7 +88,7 @@ export function checkTriggers(
       triggered: true,
       type: "decision",
       message:
-        "[MEMORY NUDGE] 💡 You just made a decision. Consider storing it with store_memory using DECISION prefix — include alternatives you considered.",
+        "[MEMORY NUDGE] 💡 You just made a decision. Consider storing it with memory_save using the DECISION prefix — include alternatives you considered.",
     }
   }
 
@@ -99,7 +99,7 @@ export function checkTriggers(
       triggered: true,
       type: "new_task",
       message:
-        "[MEMORY NUDGE] 🚀 Starting a new task? Consider calling recall() to find relevant context and past decisions first.",
+        "[MEMORY NUDGE] 🚀 Starting a new task? Consider calling memory_query to find relevant context and past decisions first.",
     }
   }
 

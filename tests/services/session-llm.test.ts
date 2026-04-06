@@ -8,7 +8,7 @@ vi.mock("../../src/utils/logger.js", () => ({
 
 function makeConfig(overrides?: Partial<PluginConfig["captureModel"]>): PluginConfig {
   return {
-    chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 30, injectOn: "first" },
+    chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 30, maxInjectedMemories: 6, injectOn: "first", shortQueryMinLength: 3, minScore: 0.35 },
     autoCapture: { enabled: true, debounceMs: 10000, language: "en" },
     compaction: { enabled: true, memoryLimit: 10 },
     keywordDetection: { enabled: true, extraPatterns: [] },

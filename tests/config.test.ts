@@ -230,7 +230,26 @@ describe("applyConfig", () => {
   })
 
   it("returns empty array when nothing changed", () => {
-    const target = makeConfig({ mcpServer: { command: ["npm", "exec", "-y", "memory-mcp-1file", "--"], tag: "", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1" } })
+    const target = makeConfig({
+      chatMessage: {
+        enabled: true,
+        maxMemories: 5,
+        maxProjectMemories: 30,
+        maxInjectedMemories: 6,
+        injectOn: "first",
+        shortQueryMinLength: 3,
+        minScore: 0.35,
+        projectKnowledgeInjectOn: "first",
+        codeIntelInjectOn: "first",
+        projectKnowledgeValidOnly: false,
+        projectKnowledgeTiers: [
+          { categories: ["USER"], limit: 5 },
+          { categories: ["DECISION", "PATTERN"], limit: 5 },
+          { categories: ["CONTEXT"], limit: 5 },
+        ],
+      },
+      mcpServer: { command: ["npm", "exec", "-y", "memory-mcp-1file", "--"], tag: "", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1" },
+    })
     const changed = applyConfig(target)
     expect(changed).toEqual([])
   })

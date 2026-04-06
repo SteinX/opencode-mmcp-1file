@@ -39,7 +39,7 @@ const { isConnectionFailed, getConnectionStatus } = await import("../../src/serv
 
 function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
   return {
-    chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 10, injectOn: "first" },
+    chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 10, maxInjectedMemories: 6, injectOn: "first", shortQueryMinLength: 3, minScore: 0.35 },
     autoCapture: { enabled: true, debounceMs: 10000, language: "en" },
     compaction: { enabled: true, memoryLimit: 10 },
     keywordDetection: { enabled: true, extraPatterns: [] },
@@ -147,9 +147,9 @@ describe("memory_query tool", () => {
     )
   })
 
-  it("routes to get_valid when query mentions 'valid'", async () => {
+  it("routes to get_valid in explicit valid mode", async () => {
     const tools = buildToolRegistry(makeConfig())
-    await tools.memory_query.execute({ query: "show valid memories" }, mockContext)
+    await tools.memory_query.execute({ query: "show valid memories", mode: "valid" }, mockContext)
     expect(callMemoryTool).toHaveBeenCalledWith(
       expect.anything(),
       "get_valid",

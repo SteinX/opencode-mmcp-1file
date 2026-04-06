@@ -7,6 +7,15 @@ import { logger } from "../utils/logger.js"
 import { isConnectionFailed, markConnectionFailed, markConnectionHealthy } from "./connection-state.js"
 import { ensureServerRunning, stopServer } from "./server-process.js"
 
+export type RetrievalStatus = "ok" | "empty" | "failed" | "unavailable"
+
+export interface RetrievalResult {
+  status: RetrievalStatus
+  source: "recall" | "search" | "list" | "valid"
+  memories: MemoryEntry[]
+  reason?: string
+}
+
 let mcpClient: Client | null = null
 let connectionPromise: Promise<Client> | null = null
 
@@ -115,22 +124,74 @@ function parseMemories(raw: string): MemoryEntry[] {
   }
 }
 
+function classifyFailure(err: unknown): RetrievalStatus {
+  const message = String(err)
+  if (message.includes("Memory server unavailable")) return "unavailable"
+  return "failed"
+}
+
+async function readMemories(
+  config: PluginConfig,
+  source: RetrievalResult["source"],
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<RetrievalResult> {
+  try {
+    const client = await getMemoryClient(config)
+    const result = await client.callTool({ name: toolName, arguments: args })
+    const memories = parseMemories(extractTextResult(result))
+    return {
+      status: memories.length > 0 ? "ok" : "empty",
+      source,
+      memories,
+    }
+  } catch (err) {
+    const status = classifyFailure(err)
+    logger.error(`${toolName} failed`, { error: String(err), args })
+    return {
+      status,
+      source,
+      memories: [],
+      reason: String(err),
+    }
+  }
+}
+
+export async function recallMemories(
+  config: PluginConfig,
+  query: string,
+  limit = 5,
+): Promise<RetrievalResult> {
+  return readMemories(config, "recall", "recall", { query, limit })
+}
+
+export async function searchMemoryResult(
+  config: PluginConfig,
+  query: string,
+  mode: "vector" | "bm25" = "bm25",
+  limit = 5,
+): Promise<RetrievalResult> {
+  return readMemories(config, "search", "search_memory", { query, mode, limit })
+}
+
+export async function listProjectMemories(
+  config: PluginConfig,
+  limit = 10,
+  validOnly = false,
+): Promise<RetrievalResult> {
+  if (validOnly) {
+    return readMemories(config, "valid", "get_valid", { limit })
+  }
+  return readMemories(config, "list", "list_memories", { limit })
+}
+
 export async function recall(
   config: PluginConfig,
   query: string,
   limit = 5,
 ): Promise<MemoryEntry[]> {
-  try {
-    const client = await getMemoryClient(config)
-    const result = await client.callTool({
-      name: "recall",
-      arguments: { query, limit },
-    })
-    return parseMemories(extractTextResult(result))
-  } catch (err) {
-    logger.error("recall failed", { query, error: String(err) })
-    return []
-  }
+  const result = await recallMemories(config, query, limit)
+  return result.memories
 }
 
 export async function searchMemory(
@@ -139,17 +200,8 @@ export async function searchMemory(
   mode: "vector" | "bm25" = "bm25",
   limit = 5,
 ): Promise<MemoryEntry[]> {
-  try {
-    const client = await getMemoryClient(config)
-    const result = await client.callTool({
-      name: "search_memory",
-      arguments: { query, mode, limit },
-    })
-    return parseMemories(extractTextResult(result))
-  } catch (err) {
-    logger.error("searchMemory failed", { query, mode, error: String(err) })
-    return []
-  }
+  const result = await searchMemoryResult(config, query, mode, limit)
+  return result.memories
 }
 
 export async function storeMemory(
@@ -177,17 +229,8 @@ export async function listMemories(
   config: PluginConfig,
   limit = 10,
 ): Promise<MemoryEntry[]> {
-  try {
-    const client = await getMemoryClient(config)
-    const result = await client.callTool({
-      name: "list_memories",
-      arguments: { limit },
-    })
-    return parseMemories(extractTextResult(result))
-  } catch (err) {
-    logger.error("listMemories failed", { error: String(err) })
-    return []
-  }
+  const result = await listProjectMemories(config, limit)
+  return result.memories
 }
 
 export async function callMemoryTool(

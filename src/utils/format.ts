@@ -66,7 +66,7 @@ export function formatProjectKnowledge(memories: MemoryEntry[]): string {
     return `- ${m.content}${type}`
   })
 
-  return `[MEMORY] Project Knowledge (always-on context):\n${lines.join("\n")}`
+  return `[MEMORY] Project Knowledge (session guidance):\n${lines.join("\n")}`
 }
 
 /**
@@ -122,6 +122,5 @@ export function formatTieredProjectKnowledge(
 
   if (sections.length === 0) return ""
 
-  return `[MEMORY] Project Knowledge (tiered, always-on context):\n${sections.join("\n")}`
+  return `[MEMORY] Project Knowledge (tiered session guidance):\n${sections.join("\n")}`
 }
-

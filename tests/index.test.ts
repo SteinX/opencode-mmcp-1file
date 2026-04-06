@@ -20,6 +20,9 @@ vi.mock("../src/config.js", () => ({
 
 vi.mock("../src/services/context-inject.js", () => ({
   shouldInjectMemories: vi.fn().mockReturnValue(false),
+  shouldInjectQueryRecall: vi.fn().mockReturnValue(false),
+  shouldInjectProjectKnowledge: vi.fn().mockReturnValue(false),
+  shouldInjectCodeIntel: vi.fn().mockReturnValue(false),
   markSessionInjected: vi.fn(),
   fetchAndFormatMemories: vi.fn().mockResolvedValue(null),
   fetchCodeIntelContext: vi.fn().mockResolvedValue(null),
@@ -38,7 +41,6 @@ vi.mock("../src/services/mcp-client.js", () => ({
   getMemoryClient: vi.fn().mockResolvedValue({}),
   storeMemory: vi.fn().mockResolvedValue(true),
   disconnectMemoryClient: vi.fn().mockResolvedValue(undefined),
-  discoverTools: vi.fn().mockResolvedValue(["store_memory", "recall"]),
   tryReconnect: vi.fn().mockResolvedValue(true),
 }))
 
@@ -98,10 +100,19 @@ vi.mock("../src/services/code-index-sync.js", () => ({
 // ─── Import mocked modules for assertions ──────────────────────────
 
 const { loadConfig, resolveDataDir } = await import("../src/config.js")
-const { shouldInjectMemories, markSessionInjected, fetchAndFormatMemories, fetchCodeIntelContext, fetchProjectKnowledge } = await import("../src/services/context-inject.js")
+const {
+  shouldInjectMemories,
+  shouldInjectQueryRecall,
+  shouldInjectProjectKnowledge,
+  shouldInjectCodeIntel,
+  markSessionInjected,
+  fetchAndFormatMemories,
+  fetchCodeIntelContext,
+  fetchProjectKnowledge,
+} = await import("../src/services/context-inject.js")
 const { performAutoCapture } = await import("../src/services/auto-capture.js")
 const { buildCompactionRecoveryContext } = await import("../src/services/compaction.js")
-const { getMemoryClient, storeMemory, disconnectMemoryClient, discoverTools, tryReconnect } = await import("../src/services/mcp-client.js")
+const { getMemoryClient, storeMemory, disconnectMemoryClient, tryReconnect } = await import("../src/services/mcp-client.js")
 const { isConnectionFailed, startRetryLoop, stopRetryLoop } = await import("../src/services/connection-state.js")
 const { summarizeExchange } = await import("../src/services/llm-client.js")
 const { callSessionLLM } = await import("../src/services/session-llm.js")
@@ -122,7 +133,7 @@ const { default: plugin } = await import("../src/index.js")
 
 function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
   return {
-    chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 10, injectOn: "first" },
+    chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 10, maxInjectedMemories: 6, injectOn: "first", shortQueryMinLength: 3, minScore: 0.35 },
     autoCapture: { enabled: true, debounceMs: 10, language: "en" },
     compaction: { enabled: true, memoryLimit: 10 },
     keywordDetection: { enabled: true, extraPatterns: [] },
@@ -331,9 +342,10 @@ describe("extractUserText (via chat.message)", () => {
     expect(detectMemoryKeyword).toHaveBeenCalledWith("remember this important fact about the project", expect.any(Array))
   })
 
-  it("returns null (skips) for short text under 10 chars", async () => {
+  it("passes short text through to source-specific injection gates", async () => {
     const { hooks } = await initPlugin()
     vi.mocked(shouldInjectMemories).mockReturnValue(true)
+    vi.mocked(shouldInjectQueryRecall).mockReturnValue(true)
 
     const output = {
       message: { id: "msg1" },
@@ -341,13 +353,13 @@ describe("extractUserText (via chat.message)", () => {
     }
 
     await hooks["chat.message"]({ sessionID: "s1" }, output)
-    expect(fetchAndFormatMemories).not.toHaveBeenCalled()
+    expect(fetchAndFormatMemories).toHaveBeenCalledWith(expect.anything(), "hi")
   })
 
   it("ignores synthetic parts", async () => {
     const { hooks } = await initPlugin({ keywordDetection: { enabled: true, extraPatterns: [] } })
     vi.mocked(detectMemoryKeyword).mockReturnValue(null)
-    vi.mocked(shouldInjectMemories).mockReturnValue(true)
+    vi.mocked(shouldInjectQueryRecall).mockReturnValue(true)
 
     const output = {
       message: { id: "msg1" },
@@ -363,7 +375,7 @@ describe("extractUserText (via chat.message)", () => {
 
   it("returns null for empty parts array", async () => {
     const { hooks } = await initPlugin()
-    vi.mocked(shouldInjectMemories).mockReturnValue(true)
+    vi.mocked(shouldInjectQueryRecall).mockReturnValue(true)
 
     const output = {
       message: { id: "msg1" },
@@ -457,9 +469,10 @@ describe("chat.message hook", () => {
     expect(output.parts).toHaveLength(1)
   })
 
-  it("injects memory context when shouldInjectMemories returns true", async () => {
+  it("injects memory context when query recall gate allows it", async () => {
     const { hooks } = await initPlugin()
     vi.mocked(shouldInjectMemories).mockReturnValue(true)
+    vi.mocked(shouldInjectQueryRecall).mockReturnValue(true)
     vi.mocked(fetchAndFormatMemories).mockResolvedValue("[MEMORY] some recalled memory")
 
     const output = {
@@ -473,12 +486,14 @@ describe("chat.message hook", () => {
       text: "[MEMORY] some recalled memory",
       synthetic: true,
     })
-    expect(markSessionInjected).toHaveBeenCalledWith("s1")
+    expect(markSessionInjected).toHaveBeenCalledWith("s1", ["query_recall"])
   })
 
   it("injects project knowledge and code intel when relevant memories are unavailable", async () => {
     const { hooks } = await initPlugin()
     vi.mocked(shouldInjectMemories).mockReturnValue(true)
+    vi.mocked(shouldInjectProjectKnowledge).mockReturnValue(true)
+    vi.mocked(shouldInjectCodeIntel).mockReturnValue(true)
     vi.mocked(fetchAndFormatMemories).mockResolvedValue(null)
     vi.mocked(fetchProjectKnowledge).mockResolvedValue("[MEMORY] project knowledge")
     vi.mocked(fetchCodeIntelContext).mockResolvedValue("[CODE INTELLIGENCE] indexed project")
@@ -504,12 +519,15 @@ describe("chat.message hook", () => {
       text: "[CODE INTELLIGENCE] indexed project",
       synthetic: true,
     })
-    expect(markSessionInjected).toHaveBeenCalledWith("s1")
+    expect(markSessionInjected).toHaveBeenCalledWith("s1", ["project_knowledge", "code_intel"])
   })
 
-  it("skips injection when shouldInjectMemories returns false", async () => {
+  it("skips query recall when source-specific gates return false", async () => {
     const { hooks } = await initPlugin()
     vi.mocked(shouldInjectMemories).mockReturnValue(false)
+    vi.mocked(shouldInjectQueryRecall).mockReturnValue(false)
+    vi.mocked(shouldInjectProjectKnowledge).mockReturnValue(false)
+    vi.mocked(shouldInjectCodeIntel).mockReturnValue(false)
 
     const output = {
       message: { id: "msg1" },
@@ -522,7 +540,9 @@ describe("chat.message hook", () => {
 
   it("skips injection when all injection sources are empty", async () => {
     const { hooks } = await initPlugin()
-    vi.mocked(shouldInjectMemories).mockReturnValue(true)
+    vi.mocked(shouldInjectQueryRecall).mockReturnValue(true)
+    vi.mocked(shouldInjectProjectKnowledge).mockReturnValue(true)
+    vi.mocked(shouldInjectCodeIntel).mockReturnValue(true)
     vi.mocked(fetchAndFormatMemories).mockResolvedValue(null)
     vi.mocked(fetchProjectKnowledge).mockResolvedValue(null)
     vi.mocked(fetchCodeIntelContext).mockResolvedValue(null)
@@ -551,6 +571,9 @@ describe("chat.message hook", () => {
 
     // Now chat.message should pass isAfterCompaction=true
     vi.mocked(shouldInjectMemories).mockReturnValue(false)
+    vi.mocked(shouldInjectQueryRecall).mockReturnValue(false)
+    vi.mocked(shouldInjectProjectKnowledge).mockReturnValue(false)
+    vi.mocked(shouldInjectCodeIntel).mockReturnValue(false)
     const output = { message: { id: "msg1" }, parts: [{ type: "text", text: "continuing after compaction" }] }
     await hooks["chat.message"]({ sessionID: "s-compact" }, output)
 
@@ -560,6 +583,9 @@ describe("chat.message hook", () => {
     // Second call should have isAfterCompaction=false (flag cleared)
     vi.clearAllMocks()
     vi.mocked(shouldInjectMemories).mockReturnValue(false)
+    vi.mocked(shouldInjectQueryRecall).mockReturnValue(false)
+    vi.mocked(shouldInjectProjectKnowledge).mockReturnValue(false)
+    vi.mocked(shouldInjectCodeIntel).mockReturnValue(false)
     await hooks["chat.message"]({ sessionID: "s-compact" }, output)
     expect(shouldInjectMemories).toHaveBeenCalledWith(expect.anything(), "s-compact", false)
   })
@@ -1312,7 +1338,7 @@ describe("experimental.chat.system.transform", () => {
     await hooks["experimental.chat.system.transform"]({}, output)
 
     expect(output.system).toEqual(["memory system prompt"])
-    expect(discoverTools).toHaveBeenCalled()
+    expect(buildMemorySystemPrompt).toHaveBeenCalledWith(expect.anything(), [], true)
   })
 
   it("skips when systemPrompt disabled", async () => {
@@ -1325,7 +1351,7 @@ describe("experimental.chat.system.transform", () => {
     expect(buildMemorySystemPrompt).not.toHaveBeenCalled()
   })
 
-  it("caches tool discovery results across calls", async () => {
+  it("reuses plugin tool registry across calls", async () => {
     const { hooks } = await initPlugin({ systemPrompt: { enabled: true } })
 
     const output1 = { system: [] as string[] }
@@ -1333,7 +1359,7 @@ describe("experimental.chat.system.transform", () => {
     await hooks["experimental.chat.system.transform"]({}, output1)
     await hooks["experimental.chat.system.transform"]({}, output2)
 
-    expect(discoverTools).toHaveBeenCalledTimes(1)
+    expect(buildToolRegistry).toHaveBeenCalledTimes(1)
   })
 
   it("passes connectionOk=true when connection is healthy", async () => {
@@ -1374,7 +1400,7 @@ describe("tool.definition", () => {
 
     await hooks["tool.definition"]({ toolID: "memory-mcp-1file_store_memory" }, output)
 
-    expect(output.description).toContain("Prefix content with")
+    expect(output.description).toContain("prefix content with")
     expect(output.description).toContain("DECISION:")
   })
 
@@ -1411,7 +1437,7 @@ describe("tool.definition", () => {
 
     await hooks["tool.definition"]({ toolID: "Memory-MCP-1file_STORE_MEMORY" }, output)
 
-    expect(output.description).toContain("Prefix content with")
+    expect(output.description).toContain("prefix content with")
   })
 
   it("matches tools containing 'memory' in toolID", async () => {
@@ -1420,7 +1446,7 @@ describe("tool.definition", () => {
 
     await hooks["tool.definition"]({ toolID: "some_other_memory_store_memory" }, output)
 
-    expect(output.description).toContain("Prefix content with")
+    expect(output.description).toContain("prefix content with")
   })
 })
 

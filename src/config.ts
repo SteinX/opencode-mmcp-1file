@@ -16,7 +16,13 @@ export interface PluginConfig {
     enabled: boolean
     maxMemories: number
     maxProjectMemories: number
+    maxInjectedMemories?: number
     injectOn: "first" | "always"
+    shortQueryMinLength?: number
+    minScore?: number
+    projectKnowledgeInjectOn?: "first" | "always" | "compaction" | "never"
+    codeIntelInjectOn?: "first" | "always" | "compaction" | "never"
+    projectKnowledgeValidOnly?: boolean
     /** Tiered injection: prioritize important categories over recency. Set to null/undefined to disable (flat list fallback). */
     projectKnowledgeTiers?: TierConfig[] | null
   }
@@ -81,7 +87,13 @@ const DEFAULT_CONFIG: PluginConfig = {
     enabled: true,
     maxMemories: 5,
     maxProjectMemories: 30,
+    maxInjectedMemories: 6,
     injectOn: "first",
+    shortQueryMinLength: 3,
+    minScore: 0.35,
+    projectKnowledgeInjectOn: "first",
+    codeIntelInjectOn: "first",
+    projectKnowledgeValidOnly: false,
     projectKnowledgeTiers: [
       { categories: ["USER"], limit: 5 },
       { categories: ["DECISION", "PATTERN"], limit: 5 },

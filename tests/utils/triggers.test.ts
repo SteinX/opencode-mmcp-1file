@@ -52,7 +52,7 @@ describe("checkTriggers", () => {
       const result = checkTriggers(sessionID, "", "Please implement user authentication")
       expect(result.triggered).toBe(true)
       expect(result.type).toBe("new_task")
-      expect(result.message).toContain("recall()")
+      expect(result.message).toContain("memory_query")
     })
 
     it("triggers on 'create' keyword in user text", () => {

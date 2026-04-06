@@ -13,8 +13,8 @@ import type { MemoryEntry } from "../../src/utils/format.js"
 import type { PluginConfig } from "../../src/config.js"
 
 vi.mock("../../src/services/mcp-client.js", () => ({
-  recall: vi.fn().mockResolvedValue([]),
-  listMemories: vi.fn().mockResolvedValue([]),
+  recallMemories: vi.fn().mockResolvedValue({ status: "empty", source: "recall", memories: [] }),
+  listProjectMemories: vi.fn().mockResolvedValue({ status: "empty", source: "list", memories: [] }),
   callMemoryTool: vi.fn().mockResolvedValue("{}"),
 }))
 
@@ -22,7 +22,7 @@ vi.mock("../../src/utils/logger.js", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }))
 
-const { recall, listMemories, callMemoryTool } = await import("../../src/services/mcp-client.js")
+const { recallMemories, listProjectMemories, callMemoryTool } = await import("../../src/services/mcp-client.js")
 
 const DEFAULT_TIERS: TierConfig[] = [
   { categories: ["USER"], limit: 5 },
@@ -30,9 +30,22 @@ const DEFAULT_TIERS: TierConfig[] = [
   { categories: ["CONTEXT"], limit: 5 },
 ]
 
-function makeConfig(overrides?: Partial<Pick<PluginConfig, "chatMessage">>): PluginConfig {
+function makeConfig(overrides?: { chatMessage?: Partial<PluginConfig["chatMessage"]> }): PluginConfig {
   return {
-    chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 30, injectOn: "first", projectKnowledgeTiers: DEFAULT_TIERS, ...overrides?.chatMessage },
+    chatMessage: {
+      enabled: true,
+      maxMemories: 5,
+      maxProjectMemories: 30,
+      maxInjectedMemories: 6,
+      injectOn: "first",
+      shortQueryMinLength: 3,
+      minScore: 0.35,
+      projectKnowledgeInjectOn: "first",
+      codeIntelInjectOn: "first",
+      projectKnowledgeValidOnly: false,
+      projectKnowledgeTiers: DEFAULT_TIERS,
+      ...overrides?.chatMessage,
+    },
     autoCapture: { enabled: true, debounceMs: 10000, language: "en" },
     compaction: { enabled: true, memoryLimit: 10 },
     keywordDetection: { enabled: true, extraPatterns: [] },
@@ -48,17 +61,17 @@ function makeConfig(overrides?: Partial<Pick<PluginConfig, "chatMessage">>): Plu
 
 describe("shouldInjectMemories", () => {
   it("returns false when chatMessage is disabled", () => {
-    const config = makeConfig({ chatMessage: { enabled: false, maxMemories: 5, maxProjectMemories: 30, injectOn: "first" } })
+    const config = makeConfig({ chatMessage: { enabled: false } })
     expect(shouldInjectMemories(config, "s1", false)).toBe(false)
   })
 
   it("returns true after compaction regardless of injectOn mode", () => {
-    const config = makeConfig({ chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 30, injectOn: "first" } })
+    const config = makeConfig({ chatMessage: { injectOn: "first" } })
     expect(shouldInjectMemories(config, "s-compact", true)).toBe(true)
   })
 
   it("returns true on 'always' mode", () => {
-    const config = makeConfig({ chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 30, injectOn: "always" } })
+    const config = makeConfig({ chatMessage: { injectOn: "always" } })
     expect(shouldInjectMemories(config, "s-always", false)).toBe(true)
   })
 
@@ -91,25 +104,29 @@ describe("fetchAndFormatMemories", () => {
     vi.clearAllMocks()
   })
 
-  it("returns null for short messages (< 10 chars)", async () => {
+  it("returns null for short messages under configured threshold", async () => {
     const config = makeConfig()
     const result = await fetchAndFormatMemories(config, "hi")
     expect(result).toBeNull()
-    expect(recall).not.toHaveBeenCalled()
+    expect(recallMemories).not.toHaveBeenCalled()
   })
 
   it("returns null when recall returns no memories", async () => {
     const config = makeConfig()
-    vi.mocked(recall).mockResolvedValue([])
+    vi.mocked(recallMemories).mockResolvedValue({ status: "empty", source: "recall", memories: [] })
     const result = await fetchAndFormatMemories(config, "how do I configure the database?")
     expect(result).toBeNull()
   })
 
   it("returns formatted memory string when memories exist", async () => {
     const config = makeConfig()
-    vi.mocked(recall).mockResolvedValue([
-      { id: "1", content: "Use PostgreSQL for production", score: 0.9, memory_type: "semantic" },
-    ])
+    vi.mocked(recallMemories).mockResolvedValue({
+      status: "ok",
+      source: "recall",
+      memories: [
+        { id: "1", content: "Use PostgreSQL for production", score: 0.9, memory_type: "semantic" },
+      ],
+    })
     const result = await fetchAndFormatMemories(config, "what database should I use?")
     expect(result).toContain("[MEMORY]")
     expect(result).toContain("Use PostgreSQL for production")
@@ -117,10 +134,24 @@ describe("fetchAndFormatMemories", () => {
   })
 
   it("passes maxMemories from config to recall", async () => {
-    const config = makeConfig({ chatMessage: { enabled: true, maxMemories: 3, maxProjectMemories: 30, injectOn: "first" } })
-    vi.mocked(recall).mockResolvedValue([])
+    const config = makeConfig({ chatMessage: { maxMemories: 3 } })
+    vi.mocked(recallMemories).mockResolvedValue({ status: "empty", source: "recall", memories: [] })
     await fetchAndFormatMemories(config, "some question about the project")
-    expect(recall).toHaveBeenCalledWith(config, "some question about the project", 3)
+    expect(recallMemories).toHaveBeenCalledWith(config, "some question about the project", 3)
+  })
+
+  it("filters out low-score memories before formatting", async () => {
+    const config = makeConfig({ chatMessage: { minScore: 0.7 } })
+    vi.mocked(recallMemories).mockResolvedValue({
+      status: "ok",
+      source: "recall",
+      memories: [
+        { id: "1", content: "Weak memory", score: 0.4 },
+      ],
+    })
+
+    const result = await fetchAndFormatMemories(config, "database")
+    expect(result).toBeNull()
   })
 })
 
@@ -204,20 +235,24 @@ describe("fetchProjectKnowledge", () => {
 
   it("returns null when listMemories returns empty", async () => {
     const config = makeConfig()
-    vi.mocked(listMemories).mockResolvedValue([])
+    vi.mocked(listProjectMemories).mockResolvedValue({ status: "empty", source: "list", memories: [] })
     const result = await fetchProjectKnowledge(config)
     expect(result).toBeNull()
   })
 
   it("returns tiered project knowledge when tiers are configured", async () => {
     const config = makeConfig()
-    vi.mocked(listMemories).mockResolvedValue([
-      { id: "1", content: "USER: Keep deployment notes visible", memory_type: "semantic" },
-      { id: "2", content: "DECISION: Use PostgreSQL", memory_type: "semantic" },
-      { id: "3", content: "CONTEXT: ESM modules with .js extensions", memory_type: "semantic" },
-    ])
+    vi.mocked(listProjectMemories).mockResolvedValue({
+      status: "ok",
+      source: "list",
+      memories: [
+        { id: "1", content: "USER: Keep deployment notes visible", memory_type: "semantic" },
+        { id: "2", content: "DECISION: Use PostgreSQL", memory_type: "semantic" },
+        { id: "3", content: "CONTEXT: ESM modules with .js extensions", memory_type: "semantic" },
+      ],
+    })
     const result = await fetchProjectKnowledge(config)
-    expect(result).toContain("[MEMORY] Project Knowledge (tiered, always-on context):")
+    expect(result).toContain("[MEMORY] Project Knowledge (tiered session guidance):")
     expect(result).toContain("### USER")
     expect(result).toContain("USER: Keep deployment notes visible")
     expect(result).toContain("### DECISION / PATTERN")
@@ -227,36 +262,47 @@ describe("fetchProjectKnowledge", () => {
   })
 
   it("falls back to flat format when tiers are null", async () => {
-    const config = makeConfig({ chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 30, injectOn: "first", projectKnowledgeTiers: null } })
-    vi.mocked(listMemories).mockResolvedValue([
-      { id: "1", content: "Some knowledge", memory_type: "semantic" },
-    ])
+    const config = makeConfig({ chatMessage: { projectKnowledgeTiers: null } })
+    vi.mocked(listProjectMemories).mockResolvedValue({
+      status: "ok",
+      source: "list",
+      memories: [{ id: "1", content: "Some knowledge", memory_type: "semantic" }],
+    })
     const result = await fetchProjectKnowledge(config)
-    expect(result).toContain("[MEMORY] Project Knowledge (always-on context):")
+    expect(result).toContain("[MEMORY] Project Knowledge (session guidance):")
     expect(result).toContain("Some knowledge")
     expect(result).not.toContain("###")
   })
 
   it("does not include confidence scores in project knowledge", async () => {
     const config = makeConfig()
-    vi.mocked(listMemories).mockResolvedValue([
-      { id: "1", content: "DECISION: Some knowledge", score: 0.95, memory_type: "semantic" },
-    ])
+    vi.mocked(listProjectMemories).mockResolvedValue({
+      status: "ok",
+      source: "list",
+      memories: [{ id: "1", content: "DECISION: Some knowledge", score: 0.95, memory_type: "semantic" }],
+    })
     const result = await fetchProjectKnowledge(config)
     expect(result).not.toContain("[95%]")
     expect(result).toContain("DECISION: Some knowledge")
   })
 
   it("passes maxProjectMemories from config to listMemories", async () => {
-    const config = makeConfig({ chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 7, injectOn: "first" } })
-    vi.mocked(listMemories).mockResolvedValue([])
+    const config = makeConfig({ chatMessage: { maxProjectMemories: 7 } })
+    vi.mocked(listProjectMemories).mockResolvedValue({ status: "empty", source: "list", memories: [] })
     await fetchProjectKnowledge(config)
-    expect(listMemories).toHaveBeenCalledWith(config, 7)
+    expect(listProjectMemories).toHaveBeenCalledWith(config, 7, false)
   })
 
-  it("returns null and does not throw when listMemories fails", async () => {
+  it("uses valid-only project knowledge when configured", async () => {
+    const config = makeConfig({ chatMessage: { projectKnowledgeValidOnly: true } })
+    vi.mocked(listProjectMemories).mockResolvedValue({ status: "empty", source: "valid", memories: [] })
+    await fetchProjectKnowledge(config)
+    expect(listProjectMemories).toHaveBeenCalledWith(config, 30, true)
+  })
+
+  it("returns null when project knowledge retrieval fails", async () => {
     const config = makeConfig()
-    vi.mocked(listMemories).mockRejectedValue(new Error("connection refused"))
+    vi.mocked(listProjectMemories).mockResolvedValue({ status: "failed", source: "list", memories: [], reason: "connection refused" })
     const result = await fetchProjectKnowledge(config)
     expect(result).toBeNull()
   })
@@ -298,8 +344,8 @@ describe("fetchCodeIntelContext", () => {
     expect(result).toContain("my-project")
     expect(result).toContain("120 symbols")
     expect(result).toContain("500 chunks")
-    expect(result).toContain("recall_code")
-    expect(result).toContain("symbol_graph")
+    expect(result).toContain("code_search")
+    expect(result).toContain("project_status")
   })
 
   it("filters out non-completed projects", async () => {

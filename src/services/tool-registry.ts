@@ -51,7 +51,7 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
       args: {
         query: tool.schema.string(),
         limit: tool.schema.number().optional(),
-        mode: tool.schema.enum(["auto", "semantic", "keyword", "recent"]).optional(),
+        mode: tool.schema.enum(["auto", "semantic", "keyword", "recent", "valid"]).optional(),
       },
       execute: async (args) => {
         const mode = args.mode || "auto"
@@ -70,9 +70,7 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
           return proxy("search_memory", { query: args.query, mode: "vector", limit })
         }
 
-        // Auto mode: check for validity queries, otherwise use recall (hybrid search)
-        const lowerQuery = args.query.toLowerCase()
-        if (lowerQuery.includes("valid") || lowerQuery.includes("not invalidated")) {
+        if (mode === "valid") {
           return proxy("get_valid", { limit })
         }
 

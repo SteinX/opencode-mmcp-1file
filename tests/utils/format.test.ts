@@ -217,7 +217,7 @@ describe("formatTieredProjectKnowledge", () => {
       [2, []],
     ])
     const result = formatTieredProjectKnowledge(allocated, tiers)
-    expect(result).toContain("[MEMORY] Project Knowledge (tiered, always-on context):")
+    expect(result).toContain("[MEMORY] Project Knowledge (tiered session guidance):")
   })
 
   it("formats multiple memories within a tier", () => {

@@ -10,10 +10,14 @@ import {
   fetchAndFormatMemories,
   fetchCodeIntelContext,
   fetchProjectKnowledge,
+  shouldInjectQueryRecall,
+  shouldInjectProjectKnowledge,
+  shouldInjectCodeIntel,
+  type InjectionSource,
 } from "./services/context-inject.js"
 import { performAutoCapture } from "./services/auto-capture.js"
 import { buildCompactionRecoveryContext } from "./services/compaction.js"
-import { getMemoryClient, storeMemory, disconnectMemoryClient, discoverTools, tryReconnect } from "./services/mcp-client.js"
+import { getMemoryClient, storeMemory, disconnectMemoryClient, tryReconnect } from "./services/mcp-client.js"
 import { isConnectionFailed, startRetryLoop, stopRetryLoop } from "./services/connection-state.js"
 import { summarizeExchange } from "./services/llm-client.js"
 import { callSessionLLM } from "./services/session-llm.js"
@@ -97,6 +101,9 @@ const plugin: Plugin = async (input) => {
 
   installCommand()
 
+  const toolRegistry = buildToolRegistry(config, input.directory)
+  const availablePluginTools = Object.keys(toolRegistry)
+
   const cleanup = async () => {
     resetCodeIndexSyncState()
     stopRetryLoop()
@@ -108,13 +115,6 @@ const plugin: Plugin = async (input) => {
   const idleTimers = new Map<string, ReturnType<typeof setTimeout>>()
   const capturedSessions = new Set<string>()
   const compactedSessions = new Set<string>()
-
-  let cachedTools: string[] | null = null
-  const getAvailableTools = async (): Promise<string[]> => {
-    if (cachedTools) return cachedTools
-    cachedTools = await discoverTools(config)
-    return cachedTools
-  }
 
   return {
     "chat.message": async (hookInput, output) => {
@@ -129,7 +129,17 @@ const plugin: Plugin = async (input) => {
       const userText = extractUserText(output)
 
       if (config.keywordDetection.enabled && userText) {
-        const extraPatterns = config.keywordDetection.extraPatterns.map((p) => new RegExp(p, "i"))
+        const extraPatterns = config.keywordDetection.extraPatterns.flatMap((pattern) => {
+          try {
+            return [new RegExp(pattern, "i")]
+          } catch (err) {
+            logger.warn("Ignoring invalid keywordDetection.extraPatterns entry", {
+              pattern,
+              error: String(err),
+            })
+            return []
+          }
+        })
         const matched = detectMemoryKeyword(userText, extraPatterns)
         if (matched) {
           output.parts.push({
@@ -144,8 +154,8 @@ const plugin: Plugin = async (input) => {
       }
 
       if (userText) {
-        const assistantText = extractAssistantText(output)
-        const trigger = checkTriggers(hookInput.sessionID, assistantText || "", userText)
+        const messageText = extractMessageText(output) || ""
+        const trigger = checkTriggers(hookInput.sessionID, messageText, userText)
         if (trigger.triggered) {
           output.parts.push({
             id: `prt-smart-nudge-${Date.now()}`,
@@ -164,13 +174,24 @@ const plugin: Plugin = async (input) => {
 
       if (!userText) return
 
-      const formatted = await fetchAndFormatMemories(config, userText)
-      const [projectKnowledge, codeIntelContext] = await Promise.all([
-        fetchProjectKnowledge(config),
-        fetchCodeIntelContext(config),
+      const formattedPromise = shouldInjectQueryRecall(config, hookInput.sessionID, isAfterCompaction)
+        ? fetchAndFormatMemories(config, userText)
+        : Promise.resolve(null)
+      const projectKnowledgePromise = shouldInjectProjectKnowledge(config, hookInput.sessionID, isAfterCompaction)
+        ? fetchProjectKnowledge(config)
+        : Promise.resolve(null)
+      const codeIntelPromise = shouldInjectCodeIntel(config, hookInput.sessionID, isAfterCompaction)
+        ? fetchCodeIntelContext(config)
+        : Promise.resolve(null)
+
+      const [formatted, projectKnowledge, codeIntelContext] = await Promise.all([
+        formattedPromise,
+        projectKnowledgePromise,
+        codeIntelPromise,
       ])
 
       let injected = false
+      const injectedSources: InjectionSource[] = []
 
       if (formatted) {
         const syntheticPart = {
@@ -184,6 +205,7 @@ const plugin: Plugin = async (input) => {
 
         output.parts.unshift(syntheticPart as any)
         injected = true
+        injectedSources.push("query_recall")
       }
 
       if (projectKnowledge) {
@@ -196,6 +218,7 @@ const plugin: Plugin = async (input) => {
           synthetic: true,
         } as any)
         injected = true
+        injectedSources.push("project_knowledge")
       }
 
       if (codeIntelContext) {
@@ -208,11 +231,12 @@ const plugin: Plugin = async (input) => {
           synthetic: true,
         } as any)
         injected = true
+        injectedSources.push("code_intel")
       }
 
       if (!injected) return
 
-      markSessionInjected(hookInput.sessionID)
+      markSessionInjected(hookInput.sessionID, injectedSources)
     },
 
     event: async (eventInput) => {
@@ -295,8 +319,7 @@ const plugin: Plugin = async (input) => {
 
     "experimental.chat.system.transform": async (_hookInput, output) => {
       if (!config.systemPrompt.enabled) return
-      const tools = await getAvailableTools()
-      const promptText = buildMemorySystemPrompt(config, tools, !isConnectionFailed())
+      const promptText = buildMemorySystemPrompt(config, availablePluginTools, !isConnectionFailed())
       output.system.push(promptText)
     },
 
@@ -307,22 +330,22 @@ const plugin: Plugin = async (input) => {
 
       const TOOL_HINTS: Record<string, string> = {
         store_memory:
-          "\n\nPrefix content with: DECISION:, TASK:, PATTERN:, BUGFIX:, CONTEXT:, RESEARCH:, or USER: for categorization.",
+          "\n\nPrefer the unified `memory_save` tool. If you call this raw MCP tool directly, prefix content with DECISION:, TASK:, PATTERN:, BUGFIX:, CONTEXT:, RESEARCH:, or USER: for categorization.",
         recall:
-          "\n\nBest for general context retrieval. Uses hybrid search (semantic + keyword + knowledge graph).",
+          "\n\nPrefer the unified `memory_query` tool for general context retrieval. This raw MCP tool performs hybrid search (semantic + keyword + knowledge graph).",
         invalidate:
-          "\n\nUse when stored information becomes outdated. Provide replacement_id to link to the updated entry.",
+          "\n\nPrefer the unified `memory_manage` tool when information becomes outdated. Provide replacement_id to link to the updated entry.",
         // Code Intelligence hints
         index_project:
-          "\n\nUse for initial indexing, manual recovery, or when code intelligence appears stale. The plugin may refresh indexes in the background after workspace changes, so prefer checking project_info(action: 'list') before re-indexing manually.",
+          "\n\nPrefer `project_status(action: \"index\")` from the unified tool registry. This raw MCP tool is mainly for initial indexing, manual recovery, or stale-index repair.",
         recall_code:
-          "\n\nUse for intent-based semantic code search (e.g. 'how is authentication handled?'). Prefer over grep when searching by concept rather than literal text. Requires the project to be indexed.",
+          "\n\nPrefer `code_search(search_type: \"intent\")` for intent-based semantic code search. Requires the project to be indexed.",
         search_symbols:
-          "\n\nFind symbols by name. Results include symbol_id which can be passed to symbol_graph to trace callers/callees. Requires the project to be indexed.",
+          "\n\nPrefer `code_search(search_type: \"symbol\")`. Results include symbol_id values that can be passed to `code_search` caller/callee modes. Requires the project to be indexed.",
         symbol_graph:
-          "\n\nTraces call relationships between symbols — callers, callees, or related symbols. The symbol_id parameter comes from search_symbols results. Unique capability not available via grep or LSP.",
+          "\n\nPrefer `code_search(search_type: \"callers\" | \"callees\" | \"related\")`. The symbol_id parameter comes from symbol lookup results.",
         project_info:
-          "\n\nUse action: 'list' to check which projects are indexed before calling recall_code or search_symbols. Use action: 'stats' for code statistics.",
+          "\n\nPrefer `project_status(action: \"list\" | \"stats\")` to inspect indexing state and project statistics.",
       }
 
       const sortedHints = Object.entries(TOOL_HINTS).sort(
@@ -359,24 +382,21 @@ const plugin: Plugin = async (input) => {
       output.args.content = stripPrivateContent(content)
     },
 
-    tool: buildToolRegistry(config, input.directory),
+    tool: toolRegistry,
   }
 }
 
 function extractUserText(output: { parts: Array<{ type: string; text?: string }> }): string | null {
+  const text = extractMessageText(output)
+  return text && text.trim().length > 0 ? text : null
+}
+
+function extractMessageText(output: { parts: Array<{ type: string; text?: string }> }): string | null {
   const textParts = output.parts.filter(
     (p) => p.type === "text" && p.text && !(p as any).synthetic,
   )
   const text = textParts.map((p) => p.text!).join("\n")
-  return text.length >= 10 ? text : null
-}
-
-function extractAssistantText(output: { parts: Array<{ type: string; text?: string }> }): string | null {
-  const textParts = output.parts.filter(
-    (p) => p.type === "text" && p.text && (p as any).synthetic,
-  )
-  const text = textParts.map((p) => p.text!).join("\n")
-  return text.length >= 10 ? text : null
+  return text.trim().length > 0 ? text : null
 }
 
 function extractEventMessageText(event: any): string | null {
