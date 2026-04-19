@@ -24,6 +24,7 @@ function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
     compactionSummaryCapture: { enabled: true },
     codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
     captureModel: { provider: "", model: "", apiUrl: "", apiKey: "" },
+    memoryScope: { namespace: "", shareAcrossAgents: true, includeAgentMetadata: true, includeRunMetadata: false, userId: "", defaultMetadata: {} },
     mcpServer: { command: ["npm", "exec", "-y", "memory-mcp-1file", "--"], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1" },
     systemPrompt: { enabled: true },
     ...overrides,
@@ -72,6 +73,8 @@ describe("loadConfig", () => {
     expect(config.mcpServer.tag).toBe("")
     expect(config.privacy.enabled).toBe(true)
     expect(config.codeIndexSync.enabled).toBe(true)
+    expect(config.memoryScope.shareAcrossAgents).toBe(true)
+    expect(config.memoryScope.includeAgentMetadata).toBe(true)
   })
 
   it("loads and merges JSONC config file", () => {
@@ -220,6 +223,7 @@ describe("loadConfig", () => {
     expect(config.preemptiveCompaction.modelContextLimit).toBe(200000)
     expect(config.chatMessage.maxMemories).toBe(5)
     expect(config.captureModel.model).toBe("")
+    expect(config.memoryScope.namespace).toBe("")
   })
 })
 
@@ -247,6 +251,14 @@ describe("applyConfig", () => {
           { categories: ["DECISION", "PATTERN"], limit: 5 },
           { categories: ["CONTEXT"], limit: 5 },
         ],
+      },
+      memoryScope: {
+        namespace: "",
+        shareAcrossAgents: true,
+        includeAgentMetadata: true,
+        includeRunMetadata: false,
+        userId: "",
+        defaultMetadata: {},
       },
       mcpServer: { command: ["npm", "exec", "-y", "memory-mcp-1file", "--"], tag: "", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1" },
     })
@@ -312,5 +324,20 @@ describe("applyConfig", () => {
     const changed = applyConfig(target, "/dir")
     expect(changed).toContain("mcpServer")
     expect(target.mcpServer.tag).toBe("new-project")
+  })
+
+  it("detects memoryScope changes", () => {
+    vi.mocked(existsSync).mockImplementation((p) =>
+      String(p).endsWith("opencode-mmcp-1file.jsonc"),
+    )
+    vi.mocked(readFileSync).mockReturnValue(
+      `{ "memoryScope": { "namespace": "workspace-a", "shareAcrossAgents": false } }`,
+    )
+
+    const target = makeConfig()
+    const changed = applyConfig(target, "/dir")
+    expect(changed).toContain("memoryScope")
+    expect(target.memoryScope.namespace).toBe("workspace-a")
+    expect(target.memoryScope.shareAcrossAgents).toBe(false)
   })
 })

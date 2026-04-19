@@ -62,6 +62,20 @@ export interface PluginConfig {
     apiUrl: string
     apiKey: string
   }
+  memoryScope: {
+    /** Optional logical namespace inside the current dataDir/tag shard. */
+    namespace?: string
+    /** Keep memories shared across collaborating agents by default. */
+    shareAcrossAgents: boolean
+    /** Record agent identity on writes for observability, without filtering reads by default. */
+    includeAgentMetadata: boolean
+    /** Record run/session identity on writes when available. */
+    includeRunMetadata: boolean
+    /** Optional default user scope for all memory operations. */
+    userId?: string
+    /** Optional metadata merged into every write and used as default read filter only when explicitly configured by callers. */
+    defaultMetadata?: Record<string, unknown>
+  }
   mcpServer: {
     command: string[]
     tag: string
@@ -136,6 +150,14 @@ const DEFAULT_CONFIG: PluginConfig = {
     apiUrl: "",
     apiKey: "",
   },
+  memoryScope: {
+    namespace: "",
+    shareAcrossAgents: true,
+    includeAgentMetadata: true,
+    includeRunMetadata: false,
+    userId: "",
+    defaultMetadata: {},
+  },
   mcpServer: {
     command: ["npm", "exec", "-y", "memory-mcp-1file", "--"],
     tag: "",
@@ -194,6 +216,7 @@ function mergeConfig(defaults: PluginConfig, overrides: Partial<any>): PluginCon
     compactionSummaryCapture: { ...defaults.compactionSummaryCapture, ...overrides.compactionSummaryCapture },
     codeIndexSync: { ...defaults.codeIndexSync, ...overrides.codeIndexSync },
     captureModel: { ...defaults.captureModel, ...overrides.captureModel },
+    memoryScope: { ...defaults.memoryScope, ...overrides.memoryScope },
     mcpServer: { ...defaults.mcpServer, ...overrides.mcpServer },
     systemPrompt: { ...defaults.systemPrompt, ...overrides.systemPrompt },
   }

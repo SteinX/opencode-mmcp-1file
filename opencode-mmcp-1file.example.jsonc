@@ -76,10 +76,20 @@
     "apiKey": ""                     // Optional; leave empty to use OpenCode session API
   },
 
+  // Logical memory scope inside the current tag/dataDir shard
+  "memoryScope": {
+    "namespace": "",                 // Optional logical scope for one project/workstream inside the current shard
+    "shareAcrossAgents": true,        // Default for agentic coding: collaborating agents read/write shared memory
+    "includeAgentMetadata": true,     // Record source_agent_id in metadata for observability
+    "includeRunMetadata": false,      // Record source_run_id in metadata when run/session provenance matters
+    "userId": "",                    // Optional default user scope applied to reads/writes
+    "defaultMetadata": {}             // Optional metadata merged into every write
+  },
+
   // MCP server configuration (memory-mcp-1file)
   "mcpServer": {
     "command": ["npm", "exec", "-y", "memory-mcp-1file", "--"],
-    "tag": "default",                // Memory namespace; derives dataDir as ~/.local/share/opencode-mmcp-1file/{tag}
+    "tag": "default",                // Physical storage shard; derives dataDir as ~/.local/share/opencode-mmcp-1file/{tag}
     // "dataDir": "",               // Override: explicit data directory (takes precedence over tag)
     "model": "qwen3",
     "mcpServerName": "memory-mcp-1file",  // Cosmetic name for logging
