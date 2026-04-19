@@ -16,6 +16,7 @@ function makeConfig(overrides: Partial<PluginConfig["mcpServer"]> = {}): PluginC
     compactionSummaryCapture: { enabled: true },
     codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
     captureModel: { provider: "", model: "", apiUrl: "", apiKey: "" },
+    memoryScope: { namespace: "", shareAcrossAgents: true, includeAgentMetadata: true, includeRunMetadata: false, userId: "", defaultMetadata: {} },
     mcpServer: {
       command: ["node", "fake-server.js"],
       tag: "test",

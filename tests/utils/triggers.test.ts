@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest"
-import { checkTriggers, clearNudgeHistory, type TriggerResult } from "../../src/utils/triggers.js"
+import { checkTriggers, clearNudgeHistory } from "../../src/utils/triggers.js"
 
 describe("checkTriggers", () => {
   const sessionID = "test-session-123"
