@@ -39,14 +39,17 @@ import type { PluginConfig } from "./config.js"
 
 const plugin: Plugin = async (input) => {
   const config = loadConfig(input.directory)
-  initLogger(input.client)
 
   // Check if plugin is enabled (requires tag or dataDir)
   const dataDir = resolveDataDir(config)
   if (!dataDir) {
+    initLogger(input.client)
     logger.warn("Plugin disabled: no tag or dataDir configured")
     return {}
   }
+
+  const logDir = join(dataDir, "log")
+  initLogger(input.client, logDir)
 
   void (async () => {
     try {

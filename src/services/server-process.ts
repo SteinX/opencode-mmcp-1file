@@ -145,6 +145,9 @@ function buildHttpCommand(config: PluginConfig): { command: string; args: string
   if (!args.some((a) => a === "--data-dir")) {
     args.push("--data-dir", dataDir)
   }
+  if (!args.some((a) => a === "--log-file")) {
+    args.push("--log-file", `${dataDir}/log/mcp-server.log`)
+  }
   if (!args.some((a) => a === "--model") && model) {
     args.push("--model", model)
   }

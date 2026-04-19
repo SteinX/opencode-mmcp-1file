@@ -212,13 +212,13 @@ describe("plugin factory", () => {
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("disabled"))
   })
 
-  it("initializes logger with input.client", async () => {
+  it("initializes logger with input.client and logDir", async () => {
     const input = makePluginInput()
     vi.mocked(loadConfig).mockReturnValue(makeConfig())
     vi.mocked(resolveDataDir).mockReturnValue("/data")
 
     await plugin(input)
-    expect(initLogger).toHaveBeenCalledWith(input.client)
+    expect(initLogger).toHaveBeenCalledWith(input.client, "/data/log")
   })
 
   it("eagerly connects to memory server in background", async () => {
