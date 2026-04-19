@@ -28,13 +28,18 @@ Ask the user these questions (adapt based on their answers — skip what's alrea
 
 ### Essential
 
-1. **Memory namespace**: "What tag/name should I use for this project's memory? (e.g., project name like `my-app`). This keeps memories separate from other projects."
+1. **Physical shard (`tag`)**: "What tag/name should I use for this project's physical memory store? (e.g. `my-app`, `team-memory`, `global`). This controls which on-disk memory shard we use."
    - This maps to `mcpServer.tag`
+   - Explain that `tag` is the coarse physical boundary, not the per-workstream retrieval filter
    - If the user already has a tag configured, confirm it
+
+2. **Logical scope (`namespace`)**: "Do you also want a logical scope inside that shard, via `memoryScope.namespace`? This is useful when one shard contains multiple workstreams, apps, tenants, or environments. Leave empty if one project = one scope."
+   - This maps to `memoryScope.namespace`
+   - Explain the recommended default: keep collaborating agents shared, use `namespace` for scope isolation before reaching for per-agent isolation
 
 ### Important
 
-2. **Auto-capture**: "Do you want the plugin to automatically capture important context from your conversations? (Works out of the box — no API key needed)"
+3. **Auto-capture**: "Do you want the plugin to automatically capture important context from your conversations? (Works out of the box — no API key needed)"
    - Auto-capture works by default using OpenCode's session API with your already-configured providers
    - Optionally ask if they want to set a dedicated API key for faster direct HTTP mode:
      - API provider: OpenAI, Anthropic, or custom OpenAI-compatible endpoint
@@ -42,19 +47,24 @@ Ask the user these questions (adapt based on their answers — skip what's alrea
      - Model preference (default: `gpt-4o-mini` — cheap and fast)
    - This maps to `captureModel` and `autoCapture`
 
-3. **Embedding model**: "The MCP server uses a local embedding model for code search. Default is `qwen3`. Want to keep the default or use a different model?"
+4. **Embedding model**: "The MCP server uses a local embedding model for code search. Default is `qwen3`. Want to keep the default or use a different model?"
    - This maps to `mcpServer.model`
 
 ### Optional (ask only if the user seems interested in tuning)
 
-4. **Memory injection**: "When should I inject relevant memories into conversations?"
+5. **Memory injection**: "When should I inject relevant memories into conversations?"
    - `"first"` = only on the first message (default, less noise)
    - `"always"` = every message (more context, more tokens)
    - How many memories max? (default: 5)
 
-5. **Preemptive compaction**: "What's the context limit of the model you typically use? (default: 200000 tokens). The plugin triggers early compaction at 80% of this limit."
+6. **Preemptive compaction**: "What's the context limit of the model you typically use? (default: 200000 tokens). The plugin triggers early compaction at 80% of this limit."
 
-6. **Privacy**: "Keep privacy filtering enabled? (strips `<private>...</private>` tagged content before storing)" — default: yes
+7. **Privacy**: "Keep privacy filtering enabled? (strips `<private>...</private>` tagged content before storing)" — default: yes
+
+8. **Advanced scope behavior** (ask only if the user explicitly wants tighter control):
+   - "Should collaborating agents share memory by default?" → `memoryScope.shareAcrossAgents` (recommended: `true`)
+   - "Do you want agent/run provenance recorded in metadata?" → `includeAgentMetadata` / `includeRunMetadata`
+   - Explain that for agentic coding the recommended default is shared agent memory, with agent/run captured as provenance instead of retrieval isolation
 
 ## Step 3: Generate Config
 
@@ -124,10 +134,20 @@ Based on the user's answers, generate a `opencode-mmcp-1file.jsonc` file. Use th
     "apiKey": ""
   },
 
+  // Logical scope inside the current physical shard
+  "memoryScope": {
+    "namespace": "",                 // Optional logical scope for one app/workstream inside the shard
+    "shareAcrossAgents": true,        // Recommended for agentic coding: collaborating agents share memory
+    "includeAgentMetadata": true,     // Record source_agent_id as provenance
+    "includeRunMetadata": false,      // Record source_run_id only when session provenance matters
+    "userId": "",                    // Optional default user scope
+    "defaultMetadata": {}
+  },
+
   // MCP server configuration
   "mcpServer": {
     "command": ["npm", "exec", "-y", "memory-mcp-1file", "--"],
-    "tag": "",
+    "tag": "",                       // Physical storage shard / dataDir selector
     "model": "qwen3",
     "mcpServerName": "memory-mcp-1file"
   },
@@ -141,6 +161,9 @@ Based on the user's answers, generate a `opencode-mmcp-1file.jsonc` file. Use th
 
 **Rules for generating the config:**
 - Always include `mcpServer.tag` — the plugin is disabled without it
+- Include `memoryScope` only when the user wants a non-default logical scope or provenance behavior
+- Prefer `memoryScope.namespace` over per-agent isolation when the user wants narrower retrieval inside one shared shard
+- Default recommendation for agentic coding: `shareAcrossAgents: true`, `includeAgentMetadata: true`, `includeRunMetadata: false`
 - Include comments explaining non-obvious settings
 - Only include sections that differ from defaults
 - Exception: always include `mcpServer` section (it's the core config)

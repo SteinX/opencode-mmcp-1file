@@ -11,6 +11,11 @@ Persistent memory for OpenCode agents via [memory-mcp-1file](https://github.com/
 
 This OpenCode plugin gives agents persistent memory across sessions. It connects to a `memory-mcp-1file` MCP server via stdio and registers **8 unified tools** as plugin tools — consolidating memory search, storage, lifecycle management, code intelligence, and project indexing into an ergonomic interface with automatic routing. The plugin also provides automatic context injection, idle-time capture, background code-index refresh, compaction recovery, smart trigger nudges, agent guidance via system prompt, a `/init-mcp-memory` bootstrap command for deep project onboarding, and a `/setup-mcp-memory` guided configuration wizard.
 
+The plugin now distinguishes between a **physical storage shard** and a **logical retrieval scope**:
+- `mcpServer.tag` / `dataDir` decide which on-disk memory store you are using.
+- `memoryScope.namespace` narrows reads and writes *within* that shard.
+- For agentic coding, the default is **shared memory across collaborating agents**. Agent/run identifiers are treated as provenance unless you explicitly opt into tighter isolation.
+
 ## Features
 
 ### Agent-facing (via plugin tool registration)
@@ -137,10 +142,20 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
     "apiKey": ""                     // Optional; leave empty to use OpenCode session API
   },
 
+  // Logical memory scope inside the current tag/dataDir shard
+  "memoryScope": {
+    "namespace": "",                 // Optional logical scope for one project/workstream inside the current shard
+    "shareAcrossAgents": true,        // Default for agentic coding: collaborating agents read/write shared memory
+    "includeAgentMetadata": true,     // Record source_agent_id in metadata for observability
+    "includeRunMetadata": false,      // Record source_run_id in metadata when run/session provenance matters
+    "userId": "",                    // Optional default user scope applied to reads/writes
+    "defaultMetadata": {}             // Optional metadata merged into every write
+  },
+
   // MCP server configuration (memory-mcp-1file)
   "mcpServer": {
     "command": ["npm", "exec", "-y", "memory-mcp-1file", "--"],
-    "tag": "default",                // Memory namespace; derives dataDir as ~/.local/share/opencode-mmcp-1file/{tag}
+    "tag": "default",                // Physical storage shard; derives dataDir as ~/.local/share/opencode-mmcp-1file/{tag}
     // "dataDir": "",               // Override: explicit data directory (takes precedence over tag)
     "model": "qwen3",               // Embedding model for vector search
     "mcpServerName": "memory-mcp-1file",  // Cosmetic name for logging
@@ -170,19 +185,39 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
 | **compactionSummaryCapture** | Saves compaction summaries as memories |
 | **codeIndexSync** | Detects stale workspace indexes and refreshes code intelligence in the background |
 | **captureModel** | LLM for auto-capture summarization — uses direct HTTP when apiKey is set, otherwise OpenCode session API |
-| **mcpServer** | [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server command, data directory, embedding model, and transport mode (stdio or HTTP) |
+| **memoryScope** | Logical scope, agent-sharing defaults, and default metadata layered inside the current shard |
+| **mcpServer** | [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server command, physical data shard, embedding model, and transport mode (stdio or HTTP) |
 | **systemPrompt** | Agent guidance via Memory Protocol in system prompt |
 
 By default, `USER:` memories are prioritized ahead of `DECISION:`, `PATTERN:`, and `CONTEXT:` in Project Knowledge. This keeps explicit user-requested memories more visible during session bootstrap and compaction recovery.
 
-### Memory Namespaces via `tag`
+### Physical Shard vs Logical Scope
 
-The `tag` field controls where memories are stored. Different tags create isolated memory namespaces:
+Use the two layers for different jobs:
+
+- **`mcpServer.tag` / `dataDir`** — physical storage shard. Use this to separate unrelated projects, environments, or trust boundaries.
+- **`memoryScope.namespace`** — logical scope within that shard. Use this for sub-workspaces, branches of work, or multi-tenant slices that should still live in the same store.
+
+For agentic coding, the plugin defaults to **shared memory across collaborating agents**:
+
+- `shareAcrossAgents: true` means reads are not filtered by `agent_id` by default.
+- `includeAgentMetadata: true` records provenance as metadata (`source_agent_id`) so you can still inspect or filter later.
+- `includeRunMetadata: false` avoids overfitting durable project memory to one transient session, but you can enable it when run/session provenance matters.
+
+Examples:
 
 ```jsonc
-// Project-specific memories
+// Project-specific physical shard
 { "mcpServer": { "tag": "my-project" } }
 // → stores in ~/.local/share/opencode-mmcp-1file/my-project/
+
+// Shared shard plus logical namespace separation
+{
+  "mcpServer": { "tag": "team-memory" },
+  "memoryScope": { "namespace": "frontend" }
+}
+// → stores in ~/.local/share/opencode-mmcp-1file/team-memory/
+// → reads/writes are filtered to namespace=frontend inside that shard
 
 // Shared across all projects
 { "mcpServer": { "tag": "global" } }
@@ -190,6 +225,12 @@ The `tag` field controls where memories are stored. Different tags create isolat
 ```
 
 Set `dataDir` to override the derived path entirely. If neither `tag` nor `dataDir` is set, the plugin is **disabled**.
+
+Recommended rule of thumb:
+
+- Change **`tag`** when you want a different physical store.
+- Change **`memoryScope.namespace`** when you want a different retrieval boundary inside the same store.
+- Only use **`agent_id`** overrides for explicit per-agent isolation workflows; do not make that your default collaboration model.
 
 ## Architecture
 
@@ -270,9 +311,10 @@ In OpenCode, run:
 The agent will walk you through:
 
 1. **Memory namespace** — choosing a `tag` to isolate this project's memories
-2. **Auto-capture** — configuring the LLM provider and model for automatic memory extraction (API key optional)
-3. **Embedding model** — selecting the local embedding model for code search
-4. **Optional tuning** — memory injection frequency, context limits, privacy settings
+2. **Logical scope** — optionally choosing a `memoryScope.namespace` inside that shard for narrower retrieval
+3. **Auto-capture** — configuring the LLM provider and model for automatic memory extraction (API key optional)
+4. **Embedding model** — selecting the local embedding model for code search
+5. **Optional tuning** — memory injection frequency, context limits, privacy settings
 
 After answering, the agent generates `opencode-mmcp-1file.jsonc` in the project root and calls `reload_config()` to apply changes immediately — no restart needed.
 
@@ -291,7 +333,7 @@ You can also re-run `/setup-mcp-memory` anytime to update your configuration.
 - **In-memory session tracking** — Duplicate-prevention state (`injectedSessions`, `capturedSessions`) is held in memory and resets on process restart. The first message after a restart may re-inject memories that were already injected in the previous session.
 - **Tag-based privacy only** — Content is redacted only when explicitly wrapped in `<private>…</private>` tags. There is no automatic PII or secret detection.
 - **Approximate token counting** — Preemptive compaction estimates token usage via `chars / 4`, not a real tokenizer. Thresholds may not trigger at the exact expected point.
-- **Single namespace per project** — Each configuration binds to one memory namespace (via `tag` or `dataDir`). Cross-namespace queries are not supported.
+- **Single default logical scope per config** — Each configuration has one default shard (`tag`/`dataDir`) and one default logical scope (`memoryScope.namespace`). Unified tools can override scope per call, but automatic plugin-managed retrieval uses the configured default scope.
 
 ## License
 
