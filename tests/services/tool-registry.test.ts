@@ -33,7 +33,7 @@ vi.mock("../../src/services/connection-state.js", () => ({
 }))
 
 const { callMemoryTool } = await import("../../src/services/mcp-client.js")
-const { stripPrivateContent, isFullyPrivate } = await import("../../src/utils/privacy.js")
+const { stripPrivateContent } = await import("../../src/utils/privacy.js")
 const { applyConfig } = await import("../../src/config.js")
 const { isConnectionFailed, getConnectionStatus } = await import("../../src/services/connection-state.js")
 
@@ -46,7 +46,9 @@ function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
     preemptiveCompaction: { enabled: true, thresholdPercent: 80, modelContextLimit: 200000, autoContinue: true },
     privacy: { enabled: true },
     compactionSummaryCapture: { enabled: true },
+    codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
     captureModel: { provider: "openai", model: "gpt-4o-mini", apiUrl: "", apiKey: "" },
+    memoryScope: { namespace: "", shareAcrossAgents: true, includeAgentMetadata: true, includeRunMetadata: false, userId: "", defaultMetadata: {} },
     mcpServer: { command: [], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file" },
     systemPrompt: { enabled: true },
     ...overrides,
@@ -156,6 +158,22 @@ describe("memory_query tool", () => {
       expect.objectContaining({ limit: 5 }),
     )
   })
+
+  it("passes scope filters and execution provenance through memory_query", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.memory_query.execute({ query: "test", namespace: "workspace-a", metadata_filter_json: '{"kind":"decision"}' }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "recall",
+      expect.objectContaining({
+        query: "test",
+        namespace: "workspace-a",
+        agentId: "test",
+        runId: "test-session",
+        metadataFilter: { kind: "decision" },
+      }),
+    )
+  })
 })
 
 describe("memory_save tool", () => {
@@ -217,6 +235,21 @@ describe("memory_save tool", () => {
       expect.objectContaining({ memory_type: "episodic" }),
     )
   })
+
+  it("passes metadata_json and context provenance through memory_save", async () => {
+    const tools = buildToolRegistry(makeConfig({ privacy: { enabled: false } }))
+    await tools.memory_save.execute({ content: "test", metadata_json: '{"capture_tags":["auth"]}' }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "store_memory",
+      expect.objectContaining({
+        content: expect.any(String),
+        agentId: "test",
+        runId: "test-session",
+        metadata: { capture_tags: ["auth"] },
+      }),
+    )
+  })
 })
 
 describe("memory_manage tool", () => {
@@ -261,6 +294,23 @@ describe("memory_manage tool", () => {
       expect.anything(),
       "update_memory",
       expect.objectContaining({ id: "mem-1", content: "new content" }),
+    )
+  })
+
+  it("passes scoped context through update action", async () => {
+    const tools = buildToolRegistry(makeConfig({ privacy: { enabled: false } }))
+    await tools.memory_manage.execute({ action: "update", id: "mem-1", content: "new content", namespace: "workspace-a", metadata_json: '{"source":"manual"}' }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "update_memory",
+      expect.objectContaining({
+        id: "mem-1",
+        content: "new content",
+        namespace: "workspace-a",
+        agentId: "test",
+        runId: "test-session",
+        metadata: { source: "manual" },
+      }),
     )
   })
 

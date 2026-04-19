@@ -10,12 +10,60 @@ import { callMemoryTool } from "./mcp-client.js"
 import { stripPrivateContent, isFullyPrivate } from "../utils/privacy.js"
 import { logger } from "../utils/logger.js"
 import { isConnectionFailed, getConnectionStatus } from "./connection-state.js"
+import type { MemoryOperationContext } from "./mcp-client.js"
 
 const UNAVAILABLE_MESSAGE =
   "Memory server temporarily unavailable — auto-reconnecting. " +
   "Try again in ~30s. Do not retry memory tools until the system prompt confirms the connection is restored."
 
 type ToolMap = Record<string, ReturnType<typeof tool>>
+
+function parseJsonArg(value?: string): Record<string, unknown> | undefined {
+  if (!value) return undefined
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function buildOperationContext(
+  context: any,
+  args: {
+    namespace?: string
+    user_id?: string
+    agent_id?: string
+    run_id?: string
+    memory_type?: string
+    metadata_json?: string
+    metadata_filter_json?: string
+    event_after?: string
+    event_before?: string
+    ingestion_after?: string
+    ingestion_before?: string
+    valid_at?: string
+    timestamp?: string
+  },
+): MemoryOperationContext {
+  return {
+    agentId: args.agent_id ?? context?.agent,
+    runId: args.run_id ?? context?.sessionID,
+    namespace: args.namespace,
+    userId: args.user_id,
+    memoryType: args.memory_type,
+    metadata: parseJsonArg(args.metadata_json),
+    metadataFilter: parseJsonArg(args.metadata_filter_json),
+    eventAfter: args.event_after,
+    eventBefore: args.event_before,
+    ingestionAfter: args.ingestion_after,
+    ingestionBefore: args.ingestion_before,
+    validAt: args.valid_at,
+    timestamp: args.timestamp,
+  }
+}
 
 export function buildToolRegistry(config: PluginConfig, directory?: string): ToolMap {
   const proxy = async (name: string, args: Record<string, unknown>): Promise<string> => {
@@ -52,29 +100,42 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
         query: tool.schema.string(),
         limit: tool.schema.number().optional(),
         mode: tool.schema.enum(["auto", "semantic", "keyword", "recent", "valid"]).optional(),
+        namespace: tool.schema.string().optional(),
+        user_id: tool.schema.string().optional(),
+        agent_id: tool.schema.string().optional(),
+        run_id: tool.schema.string().optional(),
+        memory_type: tool.schema.string().optional(),
+        metadata_filter_json: tool.schema.string().optional(),
+        event_after: tool.schema.string().optional(),
+        event_before: tool.schema.string().optional(),
+        ingestion_after: tool.schema.string().optional(),
+        ingestion_before: tool.schema.string().optional(),
+        valid_at: tool.schema.string().optional(),
+        timestamp: tool.schema.string().optional(),
       },
-      execute: async (args) => {
+      execute: async (args, context) => {
         const mode = args.mode || "auto"
         const limit = args.limit ?? 5
+        const scopeArgs = buildOperationContext(context, args)
 
         // Route to appropriate underlying tool
         if (mode === "recent" || args.query.toLowerCase().includes("recent")) {
-          return proxy("list_memories", { limit })
+          return proxy("list_memories", { limit, ...scopeArgs })
         }
 
         if (mode === "keyword") {
-          return proxy("search_memory", { query: args.query, mode: "bm25", limit })
+          return proxy("search_memory", { query: args.query, mode: "bm25", limit, ...scopeArgs })
         }
 
         if (mode === "semantic") {
-          return proxy("search_memory", { query: args.query, mode: "vector", limit })
+          return proxy("search_memory", { query: args.query, mode: "vector", limit, ...scopeArgs })
         }
 
         if (mode === "valid") {
-          return proxy("get_valid", { limit })
+          return proxy("get_valid", { limit, ...scopeArgs })
         }
 
-        return proxy("recall", { query: args.query, limit })
+        return proxy("recall", { query: args.query, limit, ...scopeArgs })
       },
     }),
 
@@ -92,8 +153,13 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
           .enum(["auto", "DECISION", "TASK", "PATTERN", "BUGFIX", "CONTEXT", "RESEARCH", "USER"])
           .optional(),
         memory_type: tool.schema.enum(["semantic", "episodic", "procedural"]).optional(),
+        namespace: tool.schema.string().optional(),
+        user_id: tool.schema.string().optional(),
+        agent_id: tool.schema.string().optional(),
+        run_id: tool.schema.string().optional(),
+        metadata_json: tool.schema.string().optional(),
       },
-      execute: async (args) => {
+      execute: async (args, context) => {
         const filtered = privacyFilter(args.content)
         if (filtered === null) return "Content is entirely private — nothing stored."
 
@@ -116,7 +182,10 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
           }
         }
 
-        const callArgs: Record<string, unknown> = { content }
+        const callArgs: Record<string, unknown> = {
+          content,
+          ...buildOperationContext(context, args),
+        }
         if (args.memory_type) callArgs.memory_type = args.memory_type
 
         return proxy("store_memory", callArgs)
@@ -135,8 +204,15 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
         id: tool.schema.string(),
         content: tool.schema.string().optional(),
         reason: tool.schema.string().optional(),
+        namespace: tool.schema.string().optional(),
+        user_id: tool.schema.string().optional(),
+        agent_id: tool.schema.string().optional(),
+        run_id: tool.schema.string().optional(),
+        memory_type: tool.schema.string().optional(),
+        metadata_json: tool.schema.string().optional(),
       },
-      execute: async (args) => {
+      execute: async (args, context) => {
+        const scopeArgs = buildOperationContext(context, args)
         switch (args.action) {
           case "get":
             return proxy("get_memory", { id: args.id })
@@ -151,7 +227,7 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
             if (!args.content) return "Error: content is required for update action"
             const filtered = privacyFilter(args.content)
             if (filtered === null) return "Content is entirely private — update aborted."
-            return proxy("update_memory", { id: args.id, content: filtered })
+            return proxy("update_memory", { id: args.id, content: filtered, ...scopeArgs })
           }
 
           default:
