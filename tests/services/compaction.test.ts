@@ -24,6 +24,7 @@ function makeConfig(overrides?: Partial<Pick<PluginConfig, "compaction">>): Plug
     compactionSummaryCapture: { enabled: true },
     codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
     captureModel: { provider: "openai", model: "gpt-4o-mini", apiUrl: "", apiKey: "" },
+    memoryScope: { namespace: "", shareAcrossAgents: true, includeAgentMetadata: true, includeRunMetadata: false, userId: "", defaultMetadata: {} },
     mcpServer: { command: ["npx", "-y", "memory-mcp-1file"], tag: "default", model: "qwen3", transport: "http", port: 23817, bind: "127.0.0.1", mcpServerName: "memory-mcp-1file" },
     systemPrompt: { enabled: true },
   } as PluginConfig
@@ -90,7 +91,18 @@ describe("buildCompactionRecoveryContext", () => {
     vi.mocked(recallMemories).mockResolvedValue({ status: "empty", source: "recall", memories: [] })
 
     await buildCompactionRecoveryContext(config)
-    expect(searchMemoryResult).toHaveBeenCalledWith(config, "TASK: in_progress", "bm25", 5)
-    expect(recallMemories).toHaveBeenCalledWith(config, "recent project context and decisions", 7)
+    expect(searchMemoryResult).toHaveBeenCalledWith(config, "TASK: in_progress", "bm25", 5, undefined)
+    expect(recallMemories).toHaveBeenCalledWith(config, "recent project context and decisions", 7, undefined)
+  })
+
+  it("scopes compaction recovery by logical namespace when configured", async () => {
+    const config = makeConfig()
+    config.memoryScope.namespace = "workspace-a"
+    vi.mocked(searchMemoryResult).mockResolvedValue({ status: "empty", source: "search", memories: [] })
+    vi.mocked(recallMemories).mockResolvedValue({ status: "empty", source: "recall", memories: [] })
+
+    await buildCompactionRecoveryContext(config)
+    expect(searchMemoryResult).toHaveBeenCalledWith(config, "TASK: in_progress", "bm25", 5, { namespace: "workspace-a" })
+    expect(recallMemories).toHaveBeenCalledWith(config, "recent project context and decisions", 10, { namespace: "workspace-a" })
   })
 })

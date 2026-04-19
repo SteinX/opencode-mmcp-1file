@@ -2,6 +2,11 @@ import type { PluginConfig } from "../config.js"
 import { recallMemories, searchMemoryResult } from "./mcp-client.js"
 import { formatMemoriesForRecovery } from "../utils/format.js"
 
+function compactionContext(config: PluginConfig): { namespace?: string } | undefined {
+  const namespace = config.memoryScope.namespace?.trim()
+  return namespace ? { namespace } : undefined
+}
+
 const RECOVERY_GUIDANCE = `Your conversation context was just compacted. To restore working state:
 1. Use \`memory_query\` to search for "TASK: in_progress" to find active tasks
 2. Use \`memory_query\` with your current project/topic to restore relevant context
@@ -13,8 +18,13 @@ export async function buildCompactionRecoveryContext(
   if (!config.compaction.enabled) return null
 
   const [taskResult, contextResult] = await Promise.all([
-    searchMemoryResult(config, "TASK: in_progress", "bm25", 5),
-    recallMemories(config, "recent project context and decisions", config.compaction.memoryLimit),
+    searchMemoryResult(config, "TASK: in_progress", "bm25", 5, compactionContext(config)),
+    recallMemories(
+      config,
+      "recent project context and decisions",
+      config.compaction.memoryLimit,
+      compactionContext(config),
+    ),
   ])
 
   const taskMemories = taskResult.memories
