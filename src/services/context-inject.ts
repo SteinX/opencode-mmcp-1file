@@ -4,6 +4,7 @@ import {
   listProjectMemories,
   callMemoryTool,
   type RetrievalResult,
+  type MemoryOperationContext,
 } from "./mcp-client.js"
 import {
   formatMemoriesForInjection,
@@ -152,13 +153,23 @@ function formatRetrievalFailure(result: RetrievalResult, label: string): string 
   return null
 }
 
+function projectKnowledgeContext(config: PluginConfig): MemoryOperationContext | undefined {
+  const namespace = config.memoryScope.namespace?.trim()
+  return namespace ? { namespace } : undefined
+}
+
 export async function fetchAndFormatMemories(
   config: PluginConfig,
   userMessageText: string,
 ): Promise<string | null> {
   if (userMessageText.trim().length < shortQueryThreshold(config)) return null
 
-  const result = await recallMemories(config, userMessageText, config.chatMessage.maxMemories)
+  const result = await recallMemories(
+    config,
+    userMessageText,
+    config.chatMessage.maxMemories,
+    projectKnowledgeContext(config),
+  )
   if (result.status !== "ok") return formatRetrievalFailure(result, "query recall")
 
   const filtered = filterRecallMemories(config, result.memories)
@@ -173,7 +184,12 @@ export async function fetchProjectKnowledge(
   try {
     const maxProjectMemories = config.chatMessage.maxProjectMemories ?? 30
     const validOnly = config.chatMessage.projectKnowledgeValidOnly ?? false
-    const result = await listProjectMemories(config, maxProjectMemories, validOnly)
+    const result = await listProjectMemories(
+      config,
+      maxProjectMemories,
+      validOnly,
+      projectKnowledgeContext(config),
+    )
 
     if (result.status !== "ok") return formatRetrievalFailure(result, "project knowledge")
 

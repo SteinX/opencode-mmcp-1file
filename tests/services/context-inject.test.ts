@@ -30,7 +30,7 @@ const DEFAULT_TIERS: TierConfig[] = [
   { categories: ["CONTEXT"], limit: 5 },
 ]
 
-function makeConfig(overrides?: { chatMessage?: Partial<PluginConfig["chatMessage"]> }): PluginConfig {
+function makeConfig(overrides?: { chatMessage?: Partial<PluginConfig["chatMessage"]>, memoryScope?: Partial<PluginConfig["memoryScope"]> }): PluginConfig {
   return {
     chatMessage: {
       enabled: true,
@@ -54,6 +54,7 @@ function makeConfig(overrides?: { chatMessage?: Partial<PluginConfig["chatMessag
     compactionSummaryCapture: { enabled: true },
     codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
     captureModel: { provider: "openai", model: "gpt-4o-mini", apiUrl: "", apiKey: "" },
+    memoryScope: { namespace: "", shareAcrossAgents: true, includeAgentMetadata: true, includeRunMetadata: false, userId: "", defaultMetadata: {}, ...overrides?.memoryScope },
     mcpServer: { command: ["npx", "-y", "memory-mcp-1file"], tag: "default", model: "qwen3", transport: "http", port: 23817, bind: "127.0.0.1", mcpServerName: "memory-mcp-1file" },
     systemPrompt: { enabled: true },
   } as PluginConfig
@@ -137,7 +138,14 @@ describe("fetchAndFormatMemories", () => {
     const config = makeConfig({ chatMessage: { maxMemories: 3 } })
     vi.mocked(recallMemories).mockResolvedValue({ status: "empty", source: "recall", memories: [] })
     await fetchAndFormatMemories(config, "some question about the project")
-    expect(recallMemories).toHaveBeenCalledWith(config, "some question about the project", 3)
+    expect(recallMemories).toHaveBeenCalledWith(config, "some question about the project", 3, undefined)
+  })
+
+  it("passes namespace scope to recall when configured", async () => {
+    const config = makeConfig({ memoryScope: { namespace: "workspace-a" } })
+    vi.mocked(recallMemories).mockResolvedValue({ status: "empty", source: "recall", memories: [] })
+    await fetchAndFormatMemories(config, "some question about the project")
+    expect(recallMemories).toHaveBeenCalledWith(config, "some question about the project", 5, { namespace: "workspace-a" })
   })
 
   it("filters out low-score memories before formatting", async () => {
@@ -290,14 +298,21 @@ describe("fetchProjectKnowledge", () => {
     const config = makeConfig({ chatMessage: { maxProjectMemories: 7 } })
     vi.mocked(listProjectMemories).mockResolvedValue({ status: "empty", source: "list", memories: [] })
     await fetchProjectKnowledge(config)
-    expect(listProjectMemories).toHaveBeenCalledWith(config, 7, false)
+    expect(listProjectMemories).toHaveBeenCalledWith(config, 7, false, undefined)
   })
 
   it("uses valid-only project knowledge when configured", async () => {
     const config = makeConfig({ chatMessage: { projectKnowledgeValidOnly: true } })
     vi.mocked(listProjectMemories).mockResolvedValue({ status: "empty", source: "valid", memories: [] })
     await fetchProjectKnowledge(config)
-    expect(listProjectMemories).toHaveBeenCalledWith(config, 30, true)
+    expect(listProjectMemories).toHaveBeenCalledWith(config, 30, true, undefined)
+  })
+
+  it("passes namespace scope to project knowledge when configured", async () => {
+    const config = makeConfig({ memoryScope: { namespace: "workspace-a" } })
+    vi.mocked(listProjectMemories).mockResolvedValue({ status: "empty", source: "list", memories: [] })
+    await fetchProjectKnowledge(config)
+    expect(listProjectMemories).toHaveBeenCalledWith(config, 30, false, { namespace: "workspace-a" })
   })
 
   it("returns null when project knowledge retrieval fails", async () => {
