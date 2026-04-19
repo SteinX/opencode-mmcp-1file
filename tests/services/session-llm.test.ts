@@ -23,6 +23,7 @@ function makeConfig(overrides?: Partial<PluginConfig["captureModel"]>): PluginCo
       apiKey: "",
       ...overrides,
     },
+    memoryScope: { namespace: "", shareAcrossAgents: true, includeAgentMetadata: true, includeRunMetadata: false, userId: "", defaultMetadata: {} },
     mcpServer: { command: [], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1" },
     systemPrompt: { enabled: true },
   } as PluginConfig

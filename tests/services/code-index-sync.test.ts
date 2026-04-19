@@ -36,6 +36,7 @@ function makeConfig(dataDir: string): PluginConfig {
     compactionSummaryCapture: { enabled: true },
     codeIndexSync: { enabled: true, debounceMs: 50, minReindexIntervalMs: 300000 },
     captureModel: { provider: "", model: "", apiUrl: "", apiKey: "" },
+    memoryScope: { namespace: "", shareAcrossAgents: true, includeAgentMetadata: true, includeRunMetadata: false, userId: "", defaultMetadata: {} },
     mcpServer: {
       command: ["npm", "exec", "-y", "memory-mcp-1file", "--"],
       tag: "",
