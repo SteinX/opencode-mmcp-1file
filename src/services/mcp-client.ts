@@ -16,6 +16,48 @@ export interface RetrievalResult {
   reason?: string
 }
 
+export interface MemoryOperationContext {
+  agentId?: string
+  runId?: string
+  namespace?: string
+  userId?: string
+  metadata?: Record<string, unknown>
+  metadataFilter?: Record<string, unknown>
+  memoryType?: string
+  eventAfter?: string
+  eventBefore?: string
+  ingestionAfter?: string
+  ingestionBefore?: string
+  validAt?: string
+  timestamp?: string
+}
+
+type ScopedToolArgs = Record<string, unknown> & {
+  agentId?: string
+  runId?: string
+  namespace?: string
+  userId?: string
+  memoryType?: string
+  metadata?: Record<string, unknown>
+  metadataFilter?: Record<string, unknown>
+  eventAfter?: string
+  eventBefore?: string
+  ingestionAfter?: string
+  ingestionBefore?: string
+  validAt?: string
+  timestamp?: string
+  agent_id?: string
+  run_id?: string
+  user_id?: string
+  memory_type?: string
+  metadata_filter?: Record<string, unknown>
+  event_after?: string
+  event_before?: string
+  ingestion_after?: string
+  ingestion_before?: string
+  valid_at?: string
+}
+
 let mcpClient: Client | null = null
 let connectionPromise: Promise<Client> | null = null
 
@@ -85,6 +127,9 @@ function buildStdioCommand(config: PluginConfig): string[] | null {
   if (!fullCommand.some((a) => a === "--data-dir")) {
     fullCommand.push("--data-dir", dataDir)
   }
+  if (!fullCommand.some((a) => a === "--log-file")) {
+    fullCommand.push("--log-file", `${dataDir}/log/mcp-server.log`)
+  }
   if (!fullCommand.some((a) => a === "--model") && model) {
     fullCommand.push("--model", model)
   }
@@ -117,10 +162,136 @@ function parseMemories(raw: string): MemoryEntry[] {
     if (Array.isArray(parsed)) return parsed
     if (parsed.memories && Array.isArray(parsed.memories)) return parsed.memories
     if (parsed.results && Array.isArray(parsed.results)) return parsed.results
+    if (parsed.data && Array.isArray(parsed.data)) return parsed.data
+    if (parsed.items && Array.isArray(parsed.items)) return parsed.items
+    if (parsed.response?.memories && Array.isArray(parsed.response.memories)) return parsed.response.memories
+    if (parsed.response?.results && Array.isArray(parsed.response.results)) return parsed.response.results
     return []
   } catch (err) {
     logger.debug("failed to parse memories", { error: String(err) })
     return []
+  }
+}
+
+function cleanRecord<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined && entry !== null && entry !== ""),
+  ) as T
+}
+
+function buildBaseScopeArgs(
+  config: PluginConfig,
+  context?: MemoryOperationContext,
+): Record<string, unknown> {
+  const namespace = context?.namespace ?? config.memoryScope.namespace
+  const userId = context?.userId ?? config.memoryScope.userId
+
+  return cleanRecord({
+    namespace,
+    user_id: userId,
+    ...(config.memoryScope.shareAcrossAgents ? {} : { agent_id: context?.agentId }),
+    run_id: context?.runId,
+  })
+}
+
+function mergeMetadata(
+  config: PluginConfig,
+  context?: MemoryOperationContext,
+): Record<string, unknown> | undefined {
+  const merged = cleanRecord({
+    ...(config.memoryScope.defaultMetadata ?? {}),
+    ...(context?.metadata ?? {}),
+    ...(config.memoryScope.includeAgentMetadata && context?.agentId
+      ? { source_agent_id: context.agentId }
+      : {}),
+    ...(config.memoryScope.includeRunMetadata && context?.runId
+      ? { source_run_id: context.runId }
+      : {}),
+  })
+
+  return Object.keys(merged).length > 0 ? merged : undefined
+}
+
+function buildReadArgs(
+  config: PluginConfig,
+  baseArgs: Record<string, unknown>,
+  context?: MemoryOperationContext,
+): Record<string, unknown> {
+  return cleanRecord({
+    ...baseArgs,
+    ...buildBaseScopeArgs(config, context),
+    memory_type: context?.memoryType,
+    metadata_filter: context?.metadataFilter,
+    event_after: context?.eventAfter,
+    event_before: context?.eventBefore,
+    ingestion_after: context?.ingestionAfter,
+    ingestion_before: context?.ingestionBefore,
+    valid_at: context?.validAt,
+    timestamp: context?.timestamp,
+  })
+}
+
+function buildWriteArgs(
+  config: PluginConfig,
+  baseArgs: Record<string, unknown>,
+  context?: MemoryOperationContext,
+): Record<string, unknown> {
+  return cleanRecord({
+    ...baseArgs,
+    ...buildBaseScopeArgs(config, context),
+    metadata: mergeMetadata(config, context),
+    memory_type: context?.memoryType ?? baseArgs.memory_type,
+  })
+}
+
+function extractOperationContext(args: ScopedToolArgs): {
+  baseArgs: Record<string, unknown>
+  context: MemoryOperationContext
+} {
+  const {
+    agentId,
+    runId,
+    namespace,
+    userId,
+    memoryType,
+    metadata,
+    metadataFilter,
+    eventAfter,
+    eventBefore,
+    ingestionAfter,
+    ingestionBefore,
+    validAt,
+    timestamp,
+    agent_id,
+    run_id,
+    user_id,
+    memory_type,
+    metadata_filter,
+    event_after,
+    event_before,
+    ingestion_after,
+    ingestion_before,
+    valid_at,
+    ...baseArgs
+  } = args
+
+  return {
+    baseArgs,
+    context: cleanRecord({
+      agentId: agentId ?? agent_id,
+      runId: runId ?? run_id,
+      namespace,
+      userId: userId ?? user_id,
+      memoryType: memoryType ?? memory_type,
+      metadata,
+      metadataFilter: metadataFilter ?? metadata_filter,
+      eventAfter: eventAfter ?? event_after,
+      eventBefore: eventBefore ?? event_before,
+      ingestionAfter: ingestionAfter ?? ingestion_after,
+      ingestionBefore: ingestionBefore ?? ingestion_before,
+      validAt: validAt ?? valid_at,
+      timestamp,
+    }),
   }
 }
 
@@ -135,10 +306,12 @@ async function readMemories(
   source: RetrievalResult["source"],
   toolName: string,
   args: Record<string, unknown>,
+  context?: MemoryOperationContext,
 ): Promise<RetrievalResult> {
   try {
     const client = await getMemoryClient(config)
-    const result = await client.callTool({ name: toolName, arguments: args })
+    const finalArgs = buildReadArgs(config, args, context)
+    const result = await client.callTool({ name: toolName, arguments: finalArgs })
     const memories = parseMemories(extractTextResult(result))
     return {
       status: memories.length > 0 ? "ok" : "empty",
@@ -147,7 +320,7 @@ async function readMemories(
     }
   } catch (err) {
     const status = classifyFailure(err)
-    logger.error(`${toolName} failed`, { error: String(err), args })
+    logger.error(`${toolName} failed`, { error: String(err), args: buildReadArgs(config, args, context) })
     return {
       status,
       source,
@@ -161,8 +334,9 @@ export async function recallMemories(
   config: PluginConfig,
   query: string,
   limit = 5,
+  context?: MemoryOperationContext,
 ): Promise<RetrievalResult> {
-  return readMemories(config, "recall", "recall", { query, limit })
+  return readMemories(config, "recall", "recall", { query, limit }, context)
 }
 
 export async function searchMemoryResult(
@@ -170,27 +344,30 @@ export async function searchMemoryResult(
   query: string,
   mode: "vector" | "bm25" = "bm25",
   limit = 5,
+  context?: MemoryOperationContext,
 ): Promise<RetrievalResult> {
-  return readMemories(config, "search", "search_memory", { query, mode, limit })
+  return readMemories(config, "search", "search_memory", { query, mode, limit }, context)
 }
 
 export async function listProjectMemories(
   config: PluginConfig,
   limit = 10,
   validOnly = false,
+  context?: MemoryOperationContext,
 ): Promise<RetrievalResult> {
   if (validOnly) {
-    return readMemories(config, "valid", "get_valid", { limit })
+    return readMemories(config, "valid", "get_valid", { limit }, context)
   }
-  return readMemories(config, "list", "list_memories", { limit })
+  return readMemories(config, "list", "list_memories", { limit }, context)
 }
 
 export async function recall(
   config: PluginConfig,
   query: string,
   limit = 5,
+  context?: MemoryOperationContext,
 ): Promise<MemoryEntry[]> {
-  const result = await recallMemories(config, query, limit)
+  const result = await recallMemories(config, query, limit, context)
   return result.memories
 }
 
@@ -199,8 +376,9 @@ export async function searchMemory(
   query: string,
   mode: "vector" | "bm25" = "bm25",
   limit = 5,
+  context?: MemoryOperationContext,
 ): Promise<MemoryEntry[]> {
-  const result = await searchMemoryResult(config, query, mode, limit)
+  const result = await searchMemoryResult(config, query, mode, limit, context)
   return result.memories
 }
 
@@ -208,15 +386,16 @@ export async function storeMemory(
   config: PluginConfig,
   content: string,
   memoryType?: string,
+  context?: MemoryOperationContext,
 ): Promise<boolean> {
   try {
     const client = await getMemoryClient(config)
     await client.callTool({
       name: "store_memory",
-      arguments: {
+      arguments: buildWriteArgs(config, {
         content,
         ...(memoryType && { memory_type: memoryType }),
-      },
+      }, { ...context, memoryType: context?.memoryType ?? memoryType }),
     })
     return true
   } catch (err) {
@@ -228,8 +407,9 @@ export async function storeMemory(
 export async function listMemories(
   config: PluginConfig,
   limit = 10,
+  context?: MemoryOperationContext,
 ): Promise<MemoryEntry[]> {
-  const result = await listProjectMemories(config, limit)
+  const result = await listProjectMemories(config, limit, false, context)
   return result.memories
 }
 
@@ -239,7 +419,15 @@ export async function callMemoryTool(
   args: Record<string, unknown>,
 ): Promise<string> {
   const client = await getMemoryClient(config)
-  const result = await client.callTool({ name: toolName, arguments: args })
+  const shouldApplyReadScope = ["recall", "search_memory", "list_memories", "get_valid"].includes(toolName)
+  const shouldApplyWriteScope = ["store_memory", "update_memory"].includes(toolName)
+  const { baseArgs, context } = extractOperationContext(args as ScopedToolArgs)
+  const finalArgs = shouldApplyReadScope
+    ? buildReadArgs(config, baseArgs, context)
+    : shouldApplyWriteScope
+      ? buildWriteArgs(config, baseArgs, context)
+      : baseArgs
+  const result = await client.callTool({ name: toolName, arguments: finalArgs })
   return extractTextResult(result)
 }
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest"
+import { describe, it, expect, vi } from "vitest"
 import type { PluginConfig } from "../../src/config.js"
 
 function makeConfig(transportOverride?: "stdio" | "http"): PluginConfig {
@@ -12,6 +12,7 @@ function makeConfig(transportOverride?: "stdio" | "http"): PluginConfig {
     compactionSummaryCapture: { enabled: true },
     codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
     captureModel: { provider: "openai", model: "gpt-4o-mini", apiUrl: "", apiKey: "" },
+    memoryScope: { namespace: "", shareAcrossAgents: true, includeAgentMetadata: true, includeRunMetadata: false, userId: "", defaultMetadata: {} },
     mcpServer: { command: ["npx", "-y", "memory-mcp-1file"], tag: "default", model: "qwen3", transport: transportOverride ?? "stdio", port: 23817, bind: "127.0.0.1", mcpServerName: "memory-mcp-1file" },
     systemPrompt: { enabled: true },
   } as PluginConfig
@@ -231,6 +232,102 @@ describe("mcp-client", () => {
     expect(result).toEqual(memories)
   })
 
+  it("parseMemories handles nested response envelope", async () => {
+    const { mod, mockClient } = await setupModule()
+    const config = makeConfig()
+
+    const memories = [{ id: "1", content: "nested envelope" }]
+    mockClient.callTool.mockResolvedValue({
+      content: [{ type: "text", text: JSON.stringify({ response: { results: memories } }) }],
+    })
+
+    const result = await mod.recall(config, "query")
+    expect(result).toEqual(memories)
+  })
+
+  it("recall applies configured namespace and user scope", async () => {
+    const { mod, mockClient } = await setupModule()
+    const config = makeConfig()
+    config.memoryScope.namespace = "workspace-a"
+    config.memoryScope.userId = "user-1"
+
+    mockClient.callTool.mockResolvedValue({
+      content: [{ type: "text", text: "[]" }],
+    })
+
+    await mod.recall(config, "test query", 5)
+    expect(mockClient.callTool).toHaveBeenCalledWith({
+      name: "recall",
+      arguments: { query: "test query", limit: 5, namespace: "workspace-a", user_id: "user-1" },
+    })
+  })
+
+  it("storeMemory merges configured metadata and optional provenance", async () => {
+    const { mod, mockClient } = await setupModule()
+    const config = makeConfig()
+    config.memoryScope.defaultMetadata = { source: "plugin" }
+    config.memoryScope.includeAgentMetadata = true
+    config.memoryScope.includeRunMetadata = true
+
+    mockClient.callTool.mockResolvedValue({ content: [] })
+
+    await mod.storeMemory(config, "test content", "semantic", {
+      namespace: "workspace-a",
+      agentId: "hephaestus",
+      runId: "session-1",
+      metadata: { capture_tags: ["eslint"] },
+    })
+
+    expect(mockClient.callTool).toHaveBeenCalledWith({
+      name: "store_memory",
+      arguments: {
+        content: "test content",
+        memory_type: "semantic",
+        namespace: "workspace-a",
+        run_id: "session-1",
+        metadata: {
+          source: "plugin",
+          capture_tags: ["eslint"],
+          source_agent_id: "hephaestus",
+          source_run_id: "session-1",
+        },
+      },
+    })
+  })
+
+  it("callMemoryTool normalizes scoped camelCase arguments for reads", async () => {
+    const { mod, mockClient } = await setupModule()
+    const config = makeConfig()
+
+    mockClient.callTool.mockResolvedValue({ content: [{ type: "text", text: "[]" }] })
+
+    await mod.callMemoryTool(config, "search_memory", {
+      query: "test",
+      mode: "bm25",
+      limit: 3,
+      namespace: "workspace-a",
+      userId: "user-1",
+      agentId: "hephaestus",
+      runId: "session-1",
+      metadataFilter: { source_agent_id: "hephaestus" },
+      eventAfter: "2026-04-01T00:00:00Z",
+    })
+
+    expect(mockClient.callTool).toHaveBeenCalledWith({
+      name: "search_memory",
+      arguments: {
+        query: "test",
+        mode: "bm25",
+        limit: 3,
+        namespace: "workspace-a",
+        user_id: "user-1",
+        run_id: "session-1",
+        metadata_filter: { source_agent_id: "hephaestus" },
+        event_after: "2026-04-01T00:00:00Z",
+      },
+    })
+  })
+
   it("getMemoryClient throws immediately when connection is flagged as failed", async () => {
     const { mod } = await setupModule()
     const config = makeConfig()
@@ -337,7 +434,7 @@ describe("commandPath override", () => {
 
     expect(mockStdioTransport).toHaveBeenCalledWith({
       command: "/usr/local/bin/memory-mcp-1file",
-      args: ["--stdio", "--data-dir", "/tmp/test-data", "--model", "qwen3"],
+      args: ["--stdio", "--data-dir", "/tmp/test-data", "--log-file", "/tmp/test-data/log/mcp-server.log", "--model", "qwen3"],
       stderr: "pipe",
     })
   })
