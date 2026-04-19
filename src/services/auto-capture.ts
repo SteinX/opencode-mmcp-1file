@@ -72,7 +72,10 @@ export async function performAutoCapture(
       if (isFullyPrivate(content)) return false
     }
 
-    const stored = await storeMemory(config, content, parsed.memoryType)
+    const stored = await storeMemory(config, content, parsed.memoryType, {
+      runId: sessionID,
+      metadata: parsed.tags.length > 0 ? { capture_tags: parsed.tags } : undefined,
+    })
 
     if (stored) {
       const lastMsg = uncapturedMessages[uncapturedMessages.length - 1]
