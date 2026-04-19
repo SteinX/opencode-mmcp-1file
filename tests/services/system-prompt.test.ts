@@ -13,6 +13,7 @@ function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
     compactionSummaryCapture: { enabled: true },
     codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
     captureModel: { provider: "openai", model: "gpt-4o-mini", apiUrl: "", apiKey: "" },
+    memoryScope: { namespace: "", shareAcrossAgents: true, includeAgentMetadata: true, includeRunMetadata: false, userId: "", defaultMetadata: {} },
     mcpServer: { command: [], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1" },
     systemPrompt: { enabled: true },
     ...overrides,
@@ -23,11 +24,22 @@ describe("buildMemorySystemPrompt", () => {
   it("returns base MEMORY_PROTOCOL when no tools available", () => {
     const result = buildMemorySystemPrompt(makeConfig(), [])
     expect(result).toContain("## Memory System")
+    expect(result).toContain("### Scope Model")
+    expect(result).toContain("### Scope Guidance")
     expect(result).toContain("### When to Store Memories")
     expect(result).toContain("### Key Tools")
     expect(result).toContain("### Memory Lifecycle")
     expect(result).toContain("### Prefix Format")
     expect(result).not.toContain("### Available Memory Tools")
+  })
+
+  it("documents shared-agent defaults and logical namespace guidance", () => {
+    const result = buildMemorySystemPrompt(makeConfig(), ["memory_query", "memory_save"])
+    expect(result).toContain("mcpServer.tag / dataDir")
+    expect(result).toContain("memoryScope.namespace")
+    expect(result).toContain("collaborating agents should share memories")
+    expect(result).toContain("pass `namespace` to `memory_query`")
+    expect(result).toContain("Only pass `agent_id` for explicit per-agent isolation")
   })
 
   it("appends Available Memory Tools section when tools provided", () => {

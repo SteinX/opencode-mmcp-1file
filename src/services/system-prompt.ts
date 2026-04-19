@@ -4,6 +4,13 @@ const MEMORY_PROTOCOL = `## Memory System
 
 You have access to a persistent memory system via MCP tools. Use it to store and retrieve knowledge across sessions.
 
+### Scope Model
+- **mcpServer.tag / dataDir**: physical storage shard. Use this to separate unrelated projects or environments.
+- **memoryScope.namespace**: logical scope inside the current shard. Use this to isolate retrieval within one shard when a project needs multiple workspaces or sub-contexts.
+- **Agent isolation**: by default, collaborating agents should share memories. Do **not** isolate by agent unless the task explicitly requires separate memory lanes.
+- **Run/session isolation**: treat run/session identity as provenance, not the default retrieval boundary for durable project memory.
+- **Metadata**: use metadata for observability and precise filtering when needed, not as a replacement for category prefixes.
+
 ### When to Store Memories
 - **Decisions**: Architecture choices, trade-offs, rejected alternatives → prefix with DECISION
 - **Tasks**: Work in progress, planned next steps → prefix with TASK (mark as [in_progress] or [completed])
@@ -18,6 +25,13 @@ You have access to a persistent memory system via MCP tools. Use it to store and
 - **memory_save**: Save knowledge — automatically categorizes based on content (DECISION, TASK, PATTERN, etc.)
 - **memory_manage**: Manage existing memories — get, update, delete, or invalidate by ID
 - **knowledge_graph**: Store and query relationships between entities
+
+### Scope Guidance
+- Prefer the configured default scope unless you have a concrete reason to override it.
+- When you need to narrow retrieval to a sub-workstream, pass \`namespace\` to \`memory_query\` rather than changing \`tag\`.
+- Only pass \`agent_id\` for explicit per-agent isolation. In normal agentic coding, shared memory is the default.
+- Use \`metadata_json\` / \`metadata_filter_json\` for structured provenance like capture tags, import source, or migration markers.
+- Keep durable project knowledge broad enough to survive handoffs; avoid over-scoping memories to one transient run.
 
 ### Memory Lifecycle
 1. Before starting work: use memory_query to find relevant context about the current project/task
