@@ -544,4 +544,76 @@ describe("HTTP transport", () => {
     expect(mockClient.close).toHaveBeenCalled()
     expect(mockStopServer).not.toHaveBeenCalled()
   })
+
+  it("reconnects and retries once for recoverable HTTP session errors", async () => {
+    const { mod, mockClient } = await setupModule()
+    const config = makeConfig("http")
+
+    mockClient.callTool
+      .mockRejectedValueOnce(new Error("Unauthorized: Session not found"))
+      .mockResolvedValueOnce({ content: [] })
+
+    const result = await mod.storeMemory(config, "test content", "semantic")
+
+    expect(result).toBe(true)
+    expect(mockClient.connect).toHaveBeenCalledTimes(2)
+    expect(mockClient.callTool).toHaveBeenCalledTimes(2)
+    expect(mockClient.callTool).toHaveBeenNthCalledWith(1, {
+      name: "store_memory",
+      arguments: { content: "test content", memory_type: "semantic" },
+    })
+    expect(mockClient.callTool).toHaveBeenNthCalledWith(2, {
+      name: "store_memory",
+      arguments: { content: "test content", memory_type: "semantic" },
+    })
+  })
+
+  it("does not retry non-session HTTP errors", async () => {
+    const { mod, mockClient } = await setupModule()
+    const config = makeConfig("http")
+
+    mockClient.callTool.mockRejectedValue(new Error("503 service unavailable"))
+
+    const result = await mod.storeMemory(config, "test content", "semantic")
+
+    expect(result).toBe(false)
+    expect(mockClient.connect).toHaveBeenCalledTimes(1)
+    expect(mockClient.callTool).toHaveBeenCalledTimes(1)
+  })
+
+  it("does not retry recoverable-looking errors in stdio mode", async () => {
+    const { mod, mockClient } = await setupModule()
+    const config = makeConfig("stdio")
+
+    mockClient.callTool.mockRejectedValue(new Error("Unauthorized: Session not found"))
+
+    const result = await mod.storeMemory(config, "test content", "semantic")
+
+    expect(result).toBe(false)
+    expect(mockClient.connect).toHaveBeenCalledTimes(1)
+    expect(mockClient.callTool).toHaveBeenCalledTimes(1)
+  })
+
+  it("retries generic tool calls once for recoverable HTTP session errors", async () => {
+    const { mod, mockClient } = await setupModule()
+    const config = makeConfig("http")
+
+    mockClient.callTool
+      .mockRejectedValueOnce(new Error("Unauthorized: Session not found"))
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "ok" }] })
+
+    const result = await mod.callMemoryTool(config, "project_info", { action: "list" })
+
+    expect(result).toBe("ok")
+    expect(mockClient.connect).toHaveBeenCalledTimes(2)
+    expect(mockClient.callTool).toHaveBeenCalledTimes(2)
+    expect(mockClient.callTool).toHaveBeenNthCalledWith(1, {
+      name: "project_info",
+      arguments: { action: "list" },
+    })
+    expect(mockClient.callTool).toHaveBeenNthCalledWith(2, {
+      name: "project_info",
+      arguments: { action: "list" },
+    })
+  })
 })

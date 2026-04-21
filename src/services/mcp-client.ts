@@ -61,6 +61,57 @@ type ScopedToolArgs = Record<string, unknown> & {
 let mcpClient: Client | null = null
 let connectionPromise: Promise<Client> | null = null
 
+function isRecoverableHttpSessionError(config: PluginConfig, err: unknown): boolean {
+  if (config.mcpServer.transport !== "http") return false
+
+  const message = String(err).toLowerCase()
+  return message.includes("session not found")
+    || message.includes("mcp-session-id")
+    || (message.includes("session") && message.includes("unauthorized"))
+}
+
+async function resetClientConnection(config: PluginConfig): Promise<Client> {
+  if (mcpClient) {
+    try {
+      await mcpClient.close()
+    } catch (err) {
+      logger.debug("mcp client close error during reset", { error: String(err) })
+    }
+  }
+
+  mcpClient = null
+  connectionPromise = null
+
+  const client = await connectToServer(config)
+  mcpClient = client
+  markConnectionHealthy()
+  return client
+}
+
+async function callToolWithRetry(
+  config: PluginConfig,
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<Awaited<ReturnType<Client["callTool"]>>> {
+  const client = await getMemoryClient(config)
+
+  try {
+    return await client.callTool({ name: toolName, arguments: args })
+  } catch (err) {
+    if (!isRecoverableHttpSessionError(config, err)) {
+      throw err
+    }
+
+    logger.warn("Recoverable HTTP MCP session error; reconnecting and retrying once", {
+      toolName,
+      error: String(err),
+    })
+
+    const retryClient = await resetClientConnection(config)
+    return retryClient.callTool({ name: toolName, arguments: args })
+  }
+}
+
 export async function getMemoryClient(config: PluginConfig): Promise<Client> {
   if (mcpClient) return mcpClient
   if (isConnectionFailed()) {
@@ -83,10 +134,7 @@ export async function getMemoryClient(config: PluginConfig): Promise<Client> {
 
 export async function tryReconnect(config: PluginConfig): Promise<boolean> {
   try {
-    mcpClient = null
-    connectionPromise = null
-    const client = await connectToServer(config)
-    mcpClient = client
+    await resetClientConnection(config)
     return true
   } catch {
     return false
@@ -309,9 +357,8 @@ async function readMemories(
   context?: MemoryOperationContext,
 ): Promise<RetrievalResult> {
   try {
-    const client = await getMemoryClient(config)
     const finalArgs = buildReadArgs(config, args, context)
-    const result = await client.callTool({ name: toolName, arguments: finalArgs })
+    const result = await callToolWithRetry(config, toolName, finalArgs)
     const memories = parseMemories(extractTextResult(result))
     return {
       status: memories.length > 0 ? "ok" : "empty",
@@ -389,14 +436,10 @@ export async function storeMemory(
   context?: MemoryOperationContext,
 ): Promise<boolean> {
   try {
-    const client = await getMemoryClient(config)
-    await client.callTool({
-      name: "store_memory",
-      arguments: buildWriteArgs(config, {
+    await callToolWithRetry(config, "store_memory", buildWriteArgs(config, {
         content,
         ...(memoryType && { memory_type: memoryType }),
-      }, { ...context, memoryType: context?.memoryType ?? memoryType }),
-    })
+      }, { ...context, memoryType: context?.memoryType ?? memoryType }))
     return true
   } catch (err) {
     logger.error("storeMemory failed", { error: String(err) })
@@ -418,7 +461,6 @@ export async function callMemoryTool(
   toolName: string,
   args: Record<string, unknown>,
 ): Promise<string> {
-  const client = await getMemoryClient(config)
   const shouldApplyReadScope = ["recall", "search_memory", "list_memories", "get_valid"].includes(toolName)
   const shouldApplyWriteScope = ["store_memory", "update_memory"].includes(toolName)
   const { baseArgs, context } = extractOperationContext(args as ScopedToolArgs)
@@ -427,7 +469,7 @@ export async function callMemoryTool(
     : shouldApplyWriteScope
       ? buildWriteArgs(config, baseArgs, context)
       : baseArgs
-  const result = await client.callTool({ name: toolName, arguments: finalArgs })
+  const result = await callToolWithRetry(config, toolName, finalArgs)
   return extractTextResult(result)
 }
 
