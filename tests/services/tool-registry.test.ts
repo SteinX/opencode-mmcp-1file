@@ -99,6 +99,13 @@ describe("memory_query tool", () => {
     vi.clearAllMocks()
   })
 
+  it("describes minimal parameter usage for memory_query", () => {
+    const tools = buildToolRegistry(makeConfig())
+    expect(tools.memory_query.description).toContain("Start with query only")
+    expect(tools.memory_query.description).toContain("Only pass namespace, agent/run IDs, metadata filters, or time filters")
+    expect(tools.memory_query.description).toContain("omit empty optional fields entirely")
+  })
+
   it("uses recall (hybrid search) in auto mode", async () => {
     const tools = buildToolRegistry(makeConfig())
     await tools.memory_query.execute({ query: "test query" }, mockContext)

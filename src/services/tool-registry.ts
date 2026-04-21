@@ -95,6 +95,7 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
       description:
         "Search your memory. Automatically selects the best search strategy based on your query. " +
         "Use natural language for semantic search, keywords for exact matches, or 'recent' to list latest memories. " +
+        "Start with query only; add limit or mode when needed. Only pass namespace, agent/run IDs, metadata filters, or time filters when you intentionally want narrower retrieval, and omit empty optional fields entirely. " +
         "This is your primary tool for retrieving stored knowledge.",
       args: {
         query: tool.schema.string(),

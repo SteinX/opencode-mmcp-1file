@@ -33,6 +33,14 @@ You have access to a persistent memory system via MCP tools. Use it to store and
 - Use \`metadata_json\` / \`metadata_filter_json\` for structured provenance like capture tags, import source, or migration markers.
 - Keep durable project knowledge broad enough to survive handoffs; avoid over-scoping memories to one transient run.
 
+### memory_query Parameter Filling Rules
+- Start with the smallest useful call: usually just \`query\`, plus \`limit\` or \`mode\` when needed.
+- Omit optional fields entirely when they are not actively narrowing retrieval. Do **not** send empty strings, empty objects, or placeholder values for optional filters.
+- Only pass \`namespace\` when you need a narrower retrieval boundary than the configured default scope.
+- Only pass \`agent_id\` or \`run_id\` when you intentionally want per-agent or per-run isolation; do not use them for normal collaborative retrieval.
+- Only pass \`memory_type\`, \`metadata_filter_json\`, or time filters when you are deliberately constraining the search.
+- If you are unsure whether a filter is needed, leave it out and start broad; refine only after the first retrieval is too noisy.
+
 ### Memory Lifecycle
 1. Before starting work: use memory_query to find relevant context about the current project/task
 2. During work: use memory_save for significant decisions, discoveries, or task state changes

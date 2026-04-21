@@ -42,6 +42,15 @@ describe("buildMemorySystemPrompt", () => {
     expect(result).toContain("Only pass `agent_id` for explicit per-agent isolation")
   })
 
+  it("documents memory_query parameter filling rules", () => {
+    const result = buildMemorySystemPrompt(makeConfig(), ["memory_query"])
+    expect(result).toContain("### memory_query Parameter Filling Rules")
+    expect(result).toContain("Start with the smallest useful call")
+    expect(result).toContain("Do **not** send empty strings, empty objects, or placeholder values")
+    expect(result).toContain("Only pass `namespace` when you need a narrower retrieval boundary")
+    expect(result).toContain("If you are unsure whether a filter is needed, leave it out and start broad")
+  })
+
   it("appends Available Memory Tools section when tools provided", () => {
     const result = buildMemorySystemPrompt(makeConfig(), ["memory_save", "memory_query", "memory_manage"])
     expect(result).toContain("### Available Memory Tools")
