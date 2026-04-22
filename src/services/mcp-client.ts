@@ -5,7 +5,7 @@ import { PluginConfig, resolveDataDir } from "../config.js"
 import type { MemoryEntry } from "../utils/format.js"
 import { logger } from "../utils/logger.js"
 import { isConnectionFailed, markConnectionFailed, markConnectionHealthy } from "./connection-state.js"
-import { ensureServerRunning, stopServer } from "./server-process.js"
+import { ensureServerRunning, isServerRunning, stopServer } from "./server-process.js"
 
 export type RetrievalStatus = "ok" | "empty" | "failed" | "unavailable"
 
@@ -60,27 +60,94 @@ type ScopedToolArgs = Record<string, unknown> & {
 
 let mcpClient: Client | null = null
 let connectionPromise: Promise<Client> | null = null
+let connectionFailureHandler: (() => void) | null = null
+let lastHealthCheckAt = 0
+let healthCheckPromise: Promise<boolean> | null = null
 
-function isRecoverableHttpSessionError(config: PluginConfig, err: unknown): boolean {
-  if (config.mcpServer.transport !== "http") return false
+const HEALTH_CHECK_THROTTLE_MS = 5_000
 
+function isRecoverableHttpSessionError(err: unknown): boolean {
   const message = String(err).toLowerCase()
   return message.includes("session not found")
     || message.includes("mcp-session-id")
     || (message.includes("session") && message.includes("unauthorized"))
 }
 
-async function resetClientConnection(config: PluginConfig): Promise<Client> {
-  if (mcpClient) {
-    try {
-      await mcpClient.close()
-    } catch (err) {
-      logger.debug("mcp client close error during reset", { error: String(err) })
-    }
-  }
+function isRecoverableConnectionError(config: PluginConfig, err: unknown): boolean {
+  if (isRecoverableHttpSessionError(err)) return config.mcpServer.transport === "http"
 
-  mcpClient = null
-  connectionPromise = null
+  const message = String(err).toLowerCase()
+  const genericSignals = [
+    "econnrefused",
+    "econnreset",
+    "socket hang up",
+    "fetch failed",
+    "networkerror",
+    "network error",
+    "transport closed",
+    "connection closed",
+    "connection lost",
+    "other side closed",
+    "broken pipe",
+    "epipe",
+    "terminated",
+    "write after end",
+    "server unavailable",
+    "the operation was aborted",
+  ]
+
+  return genericSignals.some((signal) => message.includes(signal))
+}
+
+async function disposeClient(): Promise<void> {
+  if (!mcpClient) return
+
+  try {
+    await mcpClient.close()
+  } catch (err) {
+    logger.debug("mcp client close error during reset", { error: String(err) })
+  } finally {
+    mcpClient = null
+    connectionPromise = null
+  }
+}
+
+async function getCachedClientHealth(config: PluginConfig): Promise<boolean> {
+  if (config.mcpServer.transport !== "http") return true
+
+  const now = Date.now()
+  if (healthCheckPromise) return healthCheckPromise
+  if (now - lastHealthCheckAt < HEALTH_CHECK_THROTTLE_MS) return true
+
+  lastHealthCheckAt = now
+  healthCheckPromise = isServerRunning(config)
+  try {
+    return await healthCheckPromise
+  } finally {
+    healthCheckPromise = null
+  }
+}
+
+async function invalidateUnhealthyCachedClient(config: PluginConfig): Promise<void> {
+  const healthy = await getCachedClientHealth(config)
+  if (healthy || !mcpClient) return
+
+  logger.warn("Cached MCP client failed liveness check; invalidating connection")
+  await failActiveConnection()
+}
+
+function notifyConnectionFailure(): void {
+  markConnectionFailed()
+  connectionFailureHandler?.()
+}
+
+async function failActiveConnection(): Promise<void> {
+  await disposeClient()
+  notifyConnectionFailure()
+}
+
+async function resetClientConnection(config: PluginConfig): Promise<Client> {
+  await disposeClient()
 
   const client = await connectToServer(config)
   mcpClient = client
@@ -98,22 +165,36 @@ async function callToolWithRetry(
   try {
     return await client.callTool({ name: toolName, arguments: args })
   } catch (err) {
-    if (!isRecoverableHttpSessionError(config, err)) {
+    if (!isRecoverableConnectionError(config, err)) {
       throw err
     }
 
-    logger.warn("Recoverable HTTP MCP session error; reconnecting and retrying once", {
+    logger.warn("Recoverable MCP connection error; reconnecting and retrying once", {
       toolName,
       error: String(err),
     })
 
-    const retryClient = await resetClientConnection(config)
-    return retryClient.callTool({ name: toolName, arguments: args })
+    try {
+      const retryClient = await resetClientConnection(config)
+      return await retryClient.callTool({ name: toolName, arguments: args })
+    } catch (retryErr) {
+      if (isRecoverableConnectionError(config, retryErr)) {
+        await failActiveConnection()
+      }
+      throw retryErr
+    }
   }
 }
 
+export function registerConnectionFailureHandler(handler: (() => void) | null): void {
+  connectionFailureHandler = handler
+}
+
 export async function getMemoryClient(config: PluginConfig): Promise<Client> {
-  if (mcpClient) return mcpClient
+  if (mcpClient) {
+    await invalidateUnhealthyCachedClient(config)
+    if (mcpClient) return mcpClient
+  }
   if (isConnectionFailed()) {
     throw new Error("Memory server unavailable — auto-reconnecting in background")
   }
@@ -474,14 +555,9 @@ export async function callMemoryTool(
 }
 
 export async function disconnectMemoryClient(config?: PluginConfig): Promise<void> {
-  if (mcpClient) {
-    try {
-      await mcpClient.close()
-    } catch (err) {
-      logger.debug("mcp client close error", { error: String(err) })
-    }
-    mcpClient = null
-  }
+  await disposeClient()
+  lastHealthCheckAt = 0
+  healthCheckPromise = null
   if (config?.mcpServer.transport === "http") {
     await stopServer(config)
   }

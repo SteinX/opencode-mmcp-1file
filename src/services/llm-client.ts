@@ -1,5 +1,11 @@
 import type { PluginConfig } from "../config.js"
 
+const CHAT_COMPLETION_TIMEOUT_MS = 30_000
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === "AbortError"
+}
+
 interface ChatMessage {
   role: "system" | "user" | "assistant"
   content: string
@@ -21,19 +27,33 @@ export async function callChatCompletion(
 
   const url = `${apiUrl.replace(/\/$/, "")}/chat/completions`
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages,
-      temperature: 0,
-      max_tokens: 500,
-    }),
-  })
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), CHAT_COMPLETION_TIMEOUT_MS)
+
+  let response: Response
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        temperature: 0,
+        max_tokens: 500,
+      }),
+      signal: controller.signal,
+    })
+  } catch (err) {
+    if (isAbortError(err)) {
+      throw new Error(`LLM API request timed out after ${CHAT_COMPLETION_TIMEOUT_MS}ms`)
+    }
+    throw err
+  } finally {
+    clearTimeout(timeout)
+  }
 
   if (!response.ok) {
     const text = await response.text().catch(() => "")

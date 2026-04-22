@@ -7,6 +7,7 @@ import { loadConfig, resolveDataDir } from "./config.js"
 import {
   shouldInjectMemories,
   markSessionInjected,
+  markSessionCompacted,
   fetchAndFormatMemories,
   fetchCodeIntelContext,
   fetchProjectKnowledge,
@@ -17,7 +18,13 @@ import {
 } from "./services/context-inject.js"
 import { performAutoCapture } from "./services/auto-capture.js"
 import { buildCompactionRecoveryContext } from "./services/compaction.js"
-import { getMemoryClient, storeMemory, disconnectMemoryClient, tryReconnect } from "./services/mcp-client.js"
+import {
+  getMemoryClient,
+  storeMemory,
+  disconnectMemoryClient,
+  tryReconnect,
+  registerConnectionFailureHandler,
+} from "./services/mcp-client.js"
 import { isConnectionFailed, startRetryLoop, stopRetryLoop } from "./services/connection-state.js"
 import { summarizeExchange } from "./services/llm-client.js"
 import { callSessionLLM } from "./services/session-llm.js"
@@ -50,6 +57,35 @@ const plugin: Plugin = async (input) => {
 
   const logDir = join(dataDir, "log")
   initLogger(input.client, logDir)
+
+  let retryLoopStarted = false
+  const handleReconnectSuccess = () => {
+    retryLoopStarted = false
+    void input.client.tui.showToast({
+      body: {
+        message: "Memory server reconnected!",
+        variant: "success",
+        duration: 5000,
+      },
+    })
+  }
+
+  const ensureRetryLoop = () => {
+    if (retryLoopStarted) return
+    retryLoopStarted = true
+    startRetryLoop(() => tryReconnect(config), 30_000, handleReconnectSuccess)
+  }
+
+  registerConnectionFailureHandler(() => {
+    void input.client.tui.showToast({
+      body: {
+        message: "Memory server connection lost — retrying in background",
+        variant: "error",
+        duration: 5000,
+      },
+    })
+    ensureRetryLoop()
+  })
 
   void (async () => {
     try {
@@ -84,19 +120,7 @@ const plugin: Plugin = async (input) => {
           duration: 5000,
         },
       })
-      startRetryLoop(
-        () => tryReconnect(config),
-        30_000,
-        () => {
-          void input.client.tui.showToast({
-            body: {
-              message: "Memory server reconnected!",
-              variant: "success",
-              duration: 5000,
-            },
-          })
-        },
-      )
+      ensureRetryLoop()
     }
   })()
 
@@ -110,6 +134,8 @@ const plugin: Plugin = async (input) => {
   const cleanup = async () => {
     resetCodeIndexSyncState()
     stopRetryLoop()
+    retryLoopStarted = false
+    registerConnectionFailureHandler(null)
     await disconnectMemoryClient(config)
   }
   process.on("SIGTERM", () => void cleanup())
@@ -271,6 +297,7 @@ const plugin: Plugin = async (input) => {
         if (!sessionID) return
 
         compactedSessions.add(sessionID)
+        markSessionCompacted(sessionID)
         resetSessionState(sessionID)
         clearNudgeHistory(sessionID)
         await handleCompactionRecovery(config, input, sessionID)

@@ -57,6 +57,7 @@ describe("callChatCompletion", () => {
       "https://api.example.com/v1/chat/completions",
       expect.objectContaining({
         method: "POST",
+        signal: expect.any(AbortSignal),
         headers: expect.objectContaining({
           "Content-Type": "application/json",
           Authorization: "Bearer test-key",
@@ -126,6 +127,16 @@ describe("callChatCompletion", () => {
     await expect(
       callChatCompletion(makeConfig(), [{ role: "user", content: "hello" }]),
     ).rejects.toThrow("LLM API error 500: ")
+  })
+
+  it("throws a clear timeout error when fetch aborts", async () => {
+    const abortError = new Error("aborted")
+    abortError.name = "AbortError"
+    globalThis.fetch = vi.fn().mockRejectedValue(abortError)
+
+    await expect(
+      callChatCompletion(makeConfig(), [{ role: "user", content: "hello" }]),
+    ).rejects.toThrow("LLM API request timed out after 30000ms")
   })
 })
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest"
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { callSessionLLM, type SessionClient } from "../../src/services/session-llm.js"
 import type { PluginConfig } from "../../src/config.js"
 
@@ -58,9 +58,26 @@ function makeClient(overrides?: Partial<{
   }
 }
 
+function neverResolvingCreate(): ReturnType<SessionClient["session"]["create"]> {
+  return new Promise<{ data?: { id: string } }>(() => {})
+}
+
+function neverResolvingPrompt(): ReturnType<SessionClient["session"]["prompt"]> {
+  return new Promise<{ data?: { parts?: Array<{ type: string; text?: string }> } }>(() => {})
+}
+
+function neverResolvingDelete(): ReturnType<SessionClient["session"]["delete"]> {
+  return new Promise<{ data?: boolean }>(() => {})
+}
+
 describe("callSessionLLM", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it("creates session, prompts, extracts text, and deletes session", async () => {
@@ -202,5 +219,70 @@ describe("callSessionLLM", () => {
     ).rejects.toThrow("create failed")
 
     expect(client.session.delete).not.toHaveBeenCalled()
+  })
+
+  it("times out when session.create hangs", async () => {
+    const client: SessionClient = {
+      session: {
+        create: vi.fn<SessionClient["session"]["create"]>(neverResolvingCreate),
+        prompt: vi.fn(),
+        delete: vi.fn(),
+      },
+    }
+
+    const assertion = expect(callSessionLLM(client, makeConfig(), "test")).rejects.toThrow(
+      "session.create() timed out after 30000ms",
+    )
+    await vi.advanceTimersByTimeAsync(30_000)
+
+    await assertion
+    expect(client.session.prompt).not.toHaveBeenCalled()
+    expect(client.session.delete).not.toHaveBeenCalled()
+  })
+
+  it("times out when session.prompt hangs and still tries to delete the session", async () => {
+    const client: SessionClient = {
+      session: {
+        create: vi.fn().mockResolvedValue({ data: { id: "ephemeral-session-123" } }),
+        prompt: vi.fn<SessionClient["session"]["prompt"]>(neverResolvingPrompt),
+        delete: vi.fn().mockResolvedValue({ data: true }),
+      },
+    }
+
+    const assertion = expect(callSessionLLM(client, makeConfig(), "test")).rejects.toThrow(
+      "session.prompt() timed out after 30000ms",
+    )
+    await vi.advanceTimersByTimeAsync(30_000)
+    await vi.advanceTimersByTimeAsync(0)
+
+    await assertion
+    expect(client.session.delete).toHaveBeenCalledWith({
+      path: { id: "ephemeral-session-123" },
+    })
+  })
+
+  it("logs timeout errors when session delete hangs without masking success", async () => {
+    const { logger } = await import("../../src/utils/logger.js")
+    const client: SessionClient = {
+      session: {
+        create: vi.fn().mockResolvedValue({ data: { id: "ephemeral-session-123" } }),
+        prompt: vi.fn().mockResolvedValue({
+          data: { parts: [{ type: "text", text: "LLM response text" }] },
+        }),
+        delete: vi.fn<SessionClient["session"]["delete"]>(neverResolvingDelete),
+      },
+    }
+
+    const assertion = expect(callSessionLLM(client, makeConfig(), "test")).resolves.toBe("LLM response text")
+    await vi.advanceTimersByTimeAsync(30_000)
+
+    await assertion
+    expect(logger.error).toHaveBeenCalledWith(
+      "failed to delete ephemeral capture session",
+      expect.objectContaining({
+        sessionId: "ephemeral-session-123",
+        error: "Error: session.delete() timed out after 30000ms",
+      }),
+    )
   })
 })

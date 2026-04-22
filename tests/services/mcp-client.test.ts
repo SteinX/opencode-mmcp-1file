@@ -1,5 +1,14 @@
-import { describe, it, expect, vi } from "vitest"
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import type { PluginConfig } from "../../src/config.js"
+
+beforeEach(() => {
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date("2026-04-22T00:00:00Z"))
+})
+
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 function makeConfig(transportOverride?: "stdio" | "http"): PluginConfig {
   return {
@@ -37,11 +46,16 @@ async function setupModule() {
   vi.resetModules()
 
   const mockClient = createMockClient()
+  let connectionFailed = false
 
   mockConnectionState = {
-    isConnectionFailed: vi.fn().mockReturnValue(false),
-    markConnectionFailed: vi.fn(),
-    markConnectionHealthy: vi.fn(),
+    isConnectionFailed: vi.fn(() => connectionFailed),
+    markConnectionFailed: vi.fn(() => {
+      connectionFailed = true
+    }),
+    markConnectionHealthy: vi.fn(() => {
+      connectionFailed = false
+    }),
   }
 
   vi.doMock("@modelcontextprotocol/sdk/client/index.js", () => ({
@@ -354,6 +368,57 @@ describe("mcp-client", () => {
     await mod.getMemoryClient(config)
     expect(mockConnectionState.markConnectionHealthy).toHaveBeenCalled()
   })
+
+  it("retries once on recoverable runtime connection error and succeeds", async () => {
+    const { mod, mockClient } = await setupModule()
+    const config = makeConfig()
+
+    mockClient.callTool
+      .mockRejectedValueOnce(new Error("ECONNREFUSED: server unavailable"))
+      .mockResolvedValueOnce({ content: [] })
+
+    const result = await mod.storeMemory(config, "test content", "semantic")
+
+    expect(result).toBe(true)
+    expect(mockClient.close).toHaveBeenCalledTimes(1)
+    expect(mockClient.connect).toHaveBeenCalledTimes(2)
+    expect(mockConnectionState.markConnectionHealthy).toHaveBeenCalledTimes(2)
+    expect(mockConnectionState.markConnectionFailed).not.toHaveBeenCalled()
+  })
+
+  it("marks connection failed and notifies handler when recoverable retry also fails", async () => {
+    const { mod, mockClient } = await setupModule()
+    const config = makeConfig()
+    const handler = vi.fn()
+
+    mod.registerConnectionFailureHandler(handler)
+
+    mockClient.callTool
+      .mockRejectedValueOnce(new Error("transport closed"))
+      .mockRejectedValueOnce(new Error("transport closed"))
+
+    const result = await mod.storeMemory(config, "test content", "semantic")
+
+    expect(result).toBe(false)
+    expect(mockClient.close).toHaveBeenCalledTimes(2)
+    expect(mockClient.connect).toHaveBeenCalledTimes(2)
+    expect(mockConnectionState.markConnectionFailed).toHaveBeenCalledTimes(1)
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+
+  it("does not retry on non-recoverable runtime tool errors", async () => {
+    const { mod, mockClient } = await setupModule()
+    const config = makeConfig()
+
+    mockClient.callTool.mockRejectedValue(new Error("validation failed"))
+
+    const result = await mod.storeMemory(config, "test content", "semantic")
+
+    expect(result).toBe(false)
+    expect(mockClient.close).not.toHaveBeenCalled()
+    expect(mockClient.connect).toHaveBeenCalledTimes(1)
+    expect(mockConnectionState.markConnectionFailed).not.toHaveBeenCalled()
+  })
 })
 
 describe("tryReconnect", () => {
@@ -615,5 +680,44 @@ describe("HTTP transport", () => {
       name: "project_info",
       arguments: { action: "list" },
     })
+  })
+
+  it("invalidates cached HTTP client when health check fails", async () => {
+    const { mod, mockClient } = await setupModule()
+    const config = makeConfig("http")
+    const handler = vi.fn()
+
+    mod.registerConnectionFailureHandler(handler)
+    await mod.getMemoryClient(config)
+
+    const serverProcess = await import("../../src/services/server-process.js")
+    vi.mocked(serverProcess.isServerRunning).mockResolvedValueOnce(false)
+
+    await expect(mod.getMemoryClient(config)).rejects.toThrow("Memory server unavailable")
+
+    expect(serverProcess.isServerRunning).toHaveBeenCalledWith(config)
+    expect(mockClient.close).toHaveBeenCalledTimes(1)
+    expect(mockConnectionState.markConnectionFailed).toHaveBeenCalledTimes(1)
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+
+  it("throttles cached HTTP client health checks within the throttle window", async () => {
+    const { mod } = await setupModule()
+    const config = makeConfig("http")
+
+    const serverProcess = await import("../../src/services/server-process.js")
+    vi.mocked(serverProcess.isServerRunning).mockResolvedValue(true)
+
+    await mod.getMemoryClient(config)
+    vi.advanceTimersByTime(5_001)
+    await mod.getMemoryClient(config)
+    await mod.getMemoryClient(config)
+
+    expect(serverProcess.isServerRunning).toHaveBeenCalledTimes(1)
+
+    vi.advanceTimersByTime(5_001)
+    await mod.getMemoryClient(config)
+
+    expect(serverProcess.isServerRunning).toHaveBeenCalledTimes(2)
   })
 })

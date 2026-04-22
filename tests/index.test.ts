@@ -24,6 +24,7 @@ vi.mock("../src/services/context-inject.js", () => ({
   shouldInjectProjectKnowledge: vi.fn().mockReturnValue(false),
   shouldInjectCodeIntel: vi.fn().mockReturnValue(false),
   markSessionInjected: vi.fn(),
+  markSessionCompacted: vi.fn(),
   fetchAndFormatMemories: vi.fn().mockResolvedValue(null),
   fetchCodeIntelContext: vi.fn().mockResolvedValue(null),
   fetchProjectKnowledge: vi.fn().mockResolvedValue(null),
@@ -42,6 +43,7 @@ vi.mock("../src/services/mcp-client.js", () => ({
   storeMemory: vi.fn().mockResolvedValue(true),
   disconnectMemoryClient: vi.fn().mockResolvedValue(undefined),
   tryReconnect: vi.fn().mockResolvedValue(true),
+  registerConnectionFailureHandler: vi.fn(),
 }))
 
 vi.mock("../src/services/connection-state.js", () => ({
@@ -106,13 +108,20 @@ const {
   shouldInjectProjectKnowledge,
   shouldInjectCodeIntel,
   markSessionInjected,
+  markSessionCompacted,
   fetchAndFormatMemories,
   fetchCodeIntelContext,
   fetchProjectKnowledge,
 } = await import("../src/services/context-inject.js")
 const { performAutoCapture } = await import("../src/services/auto-capture.js")
 const { buildCompactionRecoveryContext } = await import("../src/services/compaction.js")
-const { getMemoryClient, storeMemory, disconnectMemoryClient, tryReconnect } = await import("../src/services/mcp-client.js")
+const {
+  getMemoryClient,
+  storeMemory,
+  disconnectMemoryClient,
+  tryReconnect,
+  registerConnectionFailureHandler,
+} = await import("../src/services/mcp-client.js")
 const { isConnectionFailed, startRetryLoop, stopRetryLoop } = await import("../src/services/connection-state.js")
 const { summarizeExchange } = await import("../src/services/llm-client.js")
 const { callSessionLLM } = await import("../src/services/session-llm.js")
@@ -283,6 +292,51 @@ describe("plugin factory", () => {
     )
   })
 
+  it("registers a runtime connection failure handler", async () => {
+    await initPlugin()
+
+    expect(registerConnectionFailureHandler).toHaveBeenCalledWith(expect.any(Function))
+  })
+
+  it("runtime connection failure shows toast and starts retry loop once", async () => {
+    const { input } = await initPlugin()
+
+    const runtimeFailureHandler = vi.mocked(registerConnectionFailureHandler).mock.calls[0]?.[0] as (() => void) | null
+    expect(runtimeFailureHandler).toBeTypeOf("function")
+
+    runtimeFailureHandler?.()
+    runtimeFailureHandler?.()
+
+    expect(input.client.tui.showToast).toHaveBeenCalledWith({
+      body: expect.objectContaining({
+        message: "Memory server connection lost — retrying in background",
+        variant: "error",
+      }),
+    })
+    expect(startRetryLoop).toHaveBeenCalledTimes(1)
+  })
+
+  it("retry loop success callback resets runtime guard and shows reconnect toast", async () => {
+    const { input } = await initPlugin()
+
+    const runtimeFailureHandler = vi.mocked(registerConnectionFailureHandler).mock.calls[0]?.[0] as (() => void) | null
+    runtimeFailureHandler?.()
+
+    const onSuccess = vi.mocked(startRetryLoop).mock.calls[0]?.[2] as (() => void) | undefined
+    expect(onSuccess).toBeTypeOf("function")
+
+    onSuccess?.()
+    runtimeFailureHandler?.()
+
+    expect(input.client.tui.showToast).toHaveBeenCalledWith({
+      body: expect.objectContaining({
+        message: "Memory server reconnected!",
+        variant: "success",
+      }),
+    })
+    expect(startRetryLoop).toHaveBeenCalledTimes(2)
+  })
+
   it("does not start retry loop on successful connection", async () => {
     const config = makeConfig()
     vi.mocked(loadConfig).mockReturnValue(config)
@@ -309,6 +363,7 @@ describe("plugin factory", () => {
     await vi.advanceTimersByTimeAsync(0)
     expect(resetCodeIndexSyncState).toHaveBeenCalled()
     expect(stopRetryLoop).toHaveBeenCalled()
+    expect(registerConnectionFailureHandler).toHaveBeenLastCalledWith(null)
     expect(disconnectMemoryClient).toHaveBeenCalled()
   })
 
@@ -933,6 +988,7 @@ describe("event handler: session.compacted", () => {
     })
 
     expect(resetSessionState).toHaveBeenCalledWith("s-cmp")
+    expect(markSessionCompacted).toHaveBeenCalledWith("s-cmp")
     expect(buildCompactionRecoveryContext).toHaveBeenCalled()
   })
 
@@ -994,6 +1050,7 @@ describe("event handler: session.compacted", () => {
       event: { type: "session.compacted", properties: { sessionID: "s1" } },
     })
 
+    expect(markSessionCompacted).not.toHaveBeenCalled()
     expect(resetSessionState).not.toHaveBeenCalled()
     expect(buildCompactionRecoveryContext).not.toHaveBeenCalled()
   })
@@ -1005,6 +1062,7 @@ describe("event handler: session.compacted", () => {
       event: { type: "session.compacted", properties: {} },
     })
 
+    expect(markSessionCompacted).not.toHaveBeenCalled()
     expect(resetSessionState).not.toHaveBeenCalled()
   })
 

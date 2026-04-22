@@ -1,6 +1,27 @@
 import type { PluginConfig } from "../config.js"
 import { logger } from "../utils/logger.js"
 
+const SESSION_LLM_TIMEOUT_MS = 30_000
+
+function withTimeout<T>(operation: Promise<T>, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${SESSION_LLM_TIMEOUT_MS}ms`))
+    }, SESSION_LLM_TIMEOUT_MS)
+
+    operation.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (err) => {
+        clearTimeout(timer)
+        reject(err)
+      },
+    )
+  })
+}
+
 /**
  * Client interface matching the subset of OpencodeClient used for session-based LLM calls.
  * Extracted to keep this module testable without importing full SDK types.
@@ -45,9 +66,12 @@ export async function callSessionLLM(
   let sessionId: string | undefined
 
   try {
-    const createResult = await client.session.create({
-      body: { title },
-    })
+    const createResult = await withTimeout(
+      client.session.create({
+        body: { title },
+      }),
+      "session.create()",
+    )
 
     sessionId = createResult.data?.id
     if (!sessionId) {
@@ -59,14 +83,17 @@ export async function callSessionLLM(
         ? { providerID: config.captureModel.provider, modelID: config.captureModel.model }
         : undefined
 
-    const promptResult = await client.session.prompt({
-      path: { id: sessionId },
-      body: {
-        model,
-        tools: {},
-        parts: [{ type: "text" as const, text: prompt }],
-      },
-    })
+    const promptResult = await withTimeout(
+      client.session.prompt({
+        path: { id: sessionId },
+        body: {
+          model,
+          tools: {},
+          parts: [{ type: "text" as const, text: prompt }],
+        },
+      }),
+      "session.prompt()",
+    )
 
     const parts = promptResult.data?.parts ?? []
     const textParts = parts.filter(
@@ -83,7 +110,7 @@ export async function callSessionLLM(
   } finally {
     if (sessionId) {
       try {
-        await client.session.delete({ path: { id: sessionId } })
+        await withTimeout(client.session.delete({ path: { id: sessionId } }), "session.delete()")
       } catch (deleteErr) {
         logger.error("failed to delete ephemeral capture session", {
           sessionId,
