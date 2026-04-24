@@ -90,6 +90,10 @@ export interface PluginConfig {
     port: number
     /** Bind address for HTTP transport (default: "127.0.0.1") */
     bind: string
+    /** Background reconnect interval after a connection failure (default: 30000) */
+    reconnectIntervalMs: number
+    /** HTTP-only keepalive interval while a client connection is active (default: 20000) */
+    heartbeatIntervalMs: number
   }
   systemPrompt: {
     enabled: boolean
@@ -166,6 +170,8 @@ const DEFAULT_CONFIG: PluginConfig = {
     transport: "stdio",
     port: 23817,
     bind: "127.0.0.1",
+    reconnectIntervalMs: 30_000,
+    heartbeatIntervalMs: 20_000,
   },
   systemPrompt: {
     enabled: true,

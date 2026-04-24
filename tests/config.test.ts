@@ -25,7 +25,7 @@ function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
     codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
     captureModel: { provider: "", model: "", apiUrl: "", apiKey: "" },
     memoryScope: { namespace: "", shareAcrossAgents: true, includeAgentMetadata: true, includeRunMetadata: false, userId: "", defaultMetadata: {} },
-    mcpServer: { command: ["npm", "exec", "-y", "memory-mcp-1file", "--"], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1" },
+    mcpServer: { command: ["npm", "exec", "-y", "memory-mcp-1file", "--"], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1", reconnectIntervalMs: 30000, heartbeatIntervalMs: 20000 },
     systemPrompt: { enabled: true },
     ...overrides,
   } as PluginConfig
@@ -75,6 +75,8 @@ describe("loadConfig", () => {
     expect(config.codeIndexSync.enabled).toBe(true)
     expect(config.memoryScope.shareAcrossAgents).toBe(true)
     expect(config.memoryScope.includeAgentMetadata).toBe(true)
+    expect(config.mcpServer.reconnectIntervalMs).toBe(30000)
+    expect(config.mcpServer.heartbeatIntervalMs).toBe(20000)
   })
 
   it("loads and merges JSONC config file", () => {
@@ -93,6 +95,27 @@ describe("loadConfig", () => {
     expect(config.chatMessage.maxMemories).toBe(10)
     expect(config.chatMessage.enabled).toBe(true)
     expect(config.privacy.enabled).toBe(false)
+  })
+
+  it("merges nested mcpServer timing overrides", () => {
+    vi.mocked(existsSync).mockImplementation((p) =>
+      String(p).endsWith("opencode-mmcp-1file.jsonc"),
+    )
+    vi.mocked(readFileSync).mockReturnValue(
+      `{
+        "mcpServer": {
+          "transport": "http",
+          "reconnectIntervalMs": 45000,
+          "heartbeatIntervalMs": 15000
+        }
+      }`,
+    )
+
+    const config = loadConfig("/dir")
+    expect(config.mcpServer.transport).toBe("http")
+    expect(config.mcpServer.reconnectIntervalMs).toBe(45000)
+    expect(config.mcpServer.heartbeatIntervalMs).toBe(15000)
+    expect(config.mcpServer.port).toBe(23817)
   })
 
   it("strips block comments from JSONC", () => {
@@ -260,7 +283,7 @@ describe("applyConfig", () => {
         userId: "",
         defaultMetadata: {},
       },
-      mcpServer: { command: ["npm", "exec", "-y", "memory-mcp-1file", "--"], tag: "", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1" },
+      mcpServer: { command: ["npm", "exec", "-y", "memory-mcp-1file", "--"], tag: "", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1", reconnectIntervalMs: 30000, heartbeatIntervalMs: 20000 },
     })
     const changed = applyConfig(target)
     expect(changed).toEqual([])

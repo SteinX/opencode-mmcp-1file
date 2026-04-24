@@ -96,7 +96,9 @@
     // "commandPath": "",            // Override: path to custom binary (replaces command array, plugin still appends flags)
     "transport": "stdio",            // "stdio" = one server per plugin process; "http" = shared server via HTTP
     "port": 23817,                   // HTTP mode: server port (ignored in stdio mode)
-    "bind": "127.0.0.1"             // HTTP mode: server bind address (ignored in stdio mode)
+    "bind": "127.0.0.1",            // HTTP mode: server bind address (ignored in stdio mode)
+    "reconnectIntervalMs": 30000,    // Background reconnect cadence after failures
+    "heartbeatIntervalMs": 20000     // HTTP mode: keepalive/liveness check while connected
   },
 
   // System prompt injection — guides agent on memory tool usage
