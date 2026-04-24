@@ -15,6 +15,7 @@ import { dirname, join, relative } from "node:path"
 import type { PluginConfig } from "../config.js"
 import { resolveDataDir } from "../config.js"
 import { callMemoryTool } from "./mcp-client.js"
+import { shouldCoordinateCodeIndexSync } from "./server-process.js"
 import { logger } from "../utils/logger.js"
 
 type SyncReason = "startup" | "session.idle"
@@ -25,13 +26,18 @@ interface SyncMetadata {
   lastReindexAt: number
 }
 
+interface SyncStateFile {
+  version: 2
+  workspaces: Record<string, SyncMetadata>
+}
+
 interface LockMetadata {
   pid: number
   startedAt: number
 }
 
 const INDEX_STATE_FILE = ".code-index-sync.json"
-const INDEX_LOCK_FILE = ".code-index-sync.lock"
+const INDEX_LOCK_FILE_PREFIX = ".code-index-sync"
 const LOCK_STALE_MS = 15 * 60_000
 const scheduledRuns = new Map<string, ReturnType<typeof setTimeout>>()
 const inFlightRuns = new Set<string>()
@@ -103,29 +109,62 @@ function getIndexStatePath(config: PluginConfig): string | null {
   return join(dataDir, INDEX_STATE_FILE)
 }
 
-function getIndexLockPath(config: PluginConfig): string | null {
+function getWorkspaceStateKey(workspaceDir: string): string {
+  return createHash("sha1").update(workspaceDir).digest("hex")
+}
+
+function getIndexLockPath(config: PluginConfig, workspaceDir: string): string | null {
   const dataDir = resolveDataDir(config)
   if (!dataDir) return null
-  return join(dataDir, INDEX_LOCK_FILE)
+  return join(dataDir, `${INDEX_LOCK_FILE_PREFIX}.${getWorkspaceStateKey(workspaceDir)}.lock`)
 }
 
 function getWorkspaceKey(config: PluginConfig, workspaceDir: string): string {
   return `${resolveDataDir(config) || "no-data-dir"}:${workspaceDir}`
 }
 
-function readSyncMetadata(config: PluginConfig): SyncMetadata | null {
+function isSyncMetadata(raw: unknown): raw is SyncMetadata {
+  if (!raw || typeof raw !== "object") return false
+  const candidate = raw as Partial<SyncMetadata>
+  return (
+    typeof candidate.workspaceDir === "string"
+    && typeof candidate.fingerprint === "string"
+    && typeof candidate.lastReindexAt === "number"
+  )
+}
+
+function readSyncState(config: PluginConfig): SyncStateFile | null {
   const statePath = getIndexStatePath(config)
   if (!statePath || !existsSync(statePath)) return null
 
   try {
-    const raw = JSON.parse(readFileSync(statePath, "utf-8")) as Partial<SyncMetadata>
-    if (typeof raw.workspaceDir !== "string") return null
-    if (typeof raw.fingerprint !== "string") return null
-    if (typeof raw.lastReindexAt !== "number") return null
+    const raw = JSON.parse(readFileSync(statePath, "utf-8")) as unknown
+
+    if (isSyncMetadata(raw)) {
+      const migratedState: SyncStateFile = {
+        version: 2,
+        workspaces: {
+          [getWorkspaceStateKey(raw.workspaceDir)]: raw,
+        },
+      }
+      writeSyncState(config, migratedState)
+      return migratedState
+    }
+
+    if (!raw || typeof raw !== "object") return null
+    const candidate = raw as Partial<SyncStateFile>
+    const rawWorkspaces = candidate.workspaces
+    if (candidate.version !== 2 || !rawWorkspaces || typeof rawWorkspaces !== "object") return null
+
+    const workspaces: Record<string, SyncMetadata> = {}
+    for (const [key, value] of Object.entries(rawWorkspaces)) {
+      if (!isSyncMetadata(value)) continue
+      workspaces[key] = value
+    }
+
     return {
-      workspaceDir: raw.workspaceDir,
-      fingerprint: raw.fingerprint,
-      lastReindexAt: raw.lastReindexAt,
+      version: 2,
+      workspaces,
     }
   } catch (err) {
     logger.debug("Failed to read code index sync metadata", { error: String(err) })
@@ -133,14 +172,26 @@ function readSyncMetadata(config: PluginConfig): SyncMetadata | null {
   }
 }
 
-function writeSyncMetadata(config: PluginConfig, metadata: SyncMetadata): void {
+function writeSyncState(config: PluginConfig, state: SyncStateFile): void {
   const statePath = getIndexStatePath(config)
   if (!statePath) return
 
   mkdirSync(dirname(statePath), { recursive: true })
   const tmpPath = `${statePath}.${randomBytes(4).toString("hex")}.tmp`
-  writeFileSync(tmpPath, JSON.stringify(metadata, null, 2), "utf-8")
+  writeFileSync(tmpPath, JSON.stringify(state, null, 2), "utf-8")
   renameSync(tmpPath, statePath)
+}
+
+function readWorkspaceSyncMetadata(config: PluginConfig, workspaceDir: string): SyncMetadata | null {
+  const state = readSyncState(config)
+  if (!state) return null
+  return state.workspaces[getWorkspaceStateKey(workspaceDir)] ?? null
+}
+
+function writeWorkspaceSyncMetadata(config: PluginConfig, workspaceDir: string, metadata: SyncMetadata): void {
+  const state = readSyncState(config) ?? { version: 2 as const, workspaces: {} }
+  state.workspaces[getWorkspaceStateKey(workspaceDir)] = metadata
+  writeSyncState(config, state)
 }
 
 function shouldTrackPathForCodeIndex(path: string): boolean {
@@ -253,7 +304,7 @@ async function runReindex(config: PluginConfig, workspaceDir: string, reason: Sy
   const workspaceKey = getWorkspaceKey(config, workspaceDir)
   if (inFlightRuns.has(workspaceKey)) return
 
-  const lockPath = getIndexLockPath(config)
+  const lockPath = getIndexLockPath(config, workspaceDir)
   if (!lockPath) return
   if (!acquireLock(lockPath)) {
     logger.debug("Skipping code index sync because another process holds the lock", {
@@ -269,12 +320,12 @@ async function runReindex(config: PluginConfig, workspaceDir: string, reason: Sy
     const fingerprint = computeWorkspaceFingerprint(workspaceDir)
     if (!fingerprint) return
 
-    const metadata = readSyncMetadata(config)
-    if (metadata?.workspaceDir === workspaceDir && metadata.fingerprint === fingerprint) return
+    const metadata = readWorkspaceSyncMetadata(config, workspaceDir)
+    if (metadata?.fingerprint === fingerprint) return
 
     logger.info("Refreshing code intelligence index", { workspaceDir, reason })
     await callMemoryTool(config, "index_project", { path: workspaceDir, force: true })
-    writeSyncMetadata(config, {
+    writeWorkspaceSyncMetadata(config, workspaceDir, {
       workspaceDir,
       fingerprint,
       lastReindexAt: Date.now(),
@@ -298,13 +349,22 @@ export async function ensureCodeIndexFresh(
 ): Promise<void> {
   if (!config.codeIndexSync.enabled || !workspaceDir) return
 
+  const shouldCoordinate = await shouldCoordinateCodeIndexSync(config)
+  if (!shouldCoordinate) {
+    logger.debug("Skipping code index sync coordination in non-leader HTTP client", {
+      workspaceDir,
+      reason,
+    })
+    return
+  }
+
   const fingerprint = computeWorkspaceFingerprint(workspaceDir)
   if (!fingerprint) return
 
-  const metadata = readSyncMetadata(config)
-  if (metadata?.workspaceDir === workspaceDir && metadata.fingerprint === fingerprint) return
+  const metadata = readWorkspaceSyncMetadata(config, workspaceDir)
+  if (metadata?.fingerprint === fingerprint) return
 
-  const timeSinceLastReindex = metadata?.workspaceDir === workspaceDir
+  const timeSinceLastReindex = metadata
     ? Date.now() - metadata.lastReindexAt
     : Number.POSITIVE_INFINITY
   if (timeSinceLastReindex < config.codeIndexSync.minReindexIntervalMs) {
@@ -338,11 +398,13 @@ export function resetCodeIndexSyncState(): void {
 export function __testOnly(): {
   getIndexStatePath: typeof getIndexStatePath
   getIndexLockPath: typeof getIndexLockPath
+  getWorkspaceStateKey: typeof getWorkspaceStateKey
   shouldTrackPathForCodeIndex: typeof shouldTrackPathForCodeIndex
 } {
   return {
     getIndexStatePath,
     getIndexLockPath,
+    getWorkspaceStateKey,
     shouldTrackPathForCodeIndex,
   }
 }

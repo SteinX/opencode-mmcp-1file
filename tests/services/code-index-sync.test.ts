@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import type { PluginConfig } from "../../src/config.js"
 
 vi.mock("../../src/services/mcp-client.js", () => ({
   callMemoryTool: vi.fn().mockResolvedValue('{"status":"ok"}'),
+}))
+
+vi.mock("../../src/services/server-process.js", () => ({
+  shouldCoordinateCodeIndexSync: vi.fn().mockResolvedValue(true),
 }))
 
 vi.mock("../../src/utils/logger.js", () => ({
@@ -18,6 +22,7 @@ vi.mock("../../src/utils/logger.js", () => ({
 }))
 
 const { callMemoryTool } = await import("../../src/services/mcp-client.js")
+const { shouldCoordinateCodeIndexSync } = await import("../../src/services/server-process.js")
 const {
   __testOnly,
   computeWorkspaceFingerprint,
@@ -46,6 +51,8 @@ function makeConfig(dataDir: string): PluginConfig {
       transport: "stdio",
       port: 23817,
       bind: "127.0.0.1",
+      reconnectIntervalMs: 30000,
+      heartbeatIntervalMs: 20000,
     },
     systemPrompt: { enabled: true },
   }
@@ -54,6 +61,7 @@ function makeConfig(dataDir: string): PluginConfig {
 describe("code-index-sync", () => {
   let rootDir: string
   let workspaceDir: string
+  let secondWorkspaceDir: string
   let dataDir: string
 
   beforeEach(() => {
@@ -61,12 +69,17 @@ describe("code-index-sync", () => {
     vi.clearAllMocks()
     rootDir = mkdtempSync(join(tmpdir(), "mmcp-code-index-sync-"))
     workspaceDir = join(rootDir, "workspace")
+    secondWorkspaceDir = join(rootDir, "workspace-2")
     dataDir = join(rootDir, "data")
     mkdirSync(workspaceDir, { recursive: true })
+    mkdirSync(secondWorkspaceDir, { recursive: true })
     mkdirSync(join(workspaceDir, "src"), { recursive: true })
+    mkdirSync(join(secondWorkspaceDir, "src"), { recursive: true })
     mkdirSync(dataDir, { recursive: true })
     writeFileSync(join(workspaceDir, "package.json"), '{"name":"fixture"}')
     writeFileSync(join(workspaceDir, "src", "index.ts"), "export const value = 1\n")
+    writeFileSync(join(secondWorkspaceDir, "package.json"), '{"name":"fixture-2"}')
+    writeFileSync(join(secondWorkspaceDir, "src", "index.ts"), "export const value = 10\n")
   })
 
   afterEach(() => {
@@ -104,11 +117,13 @@ describe("code-index-sync", () => {
     const statePath = __testOnly().getIndexStatePath(config)
     expect(statePath).toBeTruthy()
     const saved = JSON.parse(readFileSync(statePath!, "utf-8")) as {
-      fingerprint: string
-      lastReindexAt: number
+      version: number
+      workspaces: Record<string, { fingerprint: string; lastReindexAt: number }>
     }
-    expect(saved.fingerprint).toBe(computeWorkspaceFingerprint(workspaceDir))
-    expect(saved.lastReindexAt).toBeGreaterThan(0)
+    const workspaceKey = __testOnly().getWorkspaceStateKey(workspaceDir)
+    expect(saved.version).toBe(2)
+    expect(saved.workspaces[workspaceKey]?.fingerprint).toBe(computeWorkspaceFingerprint(workspaceDir))
+    expect(saved.workspaces[workspaceKey]?.lastReindexAt).toBeGreaterThan(0)
   })
 
   it("skips reindex when fingerprint matches saved state", async () => {
@@ -138,5 +153,74 @@ describe("code-index-sync", () => {
     await vi.advanceTimersByTimeAsync(50)
 
     expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+
+  it("skips coordination entirely in non-leader HTTP clients", async () => {
+    const config = makeConfig(dataDir)
+    config.mcpServer.transport = "http"
+    vi.mocked(shouldCoordinateCodeIndexSync).mockResolvedValueOnce(false)
+
+    await ensureCodeIndexFresh(config, workspaceDir, "startup")
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(shouldCoordinateCodeIndexSync).toHaveBeenCalledWith(config)
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+
+  it("migrates legacy single-workspace metadata into workspace-scoped state", async () => {
+    const config = makeConfig(dataDir)
+    const statePath = __testOnly().getIndexStatePath(config)
+    const fingerprint = computeWorkspaceFingerprint(workspaceDir)
+    expect(statePath).toBeTruthy()
+    expect(fingerprint).toBeTruthy()
+
+    writeFileSync(statePath!, JSON.stringify({
+      workspaceDir,
+      fingerprint,
+      lastReindexAt: Date.now(),
+    }, null, 2))
+
+    await ensureCodeIndexFresh(config, workspaceDir, "session.idle")
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(callMemoryTool).not.toHaveBeenCalled()
+
+    const saved = JSON.parse(readFileSync(statePath!, "utf-8")) as {
+      version: number
+      workspaces: Record<string, { workspaceDir: string; fingerprint: string; lastReindexAt: number }>
+    }
+    const workspaceKey = __testOnly().getWorkspaceStateKey(workspaceDir)
+    expect(saved.version).toBe(2)
+    expect(saved.workspaces[workspaceKey]?.workspaceDir).toBe(workspaceDir)
+    expect(saved.workspaces[workspaceKey]?.fingerprint).toBe(fingerprint)
+  })
+
+  it("tracks cooldown separately for different workspaces in the same dataDir", async () => {
+    const config = makeConfig(dataDir)
+
+    await ensureCodeIndexFresh(config, workspaceDir, "startup")
+    await vi.advanceTimersByTimeAsync(50)
+    vi.mocked(callMemoryTool).mockClear()
+
+    await ensureCodeIndexFresh(config, secondWorkspaceDir, "startup")
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(callMemoryTool).toHaveBeenCalledTimes(1)
+    expect(callMemoryTool).toHaveBeenCalledWith(config, "index_project", {
+      path: secondWorkspaceDir,
+      force: true,
+    })
+  })
+
+  it("uses different lock files for different workspaces", () => {
+    const config = makeConfig(dataDir)
+    const firstLockPath = __testOnly().getIndexLockPath(config, workspaceDir)
+    const secondLockPath = __testOnly().getIndexLockPath(config, secondWorkspaceDir)
+
+    expect(firstLockPath).toBeTruthy()
+    expect(secondLockPath).toBeTruthy()
+    expect(firstLockPath).not.toBe(secondLockPath)
+    expect(existsSync(firstLockPath!)).toBe(false)
+    expect(existsSync(secondLockPath!)).toBe(false)
   })
 })
