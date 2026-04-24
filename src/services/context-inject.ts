@@ -2,7 +2,7 @@ import type { PluginConfig, TierConfig } from "../config.js"
 import {
   recallMemories,
   listProjectMemories,
-  callMemoryTool,
+  getProjectListInfo,
   type RetrievalResult,
   type MemoryOperationContext,
 } from "./mcp-client.js"
@@ -213,18 +213,10 @@ export async function fetchCodeIntelContext(
   config: PluginConfig,
 ): Promise<string | null> {
   try {
-    const raw = await callMemoryTool(config, "project_info", { action: "list" })
-    if (!raw) return null
+    const info = await getProjectListInfo(config)
+    if (!info) return null
 
-    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw
-    const projects: Array<{
-      id: string
-      status: string
-      chunks?: number
-      symbols?: number
-    }> = parsed.projects ?? []
-
-    const indexed = projects.filter(
+    const indexed = info.projects.filter(
       (project) => project.status === "completed" || project.status === "indexed",
     )
     if (indexed.length === 0) return null

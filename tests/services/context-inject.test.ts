@@ -15,14 +15,14 @@ import type { PluginConfig } from "../../src/config.js"
 vi.mock("../../src/services/mcp-client.js", () => ({
   recallMemories: vi.fn().mockResolvedValue({ status: "empty", source: "recall", memories: [] }),
   listProjectMemories: vi.fn().mockResolvedValue({ status: "empty", source: "list", memories: [] }),
-  callMemoryTool: vi.fn().mockResolvedValue("{}"),
+  getProjectListInfo: vi.fn().mockResolvedValue({ action: "list", projects: [] }),
 }))
 
 vi.mock("../../src/utils/logger.js", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }))
 
-const { recallMemories, listProjectMemories, callMemoryTool } = await import("../../src/services/mcp-client.js")
+const { recallMemories, listProjectMemories, getProjectListInfo } = await import("../../src/services/mcp-client.js")
 
 const DEFAULT_TIERS: TierConfig[] = [
   { categories: ["USER"], limit: 5 },
@@ -55,7 +55,7 @@ function makeConfig(overrides?: { chatMessage?: Partial<PluginConfig["chatMessag
     codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
     captureModel: { provider: "openai", model: "gpt-4o-mini", apiUrl: "", apiKey: "" },
     memoryScope: { namespace: "", shareAcrossAgents: true, includeAgentMetadata: true, includeRunMetadata: false, userId: "", defaultMetadata: {}, ...overrides?.memoryScope },
-    mcpServer: { command: ["npx", "-y", "memory-mcp-1file"], tag: "default", model: "qwen3", transport: "http", port: 23817, bind: "127.0.0.1", mcpServerName: "memory-mcp-1file" },
+    mcpServer: { command: ["npx", "-y", "memory-mcp-1file"], tag: "default", model: "qwen3", transport: "http", port: 23817, bind: "127.0.0.1", reconnectIntervalMs: 30000, heartbeatIntervalMs: 20000, mcpServerName: "memory-mcp-1file" },
     systemPrompt: { enabled: true },
   } as PluginConfig
 }
@@ -330,29 +330,30 @@ describe("fetchCodeIntelContext", () => {
 
   it("returns null when no projects are indexed", async () => {
     const config = makeConfig()
-    vi.mocked(callMemoryTool).mockResolvedValue(JSON.stringify({ projects: [], count: 0 }))
+    vi.mocked(getProjectListInfo).mockResolvedValue({ action: "list", projects: [], raw: {} } as any)
     const result = await fetchCodeIntelContext(config)
     expect(result).toBeNull()
-    expect(callMemoryTool).toHaveBeenCalledWith(config, "project_info", { action: "list" })
+    expect(getProjectListInfo).toHaveBeenCalledWith(config)
   })
 
   it("returns null when all projects are still indexing", async () => {
     const config = makeConfig()
-    vi.mocked(callMemoryTool).mockResolvedValue(
-      JSON.stringify({ projects: [{ id: "proj-1", status: "indexing", chunks: 0, symbols: 0 }], count: 1 }),
-    )
+    vi.mocked(getProjectListInfo).mockResolvedValue({
+      action: "list",
+      projects: [{ id: "proj-1", status: "indexing", chunks: 0, symbols: 0, raw: {} }],
+      raw: {},
+    } as any)
     const result = await fetchCodeIntelContext(config)
     expect(result).toBeNull()
   })
 
   it("returns context string for completed projects", async () => {
     const config = makeConfig()
-    vi.mocked(callMemoryTool).mockResolvedValue(
-      JSON.stringify({
-        projects: [{ id: "my-project", status: "completed", chunks: 500, symbols: 120 }],
-        count: 1,
-      }),
-    )
+    vi.mocked(getProjectListInfo).mockResolvedValue({
+      action: "list",
+      projects: [{ id: "my-project", status: "completed", chunks: 500, symbols: 120, raw: {} }],
+      raw: {},
+    } as any)
     const result = await fetchCodeIntelContext(config)
     expect(result).not.toBeNull()
     expect(result).toContain("[CODE INTELLIGENCE]")
@@ -365,15 +366,14 @@ describe("fetchCodeIntelContext", () => {
 
   it("filters out non-completed projects", async () => {
     const config = makeConfig()
-    vi.mocked(callMemoryTool).mockResolvedValue(
-      JSON.stringify({
-        projects: [
-          { id: "done-proj", status: "completed", chunks: 100, symbols: 50 },
-          { id: "wip-proj", status: "indexing", chunks: 10, symbols: 5 },
-        ],
-        count: 2,
-      }),
-    )
+    vi.mocked(getProjectListInfo).mockResolvedValue({
+      action: "list",
+      projects: [
+        { id: "done-proj", status: "completed", chunks: 100, symbols: 50, raw: {} },
+        { id: "wip-proj", status: "indexing", chunks: 10, symbols: 5, raw: {} },
+      ],
+      raw: {},
+    } as any)
     const result = await fetchCodeIntelContext(config)
     expect(result).toContain("done-proj")
     expect(result).not.toContain("wip-proj")
@@ -381,27 +381,26 @@ describe("fetchCodeIntelContext", () => {
 
   it("accepts 'indexed' status as completed", async () => {
     const config = makeConfig()
-    vi.mocked(callMemoryTool).mockResolvedValue(
-      JSON.stringify({
-        projects: [{ id: "indexed-proj", status: "indexed", chunks: 200, symbols: 80 }],
-        count: 1,
-      }),
-    )
+    vi.mocked(getProjectListInfo).mockResolvedValue({
+      action: "list",
+      projects: [{ id: "indexed-proj", status: "indexed", chunks: 200, symbols: 80, raw: {} }],
+      raw: {},
+    } as any)
     const result = await fetchCodeIntelContext(config)
     expect(result).not.toBeNull()
     expect(result).toContain("indexed-proj")
   })
 
-  it("returns null and does not throw when callMemoryTool fails", async () => {
+  it("returns null and does not throw when project list lookup fails", async () => {
     const config = makeConfig()
-    vi.mocked(callMemoryTool).mockRejectedValue(new Error("connection refused"))
+    vi.mocked(getProjectListInfo).mockRejectedValue(new Error("connection refused"))
     const result = await fetchCodeIntelContext(config)
     expect(result).toBeNull()
   })
 
-  it("returns null when callMemoryTool returns null", async () => {
+  it("returns null when project list lookup returns null", async () => {
     const config = makeConfig()
-    vi.mocked(callMemoryTool).mockResolvedValue(null as any)
+    vi.mocked(getProjectListInfo).mockResolvedValue(null as any)
     const result = await fetchCodeIntelContext(config)
     expect(result).toBeNull()
   })
