@@ -73,7 +73,7 @@ const plugin: Plugin = async (input) => {
   const ensureRetryLoop = () => {
     if (retryLoopStarted) return
     retryLoopStarted = true
-    startRetryLoop(() => tryReconnect(config), 30_000, handleReconnectSuccess)
+    startRetryLoop(() => tryReconnect(config), config.mcpServer.reconnectIntervalMs, handleReconnectSuccess)
   }
 
   registerConnectionFailureHandler(() => {

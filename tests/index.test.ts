@@ -151,7 +151,7 @@ function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
     compactionSummaryCapture: { enabled: true },
     codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
     captureModel: { provider: "openai", model: "gpt-4o-mini", apiUrl: "", apiKey: "test-key" },
-    mcpServer: { command: ["npx", "-y", "memory-mcp-1file"], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1" },
+    mcpServer: { command: ["npx", "-y", "memory-mcp-1file"], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1", reconnectIntervalMs: 30000, heartbeatIntervalMs: 20000 },
     systemPrompt: { enabled: true },
     ...overrides,
   } as PluginConfig
