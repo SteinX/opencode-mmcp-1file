@@ -25,8 +25,8 @@ The plugin now distinguishes between a **physical storage shard** and a **logica
   - `memory_save` — Smart storage with auto-categorization (DECISION, TASK, PATTERN, BUGFIX, etc.) and privacy filtering.
   - `memory_manage` — Memory lifecycle: get, update, delete, or invalidate by ID.
   - `code_search` — Unified code intelligence: intent-based search, symbol lookup, and call graph traversal (callers/callees/related).
-  - `project_status` — Project indexing: list indexed projects, index new ones, or view code statistics.
-  - `knowledge_graph` — Create entities/relations, query relationships, detect communities.
+  - `project_status` — Project indexing and projections: list indexed projects, index new ones, view code statistics, build short-lived projections, or read them back by ephemeral locator.
+- `knowledge_graph` — Map and query architectural relationships between codebase components. Use when analyzing system architecture, tracing module dependencies, or recording structural relationships. Actions: create_entity, create_relation, get_related, detect_communities.
   - `get_status` — Memory system status and startup progress.
   - `reload_config` — Hot-reload configuration from disk without restart.
 - **System Prompt Guidance** — Injects a Memory Protocol into the system prompt via `experimental.chat.system.transform`, teaching the agent when and how to use memory tools, prefix conventions, memory lifecycle, action triggers, and anti-patterns.
@@ -38,7 +38,7 @@ The plugin now distinguishes between a **physical storage shard** and a **logica
 
 - **Memory Injection** — Injects query recall, project knowledge, and code-intelligence guidance independently, with per-source injection strategies, score filtering, dedupe, and source-specific budgets before synthetic context is added.
 - **Auto-Capture** — When session goes idle (10s default), extracts the latest exchange, summarizes it via an external LLM, and stores with AGENTS.md-compatible prefixes.
-- **Code Index Sync** — On startup and idle, computes a lightweight workspace fingerprint and refreshes stale code indexes in the background with debounce, cooldown, and single-flight locking.
+- **Code Index Sync** — On startup and idle, computes a lightweight workspace fingerprint and refreshes stale code indexes in the background with debounce, cooldown, and single-flight locking. Sync metadata, cooldown, and lock contention are tracked per workspace inside the current shard. In HTTP mode, only the shared server's primary live holder coordinates freshness checks; follower clients skip redundant coordination work.
 - **Compaction Recovery** — After context compaction, injects recovery guidance and relevant memories via `experimental.session.compacting` hook. Instructs the agent to use `memory_query` to restore in-progress tasks and project context.
 - **Preemptive Compaction** — Tracks estimated token usage per session. When approaching model context limit (default 80%), triggers early compaction with memory context preserved.
 - **Privacy Filtering** — Content wrapped in `<private>...</private>` is stripped to `[REDACTED]` before storing. Also intercepts agent's direct raw MCP `store_memory`/`update_memory` calls via `tool.execute.before`.
@@ -162,7 +162,9 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
     // "commandPath": "",            // Override: path to custom binary (plugin appends flags automatically)
     "transport": "stdio",            // "stdio" or "http" — HTTP mode shares one server across processes
     "port": 23817,                   // HTTP mode: server listen port
-    "bind": "127.0.0.1"             // HTTP mode: server bind address
+    "bind": "127.0.0.1",            // HTTP mode: server bind address
+    "reconnectIntervalMs": 30000,    // Background reconnect cadence after failures
+    "heartbeatIntervalMs": 20000     // HTTP mode: keepalive/liveness check while connected
   },
 
   // System prompt injection — guides agent on memory tool usage
@@ -186,7 +188,7 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
 | **codeIndexSync** | Detects stale workspace indexes and refreshes code intelligence in the background |
 | **captureModel** | LLM for auto-capture summarization — uses direct HTTP when apiKey is set, otherwise OpenCode session API |
 | **memoryScope** | Logical scope, agent-sharing defaults, and default metadata layered inside the current shard |
-| **mcpServer** | [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server command, physical data shard, embedding model, and transport mode (stdio or HTTP) |
+| **mcpServer** | [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server command, physical data shard, embedding model, transport mode, and HTTP reconnect/heartbeat timing |
 | **systemPrompt** | Agent guidance via Memory Protocol in system prompt |
 
 By default, `USER:` memories are prioritized ahead of `DECISION:`, `PATTERN:`, and `CONTEXT:` in Project Knowledge. This keeps explicit user-requested memories more visible during session bootstrap and compaction recovery.
@@ -248,7 +250,7 @@ Plugin hooks (index.ts)
         ↓
   Services layer (src/services/)
     ├── tool-registry.ts  → register 8 unified tools (consolidating 17 MCP operations)
-    ├── mcp-client.ts     → stdio/HTTP transport + retrieval status contract
+    ├── mcp-client.ts     → stdio/HTTP transport + centralized contract adapters
     ├── system-prompt.ts  → Memory Protocol prompt builder
     ├── auto-capture.ts   → LLM summarization + store
     ├── code-index-sync.ts → fingerprinting + background re-index
@@ -264,6 +266,8 @@ Plugin hooks (index.ts)
 ## How It Works
 
 The plugin spawns a [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server via stdio and registers 8 unified tools that consolidate 17 underlying MCP operations into an ergonomic interface. The agent calls these tools directly; each call is automatically routed to the appropriate MCP operation.
+
+`project_status` remains part of that same 8-tool surface. In addition to `list`, `index`, and `stats`, it now supports projection workflows with `action: "projection"` and `action: "projection_by_locator"`. Projection requests default to `relation_scope: "all"` and `sort_mode: "canonical"`, and any locator returned by the server is treated as an opaque, same-process, non-persistable handle.
 
 Memory context is also handled through **synthetic parts** — invisible in the OpenCode TUI but received by the LLM as part of the conversation. The agent has full access to past project context without cluttering the user's view.
 
@@ -281,7 +285,7 @@ In OpenCode, run:
 
 The agent will execute a 3-phase initialization:
 
-1. **Code Indexing** — Indexes the project directory via `index_project`, then verifies with `project_info`.
+1. **Code Intelligence Readiness** — Checks current index state first, only triggers indexing when missing or clearly stale, then verifies readiness with project stats.
 2. **Deep Research** — Explores docs, configs, git history, dependencies, and code patterns. Stores findings as categorized memories (CONTEXT:, PATTERN:, DECISION:, etc.).
 3. **Knowledge Graph** — Creates entities and relations for key architectural components, then runs community detection.
 
@@ -328,7 +332,7 @@ You can also re-run `/setup-mcp-memory` anytime to update your configuration.
 
 ## Limitations
 
-- **HTTP transport sharing** — In HTTP mode (`"transport": "http"`), multiple plugin processes share one MCP server instance via a file-based holder list. The lock file (`{dataDir}/.server-lock`) records the PID of each live client; on every read, dead PIDs are pruned so a crash-killed process cannot orphan the shared server indefinitely. The lock file uses rename-based atomic writes but not OS-level file locks, so a narrow race window exists during concurrent startup — in practice harmless, as the second spawn attempt fails because the port is already taken and the retry health check succeeds.
+- **HTTP transport sharing** — In HTTP mode (`"transport": "http"`), multiple plugin processes share one MCP server instance via a file-based holder list. The lock file (`{dataDir}/.server-lock`) records the PID of each live client; on every read, dead PIDs are pruned so a crash-killed process cannot orphan the shared server indefinitely. The first live holder also acts as the code-index sync leader, so follower clients skip redundant fingerprint/debounce/cooldown work and rely on the leader to trigger background re-indexing. Code-index sync state is still persisted under the shared shard, but it is now tracked per workspace so multiple workspaces sharing one `tag` / `dataDir` do not overwrite each other's freshness metadata or cooldown timestamps. The lock file uses rename-based atomic writes but not OS-level file locks, so a narrow race window exists during concurrent startup — in practice harmless, as the second spawn attempt fails because the port is already taken and the retry health check succeeds.
 - **Auto-capture LLM routing** — When `captureModel.apiKey` is set, auto-capture uses direct HTTP to the specified API. When empty, it falls back to OpenCode's session API (creates an ephemeral session, prompts, then deletes). The session API approach is zero-config but slightly slower due to session lifecycle overhead.
 - **In-memory session tracking** — Duplicate-prevention state (`injectedSessions`, `capturedSessions`) is held in memory and resets on process restart. The first message after a restart may re-inject memories that were already injected in the previous session.
 - **Tag-based privacy only** — Content is redacted only when explicitly wrapped in `<private>…</private>` tags. There is no automatic PII or secret detection.

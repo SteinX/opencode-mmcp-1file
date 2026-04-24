@@ -1,161 +1,141 @@
 ---
-description: Initialize persistent project memory with deep codebase indexing and knowledge extraction
+description: Initialize project memory with the current unified tool surface and scoped memory model
 ---
 
-# Project Memory Initialization
+# Init Project Memory
 
-You are initializing persistent memory for this codebase. Your goal is to build a rich, searchable knowledge base that makes you significantly more effective across all future sessions.
+Initialize persistent memory for this project using the plugin's **current architecture**.
 
-This initialization has three phases: **Code Indexing**, **Deep Research**, and **Knowledge Graph**.
+Your goal is to create a **small, high-value, reusable project knowledge base** for future sessions.
 
-## Phase 1: Code Indexing
+## Rules
 
-First, index the codebase for code-level search. This enables `recall_code` and `search_symbols` for all future interactions.
+1. **Use unified plugin tools first**
+   - Use `project_status`, `code_search`, `memory_query`, `memory_save`, `memory_manage`, `knowledge_graph`
+   - Do **not** prefer raw MCP tool names when a unified tool exists
 
-1. Check if this project is already indexed:
+2. **Respect current memory scope**
+   - Initialization writes into the currently active memory boundary:
+     - physical shard: `mcpServer.tag` or `dataDir`
+     - logical scope: `memoryScope.namespace` if configured
+   - If the active scope looks wrong or unclear, stop and recommend `/setup-mcp-memory`
 
-```
-project_info(action: "list")
-```
+3. **Index only if needed**
+   - Check indexing readiness first
+   - Only call `project_status(action: "index")` if the project is missing an index or the index is clearly stale
+   - Do not repeatedly re-index; background freshness may already be handled by the plugin
+   - In HTTP transport mode, remember that background freshness is coordinated by the shared server's primary holder; follower clients may observe readiness without being the process that triggered the refresh
+   - When multiple workspaces share one `tag` / `dataDir`, treat readiness as workspace-specific rather than assuming one global sync state for the whole shard
 
-2. If not indexed (or to refresh), index the project root:
+4. **Store only durable knowledge**
+   Save memories only if they will help future work:
+   - project structure
+   - build/test/dev workflows
+   - stable architecture
+   - important conventions
+   - key decisions
+   - important gotchas
 
-```
-index_project(path: "<project root path>")
-```
+5. **Avoid memory spam**
+   Do **not** store:
+   - long file summaries
+   - low-value exploration notes
+   - redundant README paraphrases
+   - transient details with no future retrieval value
 
-3. Wait for indexing to complete — check status periodically:
+---
 
-```
-project_info(action: "status", project_id: "<id from step 2>")
-```
+## Step 1: Confirm active scope
 
-4. Once complete, verify with a quick stats check:
+Check current plugin status and project config.
 
-```
-project_info(action: "stats", project_id: "<id>")
-```
+Determine:
+- active shard/tag or dataDir
+- active namespace, if any
+- whether the plugin is properly configured for this project
 
-Store the project stats as a CONTEXT memory for future reference.
+If scope/config is missing, ambiguous, or obviously unsuitable, stop and recommend:
 
-## Phase 2: Deep Research
-
-Conduct thorough research to understand the project. This is not surface-level data collection — cross-reference findings and dig into inconsistencies.
-
-### 2a. Documentation & Config (read these files if they exist)
-
-- README.md, CONTRIBUTING.md, AGENTS.md, CLAUDE.md
-- Package manifests: package.json, Cargo.toml, pyproject.toml, go.mod, requirements.txt
-- Config files: tsconfig.json, .eslintrc*, .prettierrc*, vite.config.*, webpack.config.*
-- CI/CD: .github/workflows/, .gitlab-ci.yml, Jenkinsfile
-
-### 2b. Git History & Conventions
-
-```bash
-git log --oneline -20                          # Recent history
-git log --format="%s" -50                      # Commit message conventions
-git branch -a                                  # Branching strategy
-git shortlog -sn --all | head -10              # Main contributors
-git log --diff-filter=D --name-only -20        # Recently deleted files (refactors)
-```
-
-### 2c. Code Structure (use code intelligence tools)
-
-```
-recall_code(query: "main entry point initialization")
-recall_code(query: "error handling patterns")
-recall_code(query: "authentication authorization")
-recall_code(query: "database models schema")
-recall_code(query: "API routes endpoints")
-search_symbols(query: "main")
-search_symbols(query: "config")
+```text
+/setup-mcp-memory
 ```
 
-### 2d. Explore Agent (fire parallel queries for broad understanding)
+## Step 2: Check code intelligence readiness
 
-```
-Task(explore, "What is the tech stack and key dependencies?")
-Task(explore, "What is the project structure and key directories?")
-Task(explore, "How do you build, test, lint, and run this project?")
-Task(explore, "What are the main architectural patterns and data flow?")
-Task(explore, "What conventions, coding standards, or patterns are used?")
-Task(explore, "What are known gotchas, edge cases, or workarounds?")
+Use:
+
+```text
+project_status(action: "list")
 ```
 
-## What to Capture
+If needed, index the project root with:
 
-Save each distinct insight as a separate memory using `store_memory`. Use appropriate prefixes:
-
-| Prefix | Use for | Examples |
-|--------|---------|----------|
-| `CONTEXT:` | Project structure, tech stack, environment | "CONTEXT: Monorepo using pnpm workspaces with 3 packages: api, web, shared" |
-| `PATTERN:` | Code conventions, style rules | "PATTERN: All exports use named exports, no default exports" |
-| `DECISION:` | Architecture choices and rationale | "DECISION: PostgreSQL chosen over MongoDB for relational data integrity" |
-| `RESEARCH:` | Investigation findings | "RESEARCH: Auth refactored in v2.0, old JWT flow deprecated in favor of sessions" |
-
-**Quality guidelines:**
-- Be concise but include enough context to be useful later
-- Include the "why" not just the "what"
-- Save incrementally as you discover — don't wait until the end
-- Each memory should be independently useful when recalled
-
-**Good memories:**
-- "CONTEXT: Uses Bun runtime. Commands: bun install, bun run dev, bun test. CI runs on Node 20."
-- "PATTERN: Error handling uses Result type pattern — functions return {ok, error} not throw."
-- "CONTEXT: API in src/routes/ using Hono framework. Auth middleware in src/middleware/auth.ts."
-- "DECISION: Strict TypeScript — no `any`. Use `unknown` with type narrowing."
-
-## Phase 3: Knowledge Graph
-
-Build a knowledge graph of the project's key entities and their relationships. This enables graph-based retrieval and community detection.
-
-### 3a. Create entities for major components
-
-```
-knowledge_graph(action: "create_entity", name: "auth-service", entity_type: "service", description: "Handles user authentication and session management")
-knowledge_graph(action: "create_entity", name: "user-model", entity_type: "model", description: "Core user data model in src/models/user.ts")
+```text
+project_status(action: "index", path: "<project root path>")
 ```
 
-Entity types to consider: `service`, `model`, `module`, `config`, `tool`, `api`, `database`, `external-dependency`
+Then verify with:
 
-### 3b. Create relations between entities
-
-```
-knowledge_graph(action: "create_relation", from_entity: "<id>", to_entity: "<id>", relation_type: "depends_on")
-knowledge_graph(action: "create_relation", from_entity: "<id>", to_entity: "<id>", relation_type: "implements")
+```text
+project_status(action: "stats", project_id: "<project id>")
 ```
 
-Relation types to consider: `depends_on`, `implements`, `calls`, `configures`, `extends`, `contains`, `produces`, `consumes`
+Optionally save one concise `CONTEXT` memory that semantic code search is ready.
 
-### 3c. Verify the graph
+Readiness is evaluated for the current workspace. A shared shard may already contain code-index sync state for other workspaces, but that does not mean the current project is indexed and fresh.
 
-```
-knowledge_graph(action: "detect_communities")
-```
+## Step 3: Build the minimum useful project skeleton
 
-## Before Starting
+Read only the highest-signal sources if they exist:
+- `README.md`
+- `AGENTS.md`
+- package manifest
+- main config files
+- CI/workflow files
+- top-level structure
 
-Ask the user:
-1. "Any specific rules or conventions I should always follow?"
-2. "Are there areas of the codebase you'd like me to focus on?"
-3. "Should I index the entire project or specific directories?"
+Capture **3–8 high-value `CONTEXT` memories** at most.
 
-## Reflection
+Examples:
+- tech stack
+- runtime/build/test commands
+- top-level architecture
+- main directories
+- major entry points
 
-Before finishing, verify completeness:
-1. **Commands**: Build, test, lint, run, deploy — are they all captured?
-2. **Architecture**: Entry points, data flow, key abstractions — understood?
-3. **Conventions**: Naming, error handling, file organization — documented?
-4. **Gotchas**: Known issues, workarounds, non-obvious behavior — noted?
-5. **Graph**: Are the major components and their relationships mapped?
+## Step 4: Capture patterns and decisions
 
-Summarize what was learned and ask: "I've initialized memory with X insights across Y entities. Want me to dive deeper into any area?"
+Use `code_search` to identify stable implementation patterns and important architectural choices.
 
-## Your Task
+Save only high-value items as:
+- `PATTERN`
+- `DECISION`
+- `BUGFIX`
+- `RESEARCH` (only if truly reusable)
 
-1. Ask upfront questions (focus areas, rules, indexing scope)
-2. Check existing memories: `recall(query: "project context")` and `project_info(action: "list")`
-3. Execute Phase 1 (Code Indexing)
-4. Execute Phase 2 (Deep Research) — save memories incrementally
-5. Execute Phase 3 (Knowledge Graph)
-6. Reflect, verify completeness, and summarize
+Good memory test:
+- Will this help a future agent make a better decision?
+- Is this more than a one-file summary?
+- Does it capture the “why”, not only the “what”?
+
+If not, do not store it.
+
+## Step 5: Build a minimal knowledge graph
+
+Create a minimal knowledge graph for every project. Even small projects benefit from recording key architectural relationships.
+
+At minimum, create entities for the top-level modules or services and relations showing the primary dependency or data flow directions.
+
+**Example**: For a web API project, create entities for "API Routes", "Database", "Auth Service" and relations showing which depends on which.
+
+For trivially small single-file scripts or throwaway prototypes, you may skip this step.
+
+## Final output
+
+Finish with a concise summary including:
+- active shard / namespace used
+- whether code intelligence is ready
+- how many memories were added and of what types
+- whether a knowledge graph was created or skipped
+- the most important insights captured
+- whether `/setup-mcp-memory` is still recommended

@@ -24,7 +24,7 @@ You have access to a persistent memory system via MCP tools. Use it to store and
 - **memory_query**: Unified search — use natural language to find stored memories. Automatically uses the best search strategy.
 - **memory_save**: Save knowledge — automatically categorizes based on content (DECISION, TASK, PATTERN, etc.)
 - **memory_manage**: Manage existing memories — get, update, delete, or invalidate by ID
-- **knowledge_graph**: Store and query relationships between entities
+- **knowledge_graph**: Map and query architectural relationships between components — services, modules, data flows, dependencies. Actions: create_entity, create_relation, get_related, detect_communities
 
 ### Scope Guidance
 - Prefer the configured default scope unless you have a concrete reason to override it.
@@ -80,6 +80,23 @@ Always prefix stored content with the appropriate category:
 - **Do not search memories after every message** — only when context switching or stuck
 - **Do not guess how code works** — use code_search with search_type "intent" to find actual implementations
 - **Do not leave tasks unfinished** — use memory_manage to update TASK memories to [completed] when done
+
+### Knowledge Graph — WHEN to use
+
+**WHEN analyzing architecture or module dependencies:**
+→ Use knowledge_graph get_related to understand component relationships
+
+**WHEN discovering structural relationships (service→service, module→module):**
+→ Use knowledge_graph create_entity + create_relation to record them
+
+**WHEN exploring unfamiliar code areas:**
+→ Check knowledge_graph get_related for known dependency maps before reading code
+
+**Empty graph is normal** — KG may be empty on new projects. Build it incrementally as you discover relationships.
+
+**KG anti-patterns:**
+- **Do not store every file as an entity** — KG is for architectural relationships, not file listings
+- **Do not duplicate memory content in KG** — memories store decisions/context, KG stores structure
 `
 
 function buildCodeIntelligenceSection(config: PluginConfig): string {

@@ -141,4 +141,32 @@ describe("buildMemorySystemPrompt", () => {
     expect(warningIndex).toBeGreaterThan(baseIndex)
     expect(warningIndex).toBeLessThan(toolsIndex)
   })
+
+  it("includes knowledge graph action triggers", () => {
+    const result = buildMemorySystemPrompt(makeConfig(), [])
+    expect(result).toContain("get_related")
+    expect(result).toContain("create_entity")
+    expect(result).toContain("create_relation")
+  })
+
+  it("includes knowledge graph empty state guidance", () => {
+    const result = buildMemorySystemPrompt(makeConfig(), [])
+    expect(result).toContain("Empty graph is normal")
+    expect(result).toContain("Build it incrementally")
+  })
+
+  it("includes knowledge graph anti-patterns", () => {
+    const result = buildMemorySystemPrompt(makeConfig(), [])
+    expect(result).toContain("Do not store every file as an entity")
+  })
+
+  it("knowledge graph section is within token budget", () => {
+    const result = buildMemorySystemPrompt(makeConfig(), [])
+    const kgStart = result.indexOf("### Knowledge Graph")
+    const kgEnd = result.indexOf("### ", kgStart + 1)
+    const kgSection = kgEnd === -1
+      ? result.slice(kgStart)
+      : result.slice(kgStart, kgEnd)
+    expect(kgSection.length).toBeLessThanOrEqual(850) // 800 + small margin for section header
+  })
 })

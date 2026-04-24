@@ -6,7 +6,12 @@
 import { tool } from "@opencode-ai/plugin/tool"
 import type { PluginConfig } from "../config.js"
 import { applyConfig } from "../config.js"
-import { callMemoryTool } from "./mcp-client.js"
+import {
+  callMemoryTool,
+  getProjectProjectionByLocatorInfo,
+  getProjectProjectionInfo,
+  isMissingProjectLocator,
+} from "./mcp-client.js"
 import { stripPrivateContent, isFullyPrivate } from "../utils/privacy.js"
 import { logger } from "../utils/logger.js"
 import { isConnectionFailed, getConnectionStatus } from "./connection-state.js"
@@ -17,6 +22,7 @@ const UNAVAILABLE_MESSAGE =
   "Try again in ~30s. Do not retry memory tools until the system prompt confirms the connection is restored."
 
 type ToolMap = Record<string, ReturnType<typeof tool>>
+type ProjectionRelationScope = "all" | "calls" | "imports" | "type_links" | "none"
 
 function parseJsonArg(value?: string): Record<string, unknown> | undefined {
   if (!value) return undefined
@@ -62,6 +68,16 @@ function buildOperationContext(
     ingestionBefore: args.ingestion_before,
     validAt: args.valid_at,
     timestamp: args.timestamp,
+  }
+}
+
+function projectionRequestDefaults(args: {
+  relation_scope?: ProjectionRelationScope
+  sort_mode?: string
+}): { relationScope: ProjectionRelationScope, sortMode: string } {
+  return {
+    relationScope: args.relation_scope ?? "all",
+    sortMode: args.sort_mode ?? "canonical",
   }
 }
 
@@ -292,12 +308,15 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
      */
     project_status: tool({
       description:
-        "Check project indexing status or index a new project. Use 'list' to see indexed projects, 'index' to add a project, 'stats' for code statistics.",
+        "Check project indexing status, build project projections, or index a new project. Use 'list' to see indexed projects, 'index' to add a project, 'stats' for code statistics, 'projection' to build a short-lived projection export, and 'projection_by_locator' to read it back when you already have the ephemeral locator.",
       args: {
-        action: tool.schema.enum(["list", "index", "stats"]),
+        action: tool.schema.enum(["list", "index", "stats", "projection", "projection_by_locator"]),
         path: tool.schema.string().optional(),
         project_id: tool.schema.string().optional(),
         force: tool.schema.boolean().optional(),
+        relation_scope: tool.schema.enum(["all", "calls", "imports", "type_links", "none"]).optional(),
+        sort_mode: tool.schema.string().optional(),
+        locator: tool.schema.string().optional(),
       },
       execute: async (args) => {
         switch (args.action) {
@@ -309,6 +328,47 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
               action: "stats",
               project_id: args.project_id,
             })
+
+          case "projection": {
+            if (!args.project_id) return "Error: project_id is required for projection action"
+            const { relationScope, sortMode } = projectionRequestDefaults(args)
+            const result = await getProjectProjectionInfo(config, {
+              projectId: args.project_id,
+              relationScope,
+              sortMode,
+            })
+            return result ? JSON.stringify(result.raw) : "Error: projection request failed"
+          }
+
+          case "projection_by_locator": {
+            const { relationScope, sortMode } = projectionRequestDefaults(args)
+            const tryFreshProjection = async (): Promise<string> => {
+              if (!args.project_id) {
+                return "Error: project_id is required when locator readback is missing or invalid"
+              }
+              const fresh = await getProjectProjectionInfo(config, {
+                projectId: args.project_id,
+                relationScope,
+                sortMode,
+              })
+              return fresh ? JSON.stringify(fresh.raw) : "Error: projection request failed"
+            }
+
+            if (!args.locator) {
+              return tryFreshProjection()
+            }
+
+            const result = await getProjectProjectionByLocatorInfo(config, { locator: args.locator })
+            if (!result) {
+              return tryFreshProjection()
+            }
+
+            if (isMissingProjectLocator(result.locator)) {
+              return tryFreshProjection()
+            }
+
+            return JSON.stringify(result.raw)
+          }
 
           case "index": {
             if (!args.path) return "Error: path is required for index action"
@@ -327,7 +387,7 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
 
     knowledge_graph: tool({
       description:
-        "Knowledge graph operations. Actions: create_entity(name, entity_type?, description?) | create_relation(from_entity, to_entity, relation_type, weight?) | get_related(entity_id, depth?, direction?) | detect_communities()",
+        "Map and query architectural relationships between codebase components — services, modules, data flows, and dependencies. Use when analyzing system architecture, tracing module dependencies, or recording discovered structural relationships. Actions: create_entity(name, entity_type?, description?) | create_relation(from_entity, to_entity, relation_type, weight?) | get_related(entity_id, depth?, direction?) | detect_communities()",
       args: {
         action: tool.schema.enum([
           "create_entity",
