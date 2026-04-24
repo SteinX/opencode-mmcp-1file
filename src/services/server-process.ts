@@ -91,6 +91,34 @@ function pruneDeadHolders(holders: number[]): number[] {
   return holders.filter((pid) => pid > 0 && isProcessAlive(pid))
 }
 
+export async function shouldCoordinateCodeIndexSync(config: PluginConfig): Promise<boolean> {
+  if (config.mcpServer.transport !== "http") return true
+
+  try {
+    await ensureServerRunning(config)
+  } catch (err) {
+    logger.debug("Falling back to local code index coordination after HTTP server check failed", {
+      error: String(err),
+    })
+    return true
+  }
+
+  const lockPath = getLockFilePath(config)
+  if (!lockPath) return true
+
+  const lock = readLockFile(lockPath)
+  if (!lock) return true
+
+  const liveHolders = pruneDeadHolders(lock.holders)
+  if (liveHolders.length === 0) return true
+
+  if (liveHolders.length !== lock.holders.length) {
+    writeLockFileAtomic(lockPath, { ...lock, holders: liveHolders })
+  }
+
+  return liveHolders[0] === process.pid
+}
+
 export function getServerUrl(config: PluginConfig): string {
   return `http://${config.mcpServer.bind}:${config.mcpServer.port}`
 }

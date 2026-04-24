@@ -380,3 +380,63 @@ describe("ensureServerRunning", () => {
     await expect(ensureServerRunning(config)).rejects.toThrow("Cannot resolve data directory")
   })
 })
+
+describe("shouldCoordinateCodeIndexSync", () => {
+  it("returns true for stdio transport", async () => {
+    vi.resetModules()
+    const { shouldCoordinateCodeIndexSync } = await import("../../src/services/server-process.js")
+    const config = makeConfig({ transport: "stdio" })
+
+    await expect(shouldCoordinateCodeIndexSync(config)).resolves.toBe(true)
+  })
+
+  it("returns true only for the first live HTTP holder", async () => {
+    vi.resetModules()
+    vi.doMock("../../src/config.js", async (importOriginal) => {
+      const original = await importOriginal<typeof import("../../src/config.js")>()
+      return { ...original, resolveDataDir: () => testDir }
+    })
+    const { shouldCoordinateCodeIndexSync } = await import("../../src/services/server-process.js")
+    const config = makeConfig()
+
+    const lockPath = join(testDir, ".server-lock")
+    const otherPid = process.pid + 1
+    writeNewLock(lockPath, 12345, [process.pid, otherPid])
+    vi.spyOn(process, "kill").mockImplementation((pid, _sig) => {
+      if (pid === process.pid || pid === otherPid) return true
+      throw new Error("ESRCH")
+    })
+
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ status: "ok" }),
+    })
+
+    await expect(shouldCoordinateCodeIndexSync(config)).resolves.toBe(true)
+  })
+
+  it("returns false for non-leader HTTP holders", async () => {
+    vi.resetModules()
+    vi.doMock("../../src/config.js", async (importOriginal) => {
+      const original = await importOriginal<typeof import("../../src/config.js")>()
+      return { ...original, resolveDataDir: () => testDir }
+    })
+    const { shouldCoordinateCodeIndexSync } = await import("../../src/services/server-process.js")
+    const config = makeConfig()
+
+    const lockPath = join(testDir, ".server-lock")
+    const otherPid = process.pid + 1
+    writeNewLock(lockPath, 12345, [otherPid, process.pid])
+    vi.spyOn(process, "kill").mockImplementation((pid, _sig) => {
+      if (pid === process.pid || pid === otherPid) return true
+      throw new Error("ESRCH")
+    })
+
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ status: "ok" }),
+    })
+
+    await expect(shouldCoordinateCodeIndexSync(config)).resolves.toBe(false)
+  })
+})
