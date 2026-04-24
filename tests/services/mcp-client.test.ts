@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import type { PluginConfig } from "../../src/config.js"
+import {
+  detectCommunitiesEmptyResponse,
+  detectCommunitiesPopulatedResponse,
+  getRelatedNotFoundResponse,
+  getRelatedPopulatedResponse,
+  malformedKnowledgeGraphResponse,
+} from "../fixtures/kg-responses.js"
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -455,6 +462,115 @@ describe("mcp-client", () => {
     expect(mod.isMissingProjectLocator({ lookup: { state: "missing", raw: {} }, raw: {} })).toBe(true)
     expect(mod.isMissingProjectLocator({ lookup: { state: "resolved", reasonCode: "invalid_locator", raw: {} }, raw: {} })).toBe(true)
     expect(mod.isMissingProjectLocator({ lookup: { state: "resolved", reasonCode: "stale", raw: {} }, raw: {} })).toBe(false)
+  })
+
+  it("detectKnowledgeGraphCommunities parses populated KG response without memory scope", async () => {
+    const { mod, mockClient } = await setupModule()
+    const config = makeConfig()
+    config.memoryScope.namespace = "workspace-a"
+    config.memoryScope.userId = "user-1"
+
+    mockClient.callTool.mockResolvedValue(detectCommunitiesPopulatedResponse)
+
+    const result = await mod.detectKnowledgeGraphCommunities(config)
+
+    expect(mockClient.callTool).toHaveBeenCalledWith({
+      name: "knowledge_graph",
+      arguments: { action: "detect_communities" },
+    })
+    expect(result).toEqual([
+      {
+        id: "community-auth",
+        label: "Auth + Session",
+        size: 3,
+        entities: [
+          { id: "svc-auth", name: "Auth Service", entity_type: "service" },
+          { id: "svc-session", name: "Session Service", entity_type: "service" },
+          { id: "mod-login", name: "Login Flow", entity_type: "module" },
+        ],
+        relations: [
+          { from: "svc-auth", to: "svc-session", relation_type: "depends_on", weight: 0.9 },
+          { from: "mod-login", to: "svc-auth", relation_type: "uses", weight: 0.8 },
+        ],
+      },
+    ])
+  })
+
+  it("detectKnowledgeGraphCommunities returns empty array on empty, malformed, error, and connection failure", async () => {
+    const { mod, mockClient } = await setupModule()
+    const config = makeConfig()
+
+    mockClient.callTool.mockResolvedValueOnce(detectCommunitiesEmptyResponse)
+    await expect(mod.detectKnowledgeGraphCommunities(config)).resolves.toEqual([])
+
+    mockClient.callTool.mockResolvedValueOnce(malformedKnowledgeGraphResponse)
+    await expect(mod.detectKnowledgeGraphCommunities(config)).resolves.toEqual([])
+
+    mockClient.callTool.mockResolvedValueOnce({ content: [{ type: "text", text: JSON.stringify({ error: "kg_failed" }) }] })
+    await expect(mod.detectKnowledgeGraphCommunities(config)).resolves.toEqual([])
+
+    mockConnectionState.isConnectionFailed.mockReturnValue(true)
+    await expect(mod.detectKnowledgeGraphCommunities(config)).resolves.toEqual([])
+  })
+
+  it("getRelatedKnowledgeGraphEntities parses populated KG response with default args and no memory scope", async () => {
+    const { mod, mockClient } = await setupModule()
+    const config = makeConfig()
+    config.memoryScope.namespace = "workspace-a"
+
+    mockClient.callTool.mockResolvedValue(getRelatedPopulatedResponse)
+
+    const result = await mod.getRelatedKnowledgeGraphEntities(config, "svc-auth")
+
+    expect(mockClient.callTool).toHaveBeenCalledWith({
+      name: "knowledge_graph",
+      arguments: { action: "get_related", entity_id: "svc-auth", depth: 1, direction: "both" },
+    })
+    expect(result).toEqual({
+      entity: { id: "svc-auth", name: "Auth Service", entity_type: "service" },
+      distance: 0,
+      related: [
+        {
+          entity: { id: "svc-session", name: "Session Service", entity_type: "service" },
+          relation: { from: "svc-auth", to: "svc-session", relation_type: "depends_on", weight: 0.9 },
+        },
+        {
+          entity: { id: "mod-login", name: "Login Flow", entity_type: "module" },
+          relation: { from: "mod-login", to: "svc-auth", relation_type: "uses", weight: 0.8 },
+        },
+      ],
+    })
+  })
+
+  it("getRelatedKnowledgeGraphEntities passes explicit depth and direction", async () => {
+    const { mod, mockClient } = await setupModule()
+    const config = makeConfig()
+
+    mockClient.callTool.mockResolvedValue(getRelatedPopulatedResponse)
+
+    await mod.getRelatedKnowledgeGraphEntities(config, "svc-auth", 2, "out")
+
+    expect(mockClient.callTool).toHaveBeenCalledWith({
+      name: "knowledge_graph",
+      arguments: { action: "get_related", entity_id: "svc-auth", depth: 2, direction: "out" },
+    })
+  })
+
+  it("getRelatedKnowledgeGraphEntities returns null on not-found, malformed, error, and connection failure", async () => {
+    const { mod, mockClient } = await setupModule()
+    const config = makeConfig()
+
+    mockClient.callTool.mockResolvedValueOnce(getRelatedNotFoundResponse)
+    await expect(mod.getRelatedKnowledgeGraphEntities(config, "missing-entity")).resolves.toBeNull()
+
+    mockClient.callTool.mockResolvedValueOnce(malformedKnowledgeGraphResponse)
+    await expect(mod.getRelatedKnowledgeGraphEntities(config, "svc-auth")).resolves.toBeNull()
+
+    mockClient.callTool.mockRejectedValueOnce(new Error("kg failed"))
+    await expect(mod.getRelatedKnowledgeGraphEntities(config, "svc-auth")).resolves.toBeNull()
+
+    mockConnectionState.isConnectionFailed.mockReturnValue(true)
+    await expect(mod.getRelatedKnowledgeGraphEntities(config, "svc-auth")).resolves.toBeNull()
   })
 
   it("getMemoryClient throws immediately when connection is flagged as failed", async () => {

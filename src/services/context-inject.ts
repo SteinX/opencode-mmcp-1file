@@ -3,6 +3,8 @@ import {
   recallMemories,
   listProjectMemories,
   getProjectListInfo,
+  detectKnowledgeGraphCommunities,
+  getRelatedKnowledgeGraphEntities,
   type RetrievalResult,
   type MemoryOperationContext,
 } from "./mcp-client.js"
@@ -10,15 +12,17 @@ import {
   formatMemoriesForInjection,
   formatProjectKnowledge,
   formatTieredProjectKnowledge,
+  formatKnowledgeGraph,
 } from "../utils/format.js"
 import type { MemoryEntry } from "../utils/format.js"
 import { logger } from "../utils/logger.js"
 
-export type InjectionSource = "query_recall" | "project_knowledge" | "code_intel"
+export type InjectionSource = "query_recall" | "project_knowledge" | "code_intel" | "knowledge_graph"
 
 const queryInjectedSessions = new Set<string>()
 const projectKnowledgeInjectedSessions = new Set<string>()
 const codeIntelInjectedSessions = new Set<string>()
+const knowledgeGraphInjectedSessions = new Set<string>()
 
 function sourceSet(source: InjectionSource): Set<string> {
   switch (source) {
@@ -28,6 +32,8 @@ function sourceSet(source: InjectionSource): Set<string> {
       return projectKnowledgeInjectedSessions
     case "code_intel":
       return codeIntelInjectedSessions
+    case "knowledge_graph":
+      return knowledgeGraphInjectedSessions
   }
 }
 
@@ -44,7 +50,9 @@ function shouldInjectSource(
       ? config.chatMessage.injectOn
       : source === "project_knowledge"
         ? (config.chatMessage.projectKnowledgeInjectOn ?? "first")
-        : (config.chatMessage.codeIntelInjectOn ?? "first")
+        : source === "code_intel"
+          ? (config.chatMessage.codeIntelInjectOn ?? "first")
+          : (config.chatMessage.knowledgeGraphInjectOn ?? "first")
 
   if (mode === "never") return false
   if (isAfterCompaction) return mode === "compaction" || mode === "always" || source === "query_recall"
@@ -63,12 +71,13 @@ export function shouldInjectMemories(
     shouldInjectSource(config, sessionID, "query_recall", isAfterCompaction)
     || shouldInjectSource(config, sessionID, "project_knowledge", isAfterCompaction)
     || shouldInjectSource(config, sessionID, "code_intel", isAfterCompaction)
+    || shouldInjectSource(config, sessionID, "knowledge_graph", isAfterCompaction)
   )
 }
 
 export function markSessionInjected(
   sessionID: string,
-  sources: InjectionSource[] = ["query_recall", "project_knowledge", "code_intel"],
+  sources: InjectionSource[] = ["query_recall", "project_knowledge", "code_intel", "knowledge_graph"],
 ): void {
   for (const source of sources) {
     sourceSet(source).add(sessionID)
@@ -79,6 +88,7 @@ export function markSessionCompacted(sessionID: string): void {
   queryInjectedSessions.delete(sessionID)
   projectKnowledgeInjectedSessions.delete(sessionID)
   codeIntelInjectedSessions.delete(sessionID)
+  knowledgeGraphInjectedSessions.delete(sessionID)
 }
 
 function uniqueMemories(memories: MemoryEntry[]): MemoryEntry[] {
@@ -242,6 +252,52 @@ export async function fetchCodeIntelContext(
   }
 }
 
+function formatRelatedKnowledgeGraphContext(relatedResult: Awaited<ReturnType<typeof getRelatedKnowledgeGraphEntities>>): string | null {
+  if (!relatedResult || relatedResult.related.length === 0) return null
+
+  const lines = [`[KNOWLEDGE GRAPH] Related context for ${relatedResult.entity.name}:`]
+  for (const item of relatedResult.related) {
+    const type = item.entity.entity_type ? ` [${item.entity.entity_type}]` : ""
+    const relation = item.relation?.relation_type ? ` — ${item.relation.relation_type}` : ""
+    lines.push(`  - ${item.entity.name}${type}${relation}`)
+  }
+
+  return lines.join("\n")
+}
+
+export async function fetchKnowledgeGraphContext(
+  config: PluginConfig,
+  userMessageText?: string,
+): Promise<string | null> {
+  try {
+    const communities = await detectKnowledgeGraphCommunities(config)
+    if (communities.length === 0) return null
+
+    const formatted = formatKnowledgeGraph(communities, config.chatMessage.maxKnowledgeGraphItems ?? 10)
+    if (!formatted) return null
+
+    const sections = [formatted]
+    const normalizedMessage = userMessageText?.toLowerCase()
+    if (config.chatMessage.knowledgeGraphEntityMatch && normalizedMessage) {
+      for (const community of communities) {
+        for (const entity of community.entities) {
+          const normalizedName = entity.name.toLowerCase().trim()
+          if (!normalizedName || !normalizedMessage.includes(normalizedName)) continue
+
+          const related = await getRelatedKnowledgeGraphEntities(config, entity.id)
+          const relatedContext = formatRelatedKnowledgeGraphContext(related)
+          if (relatedContext) sections.push(relatedContext)
+        }
+      }
+    }
+
+    return sections.join("\n\n")
+  } catch (err) {
+    logger.debug("Failed to fetch knowledge graph context", { error: String(err) })
+    return null
+  }
+}
+
 export function shouldInjectQueryRecall(
   config: PluginConfig,
   sessionID: string,
@@ -264,4 +320,12 @@ export function shouldInjectCodeIntel(
   isAfterCompaction: boolean,
 ): boolean {
   return shouldInjectSource(config, sessionID, "code_intel", isAfterCompaction)
+}
+
+export function shouldInjectKnowledgeGraph(
+  config: PluginConfig,
+  sessionID: string,
+  isAfterCompaction: boolean,
+): boolean {
+  return shouldInjectSource(config, sessionID, "knowledge_graph", isAfterCompaction)
 }

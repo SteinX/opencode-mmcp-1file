@@ -22,6 +22,10 @@ export interface PluginConfig {
     minScore?: number
     projectKnowledgeInjectOn?: "first" | "always" | "compaction" | "never"
     codeIntelInjectOn?: "first" | "always" | "compaction" | "never"
+    knowledgeGraphInjectOn?: "first" | "always" | "compaction" | "never"
+    maxKnowledgeGraphItems?: number
+    knowledgeGraphRelatedDepth?: number
+    knowledgeGraphEntityMatch?: boolean
     projectKnowledgeValidOnly?: boolean
     /** Tiered injection: prioritize important categories over recency. Set to null/undefined to disable (flat list fallback). */
     projectKnowledgeTiers?: TierConfig[] | null
@@ -100,7 +104,7 @@ export interface PluginConfig {
   }
 }
 
-const DEFAULT_CONFIG: PluginConfig = {
+export const DEFAULT_CONFIG: PluginConfig = {
   chatMessage: {
     enabled: true,
     maxMemories: 5,
@@ -111,6 +115,10 @@ const DEFAULT_CONFIG: PluginConfig = {
     minScore: 0.35,
     projectKnowledgeInjectOn: "first",
     codeIntelInjectOn: "first",
+    knowledgeGraphInjectOn: "first",
+    maxKnowledgeGraphItems: 10,
+    knowledgeGraphRelatedDepth: 1,
+    knowledgeGraphEntityMatch: true,
     projectKnowledgeValidOnly: false,
     projectKnowledgeTiers: [
       { categories: ["USER"], limit: 5 },

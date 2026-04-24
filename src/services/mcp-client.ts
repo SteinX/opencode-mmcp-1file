@@ -105,6 +105,33 @@ export interface ProjectProjectionInfo extends ParsedProjectInfoBase {
   locator?: ProjectInfoLocator
 }
 
+export interface KGEntity {
+  id: string
+  name: string
+  entity_type?: string
+}
+
+export interface KGRelation {
+  from: string
+  to: string
+  relation_type: string
+  weight?: number
+}
+
+export interface KGCommunity {
+  id: string
+  label: string
+  size: number
+  entities: KGEntity[]
+  relations: KGRelation[]
+}
+
+export interface KGRelatedResult {
+  entity: KGEntity
+  distance: number
+  related: Array<{ entity: KGEntity; relation?: KGRelation }>
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
@@ -220,6 +247,79 @@ function parseProjectProjection(
   }
 }
 
+function parseKGEntity(value: unknown): KGEntity | null {
+  if (!isRecord(value)) return null
+  const id = asString(value.id)
+  const name = asString(value.name)
+  if (!id || !name) return null
+
+  return cleanRecord({
+    id,
+    name,
+    entity_type: asString(value.entity_type),
+  }) as KGEntity
+}
+
+function parseKGRelation(value: unknown): KGRelation | null {
+  if (!isRecord(value)) return null
+  const from = asString(value.from)
+  const to = asString(value.to)
+  const relationType = asString(value.relation_type)
+  if (!from || !to || !relationType) return null
+
+  return cleanRecord({
+    from,
+    to,
+    relation_type: relationType,
+    weight: asNumber(value.weight),
+  }) as KGRelation
+}
+
+function parseKGCommunities(raw: Record<string, unknown>): KGCommunity[] {
+  if (!Array.isArray(raw.communities)) return []
+
+  return raw.communities.filter(isRecord).map((community) => {
+    const id = asString(community.id)
+    const label = asString(community.label)
+    const size = asNumber(community.size)
+    if (!id || !label || size == null) return null
+
+    return {
+      id,
+      label,
+      size,
+      entities: Array.isArray(community.entities)
+        ? community.entities.map(parseKGEntity).filter((entity): entity is KGEntity => entity !== null)
+        : [],
+      relations: Array.isArray(community.relations)
+        ? community.relations.map(parseKGRelation).filter((relation): relation is KGRelation => relation !== null)
+        : [],
+    }
+  }).filter((community): community is KGCommunity => community !== null)
+}
+
+function parseKGRelatedResult(raw: Record<string, unknown>): KGRelatedResult | null {
+  if (asString(raw.error)) return null
+
+  const entity = parseKGEntity(raw.entity)
+  if (!entity || !Array.isArray(raw.related)) return null
+
+  const related = raw.related.filter(isRecord).map((item) => {
+    const relatedEntity = parseKGEntity(item.entity)
+    if (!relatedEntity) return null
+
+
+    const relation = parseKGRelation(item.relation)
+    return relation ? { entity: relatedEntity, relation } : { entity: relatedEntity }
+  }).filter((item): item is { entity: KGEntity; relation?: KGRelation } => item !== null)
+
+  return {
+    entity,
+    distance: asNumber(raw.distance) ?? 0,
+    related,
+  }
+}
+
 async function callProjectInfo(config: PluginConfig, args: Record<string, unknown>): Promise<Record<string, unknown> | null> {
   try {
     const result = await callToolWithRetry(config, "project_info", args)
@@ -268,6 +368,39 @@ export async function getProjectProjectionByLocatorInfo(
 ): Promise<ProjectProjectionInfo | null> {
   const raw = await callProjectInfo(config, { action: "projection_by_locator", locator: args.locator })
   return raw ? parseProjectProjection("projection_by_locator", raw) : null
+}
+
+export async function detectKnowledgeGraphCommunities(config: PluginConfig): Promise<KGCommunity[]> {
+  try {
+    const result = await callToolWithRetry(config, "knowledge_graph", { action: "detect_communities" })
+    const raw = parseJsonRecord(extractTextResult(result))
+    if (!raw || asString(raw.error)) return []
+    return parseKGCommunities(raw)
+  } catch (err) {
+    logger.debug("Failed to detect knowledge graph communities", { error: String(err) })
+    return []
+  }
+}
+
+export async function getRelatedKnowledgeGraphEntities(
+  config: PluginConfig,
+  entityId: string,
+  depth = 1,
+  direction: "in" | "out" | "both" = "both",
+): Promise<KGRelatedResult | null> {
+  try {
+    const result = await callToolWithRetry(config, "knowledge_graph", {
+      action: "get_related",
+      entity_id: entityId,
+      depth,
+      direction,
+    })
+    const raw = parseJsonRecord(extractTextResult(result))
+    return raw ? parseKGRelatedResult(raw) : null
+  } catch (err) {
+    logger.debug("Failed to fetch related knowledge graph entities", { error: String(err), entityId })
+    return null
+  }
 }
 
 export function isMissingProjectLocator(locator?: ProjectInfoLocator): boolean {

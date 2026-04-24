@@ -5,7 +5,9 @@ import {
   markSessionCompacted,
   fetchAndFormatMemories,
   fetchCodeIntelContext,
+  fetchKnowledgeGraphContext,
   fetchProjectKnowledge,
+  shouldInjectKnowledgeGraph,
   allocateToTiers,
 } from "../../src/services/context-inject.js"
 import type { TierConfig } from "../../src/config.js"
@@ -16,13 +18,21 @@ vi.mock("../../src/services/mcp-client.js", () => ({
   recallMemories: vi.fn().mockResolvedValue({ status: "empty", source: "recall", memories: [] }),
   listProjectMemories: vi.fn().mockResolvedValue({ status: "empty", source: "list", memories: [] }),
   getProjectListInfo: vi.fn().mockResolvedValue({ action: "list", projects: [] }),
+  detectKnowledgeGraphCommunities: vi.fn().mockResolvedValue([]),
+  getRelatedKnowledgeGraphEntities: vi.fn().mockResolvedValue(null),
 }))
 
 vi.mock("../../src/utils/logger.js", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }))
 
-const { recallMemories, listProjectMemories, getProjectListInfo } = await import("../../src/services/mcp-client.js")
+const {
+  recallMemories,
+  listProjectMemories,
+  getProjectListInfo,
+  detectKnowledgeGraphCommunities,
+  getRelatedKnowledgeGraphEntities,
+} = await import("../../src/services/mcp-client.js")
 
 const DEFAULT_TIERS: TierConfig[] = [
   { categories: ["USER"], limit: 5 },
@@ -42,6 +52,9 @@ function makeConfig(overrides?: { chatMessage?: Partial<PluginConfig["chatMessag
       minScore: 0.35,
       projectKnowledgeInjectOn: "first",
       codeIntelInjectOn: "first",
+      knowledgeGraphInjectOn: "first",
+      maxKnowledgeGraphItems: 10,
+      knowledgeGraphEntityMatch: false,
       projectKnowledgeValidOnly: false,
       projectKnowledgeTiers: DEFAULT_TIERS,
       ...overrides?.chatMessage,
@@ -97,6 +110,59 @@ describe("shouldInjectMemories", () => {
     expect(shouldInjectMemories(config, sessionID, false)).toBe(false)
     markSessionCompacted(sessionID)
     expect(shouldInjectMemories(config, sessionID, false)).toBe(true)
+  })
+
+  it("returns true when only knowledge graph source should inject", () => {
+    const config = makeConfig({
+      chatMessage: {
+        injectOn: "never" as any,
+        projectKnowledgeInjectOn: "never",
+        codeIntelInjectOn: "never",
+        knowledgeGraphInjectOn: "first",
+      },
+    })
+    const sessionID = "s-kg-only-" + Date.now()
+
+    expect(shouldInjectMemories(config, sessionID, false)).toBe(true)
+  })
+
+  it("tracks knowledge graph injection state in default markSessionInjected", () => {
+    const config = makeConfig({
+      chatMessage: {
+        injectOn: "never" as any,
+        projectKnowledgeInjectOn: "never",
+        codeIntelInjectOn: "never",
+        knowledgeGraphInjectOn: "first",
+      },
+    })
+    const sessionID = "s-kg-default-mark-" + Date.now()
+
+    markSessionInjected(sessionID)
+
+    expect(shouldInjectMemories(config, sessionID, false)).toBe(false)
+  })
+
+  it("resets knowledge graph injection state after compaction", () => {
+    const config = makeConfig({
+      chatMessage: {
+        injectOn: "never" as any,
+        projectKnowledgeInjectOn: "never",
+        codeIntelInjectOn: "never",
+        knowledgeGraphInjectOn: "first",
+      },
+    })
+    const sessionID = "s-kg-compact-" + Date.now()
+
+    markSessionInjected(sessionID)
+    expect(shouldInjectMemories(config, sessionID, false)).toBe(false)
+    markSessionCompacted(sessionID)
+
+    expect(shouldInjectMemories(config, sessionID, false)).toBe(true)
+  })
+
+  it("exposes source-specific shouldInjectKnowledgeGraph", () => {
+    const config = makeConfig({ chatMessage: { knowledgeGraphInjectOn: "never" } })
+    expect(shouldInjectKnowledgeGraph(config, "s-kg-never", false)).toBe(false)
   })
 })
 
@@ -402,6 +468,109 @@ describe("fetchCodeIntelContext", () => {
     const config = makeConfig()
     vi.mocked(getProjectListInfo).mockResolvedValue(null as any)
     const result = await fetchCodeIntelContext(config)
+    expect(result).toBeNull()
+  })
+})
+
+describe("fetchKnowledgeGraphContext", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("returns null when no communities are detected", async () => {
+    const config = makeConfig()
+    vi.mocked(detectKnowledgeGraphCommunities).mockResolvedValue([])
+
+    const result = await fetchKnowledgeGraphContext(config)
+
+    expect(result).toBeNull()
+    expect(detectKnowledgeGraphCommunities).toHaveBeenCalledWith(config)
+  })
+
+  it("formats detected communities with configured item limit", async () => {
+    const config = makeConfig({ chatMessage: { maxKnowledgeGraphItems: 1 } })
+    vi.mocked(detectKnowledgeGraphCommunities).mockResolvedValue([
+      {
+        id: "c1",
+        label: "Runtime",
+        size: 2,
+        entities: [
+          { id: "e1", name: "Plugin Hooks", entity_type: "module" },
+          { id: "e2", name: "MCP Client", entity_type: "service" },
+        ],
+        relations: [],
+      },
+      {
+        id: "c2",
+        label: "Storage",
+        size: 1,
+        entities: [{ id: "e3", name: "Memory Store" }],
+        relations: [],
+      },
+    ])
+
+    const result = await fetchKnowledgeGraphContext(config)
+
+    expect(result).toContain("[KNOWLEDGE GRAPH] Architectural Overview:")
+    expect(result).toContain("## Runtime (2 entities)")
+    expect(result).toContain("Plugin Hooks [module]")
+    expect(result).not.toContain("Storage")
+  })
+
+  it("appends related context for exact normalized entity-name matches", async () => {
+    const config = makeConfig({ chatMessage: { knowledgeGraphEntityMatch: true } })
+    vi.mocked(detectKnowledgeGraphCommunities).mockResolvedValue([
+      {
+        id: "c1",
+        label: "Auth",
+        size: 1,
+        entities: [{ id: "auth-service", name: "Auth Service", entity_type: "service" }],
+        relations: [],
+      },
+    ])
+    vi.mocked(getRelatedKnowledgeGraphEntities).mockResolvedValue({
+      entity: { id: "auth-service", name: "Auth Service", entity_type: "service" },
+      distance: 0,
+      related: [
+        {
+          entity: { id: "db", name: "User Database", entity_type: "database" },
+          relation: { from: "auth-service", to: "db", relation_type: "reads", weight: 1 },
+        },
+      ],
+    })
+
+    const result = await fetchKnowledgeGraphContext(config, "How does the auth service validate users?")
+
+    expect(getRelatedKnowledgeGraphEntities).toHaveBeenCalledWith(config, "auth-service")
+    expect(result).toContain("Related context for Auth Service")
+    expect(result).toContain("User Database [database]")
+    expect(result).toContain("reads")
+  })
+
+  it("does not fetch related context without exact normalized entity-name match", async () => {
+    const config = makeConfig({ chatMessage: { knowledgeGraphEntityMatch: true } })
+    vi.mocked(detectKnowledgeGraphCommunities).mockResolvedValue([
+      {
+        id: "c1",
+        label: "Auth",
+        size: 1,
+        entities: [{ id: "auth-service", name: "Auth Service", entity_type: "service" }],
+        relations: [],
+      },
+    ])
+
+    const result = await fetchKnowledgeGraphContext(config, "How does authentication work?")
+
+    expect(result).toContain("Auth Service")
+    expect(getRelatedKnowledgeGraphEntities).not.toHaveBeenCalled()
+  })
+
+  it("returns null when knowledge graph lookup throws", async () => {
+    const config = makeConfig()
+    vi.mocked(detectKnowledgeGraphCommunities).mockRejectedValue(new Error("connection refused"))
+
+    const result = await fetchKnowledgeGraphContext(config)
+
     expect(result).toBeNull()
   })
 })

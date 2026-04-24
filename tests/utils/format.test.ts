@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest"
-import { formatMemoriesForInjection, formatProjectKnowledge, formatMemoriesForRecovery, formatTieredProjectKnowledge } from "../../src/utils/format.js"
+import { formatMemoriesForInjection, formatProjectKnowledge, formatMemoriesForRecovery, formatTieredProjectKnowledge, formatKnowledgeGraph } from "../../src/utils/format.js"
 import type { MemoryEntry } from "../../src/utils/format.js"
 import type { TierConfig } from "../../src/config.js"
+import type { KGCommunity } from "../../src/services/mcp-client.js"
 
 describe("formatMemoriesForInjection", () => {
   it("returns empty string for empty array", () => {
@@ -232,5 +233,49 @@ describe("formatTieredProjectKnowledge", () => {
     const result = formatTieredProjectKnowledge(allocated, tiers)
     expect(result).toContain("- DECISION: Use PostgreSQL")
     expect(result).toContain("- PATTERN: Repository pattern")
+  })
+})
+
+describe("formatKnowledgeGraph", () => {
+  it("returns empty string for empty communities", () => {
+    expect(formatKnowledgeGraph([], 3)).toBe("")
+  })
+
+  it("formats communities with up to three entities each", () => {
+    const communities: KGCommunity[] = [
+      {
+        id: "c1",
+        label: "Core Architecture",
+        size: 4,
+        entities: [
+          { id: "e1", name: "Plugin Hooks", entity_type: "module" },
+          { id: "e2", name: "Memory Protocol" },
+          { id: "e3", name: "MCP Client", entity_type: "service" },
+          { id: "e4", name: "Extra Entity", entity_type: "service" },
+        ],
+        relations: [],
+      },
+    ]
+
+    const result = formatKnowledgeGraph(communities, 5)
+    expect(result).toContain("[KNOWLEDGE GRAPH] Architectural Overview:")
+    expect(result).toContain("## Core Architecture (4 entities)")
+    expect(result).toContain("  - Plugin Hooks [module]")
+    expect(result).toContain("  - Memory Protocol")
+    expect(result).toContain("  - MCP Client [service]")
+    expect(result).not.toContain("Extra Entity")
+  })
+
+  it("truncates communities to maxItems", () => {
+    const communities: KGCommunity[] = [
+      { id: "c1", label: "One", size: 1, entities: [{ id: "e1", name: "A" }], relations: [] },
+      { id: "c2", label: "Two", size: 1, entities: [{ id: "e2", name: "B" }], relations: [] },
+      { id: "c3", label: "Three", size: 1, entities: [{ id: "e3", name: "C" }], relations: [] },
+    ]
+
+    const result = formatKnowledgeGraph(communities, 2)
+    expect(result).toContain("## One (1 entities)")
+    expect(result).toContain("## Two (1 entities)")
+    expect(result).not.toContain("## Three (1 entities)")
   })
 })

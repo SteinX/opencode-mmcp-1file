@@ -1,4 +1,5 @@
 import type { TierConfig } from "../config.js"
+import type { KGCommunity } from "../services/mcp-client.js"
 
 export interface MemoryEntry {
   id: string
@@ -123,4 +124,22 @@ export function formatTieredProjectKnowledge(
   if (sections.length === 0) return ""
 
   return `[MEMORY] Project Knowledge (tiered session guidance):\n${sections.join("\n")}`
+}
+
+export function formatKnowledgeGraph(communities: KGCommunity[], maxItems: number): string {
+  if (!communities || communities.length === 0) return ""
+
+  const sections: string[] = []
+
+  for (const community of communities.slice(0, maxItems)) {
+    sections.push(`## ${community.label} (${community.size} entities)`)
+    for (const entity of community.entities.slice(0, 3)) {
+      const type = entity.entity_type ? ` [${entity.entity_type}]` : ""
+      sections.push(`  - ${entity.name}${type}`)
+    }
+  }
+
+  if (sections.length === 0) return ""
+
+  return `[KNOWLEDGE GRAPH] Architectural Overview:\n${sections.join("\n")}`
 }

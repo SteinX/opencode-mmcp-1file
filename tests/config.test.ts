@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { resolveDataDir, loadConfig, applyConfig } from "../src/config.js"
+import { resolveDataDir, loadConfig, applyConfig, DEFAULT_CONFIG } from "../src/config.js"
 import type { PluginConfig } from "../src/config.js"
 
 vi.mock("fs", () => ({
@@ -15,7 +15,7 @@ const { readFileSync, existsSync } = await import("fs")
 
 function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
   return {
-    chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 30, injectOn: "first", projectKnowledgeTiers: [{ categories: ["USER"], limit: 5 }, { categories: ["DECISION", "PATTERN"], limit: 5 }, { categories: ["CONTEXT"], limit: 5 }] },
+    chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 30, injectOn: "first", projectKnowledgeInjectOn: "first", codeIntelInjectOn: "first", knowledgeGraphInjectOn: "first", maxKnowledgeGraphItems: 10, knowledgeGraphRelatedDepth: 1, knowledgeGraphEntityMatch: true, projectKnowledgeTiers: [{ categories: ["USER"], limit: 5 }, { categories: ["DECISION", "PATTERN"], limit: 5 }, { categories: ["CONTEXT"], limit: 5 }] },
     autoCapture: { enabled: false, debounceMs: 10000, language: "en" },
     compaction: { enabled: true, memoryLimit: 10 },
     keywordDetection: { enabled: true, extraPatterns: [] },
@@ -65,6 +65,10 @@ describe("loadConfig", () => {
     const config = loadConfig("/some/dir")
     expect(config.chatMessage.enabled).toBe(true)
     expect(config.chatMessage.maxMemories).toBe(5)
+    expect(config.chatMessage.knowledgeGraphInjectOn).toBe("first")
+    expect(config.chatMessage.maxKnowledgeGraphItems).toBe(10)
+    expect(config.chatMessage.knowledgeGraphRelatedDepth).toBe(1)
+    expect(config.chatMessage.knowledgeGraphEntityMatch).toBe(true)
     expect(config.chatMessage.projectKnowledgeTiers).toEqual([
       { categories: ["USER"], limit: 5 },
       { categories: ["DECISION", "PATTERN"], limit: 5 },
@@ -248,6 +252,29 @@ describe("loadConfig", () => {
     expect(config.captureModel.model).toBe("")
     expect(config.memoryScope.namespace).toBe("")
   })
+
+  it("exposes KG defaults in DEFAULT_CONFIG", () => {
+    expect(DEFAULT_CONFIG.chatMessage.knowledgeGraphInjectOn).toBe("first")
+    expect(DEFAULT_CONFIG.chatMessage.maxKnowledgeGraphItems).toBe(10)
+    expect(DEFAULT_CONFIG.chatMessage.knowledgeGraphRelatedDepth).toBe(1)
+    expect(DEFAULT_CONFIG.chatMessage.knowledgeGraphEntityMatch).toBe(true)
+  })
+
+  it("preserves KG defaults when merging partial chatMessage overrides", () => {
+    vi.mocked(existsSync).mockImplementation((p) =>
+      String(p).endsWith("opencode-mmcp-1file.jsonc"),
+    )
+    vi.mocked(readFileSync).mockReturnValue(
+      `{ "chatMessage": { "maxMemories": 12 } }`,
+    )
+
+    const config = loadConfig("/dir")
+    expect(config.chatMessage.maxMemories).toBe(12)
+    expect(config.chatMessage.knowledgeGraphInjectOn).toBe("first")
+    expect(config.chatMessage.maxKnowledgeGraphItems).toBe(10)
+    expect(config.chatMessage.knowledgeGraphRelatedDepth).toBe(1)
+    expect(config.chatMessage.knowledgeGraphEntityMatch).toBe(true)
+  })
 })
 
 describe("applyConfig", () => {
@@ -268,6 +295,10 @@ describe("applyConfig", () => {
         minScore: 0.35,
         projectKnowledgeInjectOn: "first",
         codeIntelInjectOn: "first",
+        knowledgeGraphInjectOn: "first",
+        maxKnowledgeGraphItems: 10,
+        knowledgeGraphRelatedDepth: 1,
+        knowledgeGraphEntityMatch: true,
         projectKnowledgeValidOnly: false,
         projectKnowledgeTiers: [
           { categories: ["USER"], limit: 5 },

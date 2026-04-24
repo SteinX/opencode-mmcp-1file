@@ -11,9 +11,11 @@ import {
   fetchAndFormatMemories,
   fetchCodeIntelContext,
   fetchProjectKnowledge,
+  fetchKnowledgeGraphContext,
   shouldInjectQueryRecall,
   shouldInjectProjectKnowledge,
   shouldInjectCodeIntel,
+  shouldInjectKnowledgeGraph,
   type InjectionSource,
 } from "./services/context-inject.js"
 import { performAutoCapture } from "./services/auto-capture.js"
@@ -212,11 +214,15 @@ const plugin: Plugin = async (input) => {
       const codeIntelPromise = shouldInjectCodeIntel(config, hookInput.sessionID, isAfterCompaction)
         ? fetchCodeIntelContext(config)
         : Promise.resolve(null)
+      const knowledgeGraphPromise = shouldInjectKnowledgeGraph(config, hookInput.sessionID, isAfterCompaction)
+        ? fetchKnowledgeGraphContext(config, userText)
+        : Promise.resolve(null)
 
-      const [formatted, projectKnowledge, codeIntelContext] = await Promise.all([
+      const [formatted, projectKnowledge, codeIntelContext, knowledgeGraphContext] = await Promise.all([
         formattedPromise,
         projectKnowledgePromise,
         codeIntelPromise,
+        knowledgeGraphPromise,
       ])
 
       let injected = false
@@ -261,6 +267,19 @@ const plugin: Plugin = async (input) => {
         } as any)
         injected = true
         injectedSources.push("code_intel")
+      }
+
+      if (knowledgeGraphContext) {
+        output.parts.push({
+          id: `prt-knowledge-graph-${Date.now()}`,
+          sessionID: hookInput.sessionID,
+          messageID: output.message.id || `msg-memory-fallback-${Date.now()}`,
+          type: "text" as const,
+          text: knowledgeGraphContext,
+          synthetic: true,
+        } as any)
+        injected = true
+        injectedSources.push("knowledge_graph")
       }
 
       if (!injected) return

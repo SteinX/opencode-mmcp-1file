@@ -78,6 +78,10 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
     "shortQueryMinLength": 3,       // Skip query recall for very short queries
     "minScore": 0.35,               // Query recall score threshold before injection
     "projectKnowledgeValidOnly": false, // Use only valid project memories when true
+    "knowledgeGraphInjectOn": "first", // "first" | "always" | "compaction" | "never"
+    "maxKnowledgeGraphItems": 10,   // Max related entities to inject from the graph
+    "knowledgeGraphRelatedDepth": 1, // Traversal depth for related entity lookup
+    "knowledgeGraphEntityMatch": true, // Enable automatic entity matching in conversation
     // Tiered injection: prioritize explicit user-requested memories first, then project guidance.
     // Set to null to disable and use flat recency-based list.
     "projectKnowledgeTiers": [

@@ -23,11 +23,13 @@ vi.mock("../src/services/context-inject.js", () => ({
   shouldInjectQueryRecall: vi.fn().mockReturnValue(false),
   shouldInjectProjectKnowledge: vi.fn().mockReturnValue(false),
   shouldInjectCodeIntel: vi.fn().mockReturnValue(false),
+  shouldInjectKnowledgeGraph: vi.fn().mockReturnValue(false),
   markSessionInjected: vi.fn(),
   markSessionCompacted: vi.fn(),
   fetchAndFormatMemories: vi.fn().mockResolvedValue(null),
   fetchCodeIntelContext: vi.fn().mockResolvedValue(null),
   fetchProjectKnowledge: vi.fn().mockResolvedValue(null),
+  fetchKnowledgeGraphContext: vi.fn().mockResolvedValue(null),
 }))
 
 vi.mock("../src/services/auto-capture.js", () => ({
@@ -107,11 +109,13 @@ const {
   shouldInjectQueryRecall,
   shouldInjectProjectKnowledge,
   shouldInjectCodeIntel,
+  shouldInjectKnowledgeGraph,
   markSessionInjected,
   markSessionCompacted,
   fetchAndFormatMemories,
   fetchCodeIntelContext,
   fetchProjectKnowledge,
+  fetchKnowledgeGraphContext,
 } = await import("../src/services/context-inject.js")
 const { performAutoCapture } = await import("../src/services/auto-capture.js")
 const { buildCompactionRecoveryContext } = await import("../src/services/compaction.js")
@@ -575,6 +579,51 @@ describe("chat.message hook", () => {
       synthetic: true,
     })
     expect(markSessionInjected).toHaveBeenCalledWith("s1", ["project_knowledge", "code_intel"])
+  })
+
+  it("injects knowledge graph context when KG source returns content", async () => {
+    const { hooks } = await initPlugin()
+    vi.mocked(shouldInjectMemories).mockReturnValue(true)
+    vi.mocked(shouldInjectKnowledgeGraph).mockReturnValue(true)
+    vi.mocked(fetchAndFormatMemories).mockResolvedValue(null)
+    vi.mocked(fetchProjectKnowledge).mockResolvedValue(null)
+    vi.mocked(fetchCodeIntelContext).mockResolvedValue(null)
+    vi.mocked(fetchKnowledgeGraphContext).mockResolvedValue("[KNOWLEDGE GRAPH] Architectural Overview")
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "tell me how modules relate" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+    expect(fetchKnowledgeGraphContext).toHaveBeenCalledWith(expect.anything(), "tell me how modules relate")
+    expect(output.parts).toHaveLength(2)
+    expect(output.parts[1]).toMatchObject({
+      type: "text",
+      text: "[KNOWLEDGE GRAPH] Architectural Overview",
+      synthetic: true,
+    })
+    expect(markSessionInjected).toHaveBeenCalledWith("s1", ["knowledge_graph"])
+  })
+
+  it("does not inject knowledge graph part when KG source returns null", async () => {
+    const { hooks } = await initPlugin()
+    vi.mocked(shouldInjectMemories).mockReturnValue(true)
+    vi.mocked(shouldInjectKnowledgeGraph).mockReturnValue(true)
+    vi.mocked(fetchAndFormatMemories).mockResolvedValue(null)
+    vi.mocked(fetchProjectKnowledge).mockResolvedValue(null)
+    vi.mocked(fetchCodeIntelContext).mockResolvedValue(null)
+    vi.mocked(fetchKnowledgeGraphContext).mockResolvedValue(null)
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "tell me how modules relate" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+    expect(fetchKnowledgeGraphContext).toHaveBeenCalledWith(expect.anything(), "tell me how modules relate")
+    expect(output.parts).toHaveLength(1)
+    expect(markSessionInjected).not.toHaveBeenCalled()
   })
 
   it("skips query recall when source-specific gates return false", async () => {
