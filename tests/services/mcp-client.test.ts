@@ -22,7 +22,7 @@ function makeConfig(transportOverride?: "stdio" | "http"): PluginConfig {
     codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
     captureModel: { provider: "openai", model: "gpt-4o-mini", apiUrl: "", apiKey: "" },
     memoryScope: { namespace: "", shareAcrossAgents: true, includeAgentMetadata: true, includeRunMetadata: false, userId: "", defaultMetadata: {} },
-    mcpServer: { command: ["npx", "-y", "memory-mcp-1file"], tag: "default", model: "qwen3", transport: transportOverride ?? "stdio", port: 23817, bind: "127.0.0.1", mcpServerName: "memory-mcp-1file" },
+    mcpServer: { command: ["npx", "-y", "memory-mcp-1file"], tag: "default", model: "qwen3", transport: transportOverride ?? "stdio", port: 23817, bind: "127.0.0.1", reconnectIntervalMs: 30000, heartbeatIntervalMs: 20000, mcpServerName: "memory-mcp-1file" },
     systemPrompt: { enabled: true },
   } as PluginConfig
 }
@@ -340,6 +340,121 @@ describe("mcp-client", () => {
         event_after: "2026-04-01T00:00:00Z",
       },
     })
+  })
+
+  it("getProjectListInfo parses typed project list data and ignores additive fields", async () => {
+    const { mod, mockClient } = await setupModule()
+    const config = makeConfig()
+
+    mockClient.callTool.mockResolvedValue({
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          projects: [
+            {
+              id: "proj-1",
+              status: "completed",
+              chunks: 12,
+              symbols: 5,
+              unknown_future_field: { keep: true },
+            },
+          ],
+          contract: { version: "1" },
+          summary: { partial: { reason_code: "partial", reason: "legacy text", extra: true } },
+          future_root: "ignored",
+        }),
+      }],
+    })
+
+    const result = await mod.getProjectListInfo(config)
+
+    expect(result).toMatchObject({
+      action: "list",
+      projects: [{ id: "proj-1", status: "completed", chunks: 12, symbols: 5 }],
+      summary: { partial: { reasonCode: "partial", reason: "legacy text" } },
+    })
+    expect(result?.projects[0]?.raw).toMatchObject({ unknown_future_field: { keep: true } })
+    expect(result?.raw).toMatchObject({ future_root: "ignored" })
+  })
+
+  it("getProjectProjectionInfo parses locator created state and canonical reason_code", async () => {
+    const { mod, mockClient } = await setupModule()
+    const config = makeConfig()
+
+    mockClient.callTool.mockResolvedValue({
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          contract: { version: "1" },
+          summary: { partial: { reason_code: "stale", reason: "projection_stale" } },
+          locator: {
+            locator: "loc-123",
+            lookup: { state: "created", reason_code: "stale", reason: "projection_stale", extra: 1 },
+            lifecycle: { persistence: "ephemeral", ttl_hint: 0 },
+            extra_locator_field: true,
+          },
+          projection: { nodes: [] },
+        }),
+      }],
+    })
+
+    const result = await mod.getProjectProjectionInfo(config, {
+      projectId: "proj-1",
+      relationScope: "all",
+      sortMode: "canonical",
+    })
+
+    expect(mockClient.callTool).toHaveBeenCalledWith({
+      name: "project_info",
+      arguments: {
+        action: "projection",
+        project_id: "proj-1",
+        relation_scope: "all",
+        sort_mode: "canonical",
+      },
+    })
+    expect(result).toMatchObject({
+      action: "projection",
+      summary: { partial: { reasonCode: "stale", reason: "projection_stale" } },
+      locator: {
+        token: "loc-123",
+        lookup: { state: "created", reasonCode: "stale", reason: "projection_stale" },
+      },
+    })
+    expect(result?.locator?.raw).toMatchObject({ extra_locator_field: true })
+  })
+
+  it("getProjectProjectionByLocatorInfo parses resolved locator state", async () => {
+    const { mod, mockClient } = await setupModule()
+    const config = makeConfig()
+
+    mockClient.callTool.mockResolvedValue({
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          locator: {
+            token: "loc-123",
+            lookup: { state: "resolved" },
+          },
+        }),
+      }],
+    })
+
+    const result = await mod.getProjectProjectionByLocatorInfo(config, { locator: "loc-123" })
+
+    expect(mockClient.callTool).toHaveBeenCalledWith({
+      name: "project_info",
+      arguments: { action: "projection_by_locator", locator: "loc-123" },
+    })
+    expect(result?.locator?.lookup.state).toBe("resolved")
+  })
+
+  it("isMissingProjectLocator treats missing and invalid_locator as fallback states", async () => {
+    const { mod } = await setupModule()
+
+    expect(mod.isMissingProjectLocator({ lookup: { state: "missing", raw: {} }, raw: {} })).toBe(true)
+    expect(mod.isMissingProjectLocator({ lookup: { state: "resolved", reasonCode: "invalid_locator", raw: {} }, raw: {} })).toBe(true)
+    expect(mod.isMissingProjectLocator({ lookup: { state: "resolved", reasonCode: "stale", raw: {} }, raw: {} })).toBe(false)
   })
 
   it("getMemoryClient throws immediately when connection is flagged as failed", async () => {
@@ -696,6 +811,48 @@ describe("HTTP transport", () => {
     await expect(mod.getMemoryClient(config)).rejects.toThrow("Memory server unavailable")
 
     expect(serverProcess.isServerRunning).toHaveBeenCalledWith(config)
+    expect(mockClient.close).toHaveBeenCalledTimes(1)
+    expect(mockConnectionState.markConnectionFailed).toHaveBeenCalledTimes(1)
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+
+  it("starts a single HTTP heartbeat while connected and stops it on disconnect", async () => {
+    const { mod } = await setupModule()
+    const config = makeConfig("http")
+    config.mcpServer.heartbeatIntervalMs = 10_000
+
+    const serverProcess = await import("../../src/services/server-process.js")
+    vi.mocked(serverProcess.isServerRunning).mockResolvedValue(true)
+
+    await mod.getMemoryClient(config)
+    expect(serverProcess.isServerRunning).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(serverProcess.isServerRunning).toHaveBeenCalledTimes(1)
+
+    await mod.getMemoryClient(config)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(serverProcess.isServerRunning).toHaveBeenCalledTimes(2)
+
+    await mod.disconnectMemoryClient(config)
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(serverProcess.isServerRunning).toHaveBeenCalledTimes(2)
+  })
+
+  it("heartbeat fails active HTTP connection through the existing failure path", async () => {
+    const { mod, mockClient } = await setupModule()
+    const config = makeConfig("http")
+    config.mcpServer.heartbeatIntervalMs = 10_000
+    const handler = vi.fn()
+
+    const serverProcess = await import("../../src/services/server-process.js")
+    vi.mocked(serverProcess.isServerRunning).mockResolvedValue(false)
+
+    mod.registerConnectionFailureHandler(handler)
+    await mod.getMemoryClient(config)
+
+    await vi.advanceTimersByTimeAsync(10_000)
+
     expect(mockClient.close).toHaveBeenCalledTimes(1)
     expect(mockConnectionState.markConnectionFailed).toHaveBeenCalledTimes(1)
     expect(handler).toHaveBeenCalledTimes(1)

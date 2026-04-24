@@ -32,6 +32,251 @@ export interface MemoryOperationContext {
   timestamp?: string
 }
 
+export type ProjectInfoReasonCode =
+  | "missing"
+  | "stale"
+  | "partial"
+  | "degraded"
+  | "invalid_locator"
+  | "generation_mismatch"
+  | "unsupported"
+  | (string & {})
+
+export type ProjectLocatorLookupState = "created" | "resolved" | "missing" | (string & {})
+
+interface ProjectInfoSummaryPartial {
+  reasonCode?: ProjectInfoReasonCode
+  reason?: string
+  raw: Record<string, unknown>
+}
+
+interface ProjectInfoSummaryEnvelope {
+  partial?: ProjectInfoSummaryPartial
+  raw: Record<string, unknown>
+}
+
+interface ProjectInfoContractEnvelope {
+  raw: Record<string, unknown>
+}
+
+interface ProjectLocatorLookup {
+  state?: ProjectLocatorLookupState
+  reasonCode?: ProjectInfoReasonCode
+  reason?: string
+  raw: Record<string, unknown>
+}
+
+interface ProjectLocatorLifecycle {
+  raw: Record<string, unknown>
+}
+
+export interface ProjectInfoLocator {
+  token?: string
+  lookup: ProjectLocatorLookup
+  lifecycle?: ProjectLocatorLifecycle
+  raw: Record<string, unknown>
+}
+
+interface ParsedProjectInfoBase {
+  contract?: ProjectInfoContractEnvelope
+  summary?: ProjectInfoSummaryEnvelope
+  raw: Record<string, unknown>
+}
+
+export interface ProjectListEntry {
+  id: string
+  status?: string
+  chunks?: number
+  symbols?: number
+  raw: Record<string, unknown>
+}
+
+export interface ProjectListInfo extends ParsedProjectInfoBase {
+  action: "list"
+  projects: ProjectListEntry[]
+}
+
+export interface ProjectStatsInfo extends ParsedProjectInfoBase {
+  action: "stats"
+}
+
+export interface ProjectProjectionInfo extends ParsedProjectInfoBase {
+  action: "projection" | "projection_by_locator"
+  locator?: ProjectInfoLocator
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined
+}
+
+function asNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined
+}
+
+function parseJsonRecord(raw: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(raw)
+    return isRecord(parsed) ? parsed : null
+  } catch (err) {
+    logger.debug("failed to parse JSON record", { error: String(err) })
+    return null
+  }
+}
+
+function extractJsonRecord(result: Awaited<ReturnType<Client["callTool"]>>): Record<string, unknown> | null {
+  return parseJsonRecord(extractTextResult(result))
+}
+
+function parseProjectSummaryPartial(summary: Record<string, unknown> | undefined): ProjectInfoSummaryPartial | undefined {
+  if (!summary || !isRecord(summary.partial)) return undefined
+
+  return {
+    reasonCode: asString(summary.partial.reason_code) as ProjectInfoReasonCode | undefined,
+    reason: asString(summary.partial.reason),
+    raw: summary.partial,
+  }
+}
+
+function parseProjectInfoBase(raw: Record<string, unknown>): ParsedProjectInfoBase {
+  const summary = isRecord(raw.summary)
+    ? {
+        partial: parseProjectSummaryPartial(raw.summary),
+        raw: raw.summary,
+      }
+    : undefined
+
+  return {
+    contract: isRecord(raw.contract) ? { raw: raw.contract } : undefined,
+    summary,
+    raw,
+  }
+}
+
+function parseLocatorToken(locator: Record<string, unknown>): string | undefined {
+  return asString(locator.value)
+    ?? asString(locator.id)
+    ?? asString(locator.locator)
+    ?? asString(locator.token)
+    ?? asString(locator.handle)
+}
+
+function parseProjectLocator(locator: unknown): ProjectInfoLocator | undefined {
+  if (!isRecord(locator)) return undefined
+
+  const lookup = isRecord(locator.lookup)
+    ? {
+        state: asString(locator.lookup.state) as ProjectLocatorLookupState | undefined,
+        reasonCode: asString(locator.lookup.reason_code) as ProjectInfoReasonCode | undefined,
+        reason: asString(locator.lookup.reason),
+        raw: locator.lookup,
+      }
+    : { raw: {} }
+
+  return {
+    token: parseLocatorToken(locator),
+    lookup,
+    lifecycle: isRecord(locator.lifecycle) ? { raw: locator.lifecycle } : undefined,
+    raw: locator,
+  }
+}
+
+function parseProjectList(raw: Record<string, unknown>): ProjectListInfo {
+  const projects = Array.isArray(raw.projects)
+    ? raw.projects.filter(isRecord).map((project) => ({
+        id: asString(project.id) ?? "",
+        status: asString(project.status),
+        chunks: asNumber(project.chunks),
+        symbols: asNumber(project.symbols),
+        raw: project,
+      })).filter((project) => project.id.length > 0)
+    : []
+
+  return {
+    action: "list",
+    ...parseProjectInfoBase(raw),
+    projects,
+  }
+}
+
+function parseProjectStats(raw: Record<string, unknown>): ProjectStatsInfo {
+  return {
+    action: "stats",
+    ...parseProjectInfoBase(raw),
+  }
+}
+
+function parseProjectProjection(
+  action: "projection" | "projection_by_locator",
+  raw: Record<string, unknown>,
+): ProjectProjectionInfo {
+  return {
+    action,
+    ...parseProjectInfoBase(raw),
+    locator: parseProjectLocator(raw.locator),
+  }
+}
+
+async function callProjectInfo(config: PluginConfig, args: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+  try {
+    const result = await callToolWithRetry(config, "project_info", args)
+    return extractJsonRecord(result)
+  } catch (err) {
+    logger.error("project_info failed", { error: String(err), args })
+    return null
+  }
+}
+
+export async function getProjectListInfo(config: PluginConfig): Promise<ProjectListInfo | null> {
+  const raw = await callProjectInfo(config, { action: "list" })
+  return raw ? parseProjectList(raw) : null
+}
+
+export async function getProjectStatsInfo(
+  config: PluginConfig,
+  projectId?: string,
+): Promise<ProjectStatsInfo | null> {
+  const raw = await callProjectInfo(config, cleanRecord({ action: "stats", project_id: projectId }))
+  return raw ? parseProjectStats(raw) : null
+}
+
+export async function getProjectProjectionInfo(
+  config: PluginConfig,
+  args: {
+    projectId: string
+    relationScope?: string
+    sortMode?: string
+  },
+): Promise<ProjectProjectionInfo | null> {
+  const raw = await callProjectInfo(config, cleanRecord({
+    action: "projection",
+    project_id: args.projectId,
+    relation_scope: args.relationScope,
+    sort_mode: args.sortMode,
+  }))
+  return raw ? parseProjectProjection("projection", raw) : null
+}
+
+export async function getProjectProjectionByLocatorInfo(
+  config: PluginConfig,
+  args: {
+    locator: string
+  },
+): Promise<ProjectProjectionInfo | null> {
+  const raw = await callProjectInfo(config, { action: "projection_by_locator", locator: args.locator })
+  return raw ? parseProjectProjection("projection_by_locator", raw) : null
+}
+
+export function isMissingProjectLocator(locator?: ProjectInfoLocator): boolean {
+  const reasonCode = locator?.lookup.reasonCode
+  return locator?.lookup.state === "missing"
+    || reasonCode === "missing"
+    || reasonCode === "invalid_locator"
+}
+
 type ScopedToolArgs = Record<string, unknown> & {
   agentId?: string
   runId?: string
@@ -63,6 +308,8 @@ let connectionPromise: Promise<Client> | null = null
 let connectionFailureHandler: (() => void) | null = null
 let lastHealthCheckAt = 0
 let healthCheckPromise: Promise<boolean> | null = null
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null
+let heartbeatPromise: Promise<void> | null = null
 
 const HEALTH_CHECK_THROTTLE_MS = 5_000
 
@@ -100,6 +347,8 @@ function isRecoverableConnectionError(config: PluginConfig, err: unknown): boole
 }
 
 async function disposeClient(): Promise<void> {
+  stopHeartbeat()
+
   if (!mcpClient) return
 
   try {
@@ -109,6 +358,42 @@ async function disposeClient(): Promise<void> {
   } finally {
     mcpClient = null
     connectionPromise = null
+  }
+}
+
+function stopHeartbeat(): void {
+  if (heartbeatTimer !== null) {
+    clearInterval(heartbeatTimer)
+    heartbeatTimer = null
+  }
+  heartbeatPromise = null
+}
+
+function startHeartbeat(config: PluginConfig): void {
+  stopHeartbeat()
+
+  if (config.mcpServer.transport !== "http" || !mcpClient) return
+
+  heartbeatTimer = setInterval(() => {
+    if (!mcpClient || heartbeatPromise) return
+
+    heartbeatPromise = (async () => {
+      const healthy = await getCachedClientHealth(config)
+      if (healthy || !mcpClient) return
+
+      logger.warn("HTTP MCP heartbeat detected unhealthy server; failing active connection")
+      await failActiveConnection()
+    })()
+      .catch((err) => {
+        logger.debug("HTTP MCP heartbeat check failed", { error: String(err) })
+      })
+      .finally(() => {
+        heartbeatPromise = null
+      })
+  }, config.mcpServer.heartbeatIntervalMs)
+
+  if (heartbeatTimer && typeof heartbeatTimer === "object" && "unref" in heartbeatTimer) {
+    heartbeatTimer.unref()
   }
 }
 
@@ -151,6 +436,7 @@ async function resetClientConnection(config: PluginConfig): Promise<Client> {
 
   const client = await connectToServer(config)
   mcpClient = client
+  startHeartbeat(config)
   markConnectionHealthy()
   return client
 }
@@ -203,6 +489,7 @@ export async function getMemoryClient(config: PluginConfig): Promise<Client> {
   connectionPromise = connectToServer(config)
   try {
     mcpClient = await connectionPromise
+    startHeartbeat(config)
     markConnectionHealthy()
     return mcpClient
   } catch (err) {

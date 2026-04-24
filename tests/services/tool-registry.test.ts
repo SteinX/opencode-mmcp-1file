@@ -4,6 +4,9 @@ import type { PluginConfig } from "../../src/config.js"
 
 vi.mock("../../src/services/mcp-client.js", () => ({
   callMemoryTool: vi.fn().mockResolvedValue("ok"),
+  getProjectProjectionInfo: vi.fn().mockResolvedValue({ action: "projection", raw: { ok: true } }),
+  getProjectProjectionByLocatorInfo: vi.fn().mockResolvedValue({ action: "projection_by_locator", raw: { ok: true } }),
+  isMissingProjectLocator: vi.fn().mockReturnValue(false),
 }))
 
 vi.mock("../../src/utils/logger.js", () => ({
@@ -32,7 +35,12 @@ vi.mock("../../src/services/connection-state.js", () => ({
   }),
 }))
 
-const { callMemoryTool } = await import("../../src/services/mcp-client.js")
+const {
+  callMemoryTool,
+  getProjectProjectionInfo,
+  getProjectProjectionByLocatorInfo,
+  isMissingProjectLocator,
+} = await import("../../src/services/mcp-client.js")
 const { stripPrivateContent } = await import("../../src/utils/privacy.js")
 const { applyConfig } = await import("../../src/config.js")
 const { isConnectionFailed, getConnectionStatus } = await import("../../src/services/connection-state.js")
@@ -412,6 +420,125 @@ describe("project_status tool", () => {
       "project_info",
       expect.objectContaining({ action: "stats", project_id: "proj-1" }),
     )
+  })
+
+  it("requests projection via project_status with default relation_scope and sort_mode", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    vi.mocked(getProjectProjectionInfo).mockResolvedValueOnce({
+      action: "projection",
+      raw: { action: "projection", locator: { lookup: { state: "created" } } },
+    } as any)
+
+    const result = await tools.project_status.execute({ action: "projection", project_id: "proj-1" }, mockContext)
+
+    expect(getProjectProjectionInfo).toHaveBeenCalledWith(expect.anything(), {
+      projectId: "proj-1",
+      relationScope: "all",
+      sortMode: "canonical",
+    })
+    expect(result).toBe(JSON.stringify({ action: "projection", locator: { lookup: { state: "created" } } }))
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+
+  it("passes explicit projection relation_scope and sort_mode", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.project_status.execute({
+      action: "projection",
+      project_id: "proj-1",
+      relation_scope: "imports",
+      sort_mode: "custom",
+    }, mockContext)
+
+    expect(getProjectProjectionInfo).toHaveBeenCalledWith(expect.anything(), {
+      projectId: "proj-1",
+      relationScope: "imports",
+      sortMode: "custom",
+    })
+  })
+
+  it("uses locator readback for projection_by_locator when locator resolves", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    vi.mocked(getProjectProjectionByLocatorInfo).mockResolvedValueOnce({
+      action: "projection_by_locator",
+      locator: { lookup: { state: "resolved" } },
+      raw: { action: "projection_by_locator", ok: true },
+    } as any)
+    vi.mocked(isMissingProjectLocator).mockReturnValueOnce(false)
+
+    const result = await tools.project_status.execute({
+      action: "projection_by_locator",
+      project_id: "proj-1",
+      locator: "loc-1",
+    }, mockContext)
+
+    expect(getProjectProjectionByLocatorInfo).toHaveBeenCalledWith(expect.anything(), { locator: "loc-1" })
+    expect(getProjectProjectionInfo).not.toHaveBeenCalled()
+    expect(result).toBe(JSON.stringify({ action: "projection_by_locator", ok: true }))
+  })
+
+  it("falls back to fresh projection when locator readback is missing or invalid", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    vi.mocked(getProjectProjectionByLocatorInfo).mockResolvedValueOnce({
+      action: "projection_by_locator",
+      locator: { lookup: { state: "missing", reasonCode: "invalid_locator" } },
+      raw: { action: "projection_by_locator", ok: false },
+    } as any)
+    vi.mocked(isMissingProjectLocator).mockReturnValueOnce(true)
+    vi.mocked(getProjectProjectionInfo).mockResolvedValueOnce({
+      action: "projection",
+      raw: { action: "projection", locator: { lookup: { state: "created" } } },
+    } as any)
+
+    const result = await tools.project_status.execute({
+      action: "projection_by_locator",
+      project_id: "proj-1",
+      locator: "loc-1",
+      relation_scope: "calls",
+    }, mockContext)
+
+    expect(getProjectProjectionByLocatorInfo).toHaveBeenCalledWith(expect.anything(), { locator: "loc-1" })
+    expect(getProjectProjectionInfo).toHaveBeenCalledWith(expect.anything(), {
+      projectId: "proj-1",
+      relationScope: "calls",
+      sortMode: "canonical",
+    })
+    expect(result).toBe(JSON.stringify({ action: "projection", locator: { lookup: { state: "created" } } }))
+  })
+
+  it("falls back to fresh projection when locator readback returns null", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    vi.mocked(getProjectProjectionByLocatorInfo).mockResolvedValueOnce(null)
+    vi.mocked(getProjectProjectionInfo).mockResolvedValueOnce({
+      action: "projection",
+      raw: { action: "projection", ok: true },
+    } as any)
+
+    const result = await tools.project_status.execute({
+      action: "projection_by_locator",
+      project_id: "proj-1",
+      locator: "loc-1",
+    }, mockContext)
+
+    expect(getProjectProjectionInfo).toHaveBeenCalledWith(expect.anything(), {
+      projectId: "proj-1",
+      relationScope: "all",
+      sortMode: "canonical",
+    })
+    expect(result).toBe(JSON.stringify({ action: "projection", ok: true }))
+  })
+
+  it("requires project_id for projection action", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.project_status.execute({ action: "projection" }, mockContext)
+    expect(result).toContain("project_id is required")
+    expect(getProjectProjectionInfo).not.toHaveBeenCalled()
+  })
+
+  it("requires project_id for missing locator fallback", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    vi.mocked(getProjectProjectionByLocatorInfo).mockResolvedValueOnce(null)
+    const result = await tools.project_status.execute({ action: "projection_by_locator", locator: "loc-1" }, mockContext)
+    expect(result).toContain("project_id is required")
   })
 
   it("calls index_project for index action", async () => {
