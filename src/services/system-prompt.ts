@@ -106,20 +106,13 @@ function buildCodeIntelligenceSection(config: PluginConfig): string {
 
   return `
 ### Code Intelligence Tools
-When a project has been indexed (via /init-mcp-memory or project_status), these tools provide **semantic code understanding** beyond what grep/LSP offer — intent-based search, cross-session persistence, and call graph traversal.
+When code_search or project_status are available, use them first for semantic understanding before falling back to grep/LSP.
 
-#### Tool Selection Guide
-| Need | How to use code_search | When to prefer over grep/LSP |
-|------|------------------------|------------------------------|
-| Find code by **intent or concept** | search_type: "intent", query: "how is auth handled?" | Semantic search understands intent, not just literal matches |
-| Find symbols by **name** | search_type: "symbol", query: "handleRequest" | Similar to LSP symbol search, but works across indexed projects |
-| Trace **callers/callees** | search_type: "callers" or "callees", symbol_id: "..." | Call graph traversal — grep/LSP cannot provide this |
-| Check indexing status | project_status(action: "list") | Verify projects are indexed before searching |
-
-#### Workflow
-1. **Search by intent**: Use code_search with search_type "intent" for semantic queries
-2. **Find symbols**: Use code_search with search_type "symbol" for exact name lookup
-3. **Trace relationships**: Use code_search with search_type "callers"/"callees"/"related" and the symbol_id from step 2
+#### Action Triggers
+1. **Unfamiliar code or "how does X work?"** → use code_search with search_type: "intent"
+2. **Known symbol name** → use code_search with search_type: "symbol"
+3. **Call relationships or refactoring impact** → use code_search with search_type: "callers", "callees", or "related"
+4. **Before searching** → use project_status(action: "list") to confirm indexing when needed
 ${reindexGuidance}
 
 Use /init-mcp-memory command to bootstrap full project memory with code indexing + deep research + knowledge graph.

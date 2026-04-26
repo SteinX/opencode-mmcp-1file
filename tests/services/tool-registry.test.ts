@@ -349,6 +349,16 @@ describe("code_search tool", () => {
     vi.clearAllMocks()
   })
 
+  it("describes semantic code intelligence and symbol graph guidance", () => {
+    const tools = buildToolRegistry(makeConfig())
+    expect(tools.code_search.description).toContain("semantic code intelligence, not exact literal grep/search")
+    expect(tools.code_search.description).toContain("search_type: \"symbol\"")
+    expect(tools.code_search.description).toContain("search_type: \"callers\" | \"callees\" | \"related\"")
+    expect(tools.code_search.description).toContain('code_search({ search_type: "intent"')
+    expect(tools.code_search.description).toContain('code_search({ search_type: "symbol"')
+    expect(tools.code_search.description).toContain('code_search({ search_type: "callers"')
+  })
+
   it("calls recall_code for intent search", async () => {
     const tools = buildToolRegistry(makeConfig())
     await tools.code_search.execute({ query: "authentication handler" }, mockContext)
@@ -382,7 +392,7 @@ describe("code_search tool", () => {
   it("requires symbol_id for graph searches", async () => {
     const tools = buildToolRegistry(makeConfig())
     const result = await tools.code_search.execute({ query: "", search_type: "callers" }, mockContext)
-    expect(result).toContain("symbol_id is required")
+    expect(result).toContain('First call code_search({ search_type: "symbol", query: "<name>" })')
     expect(callMemoryTool).not.toHaveBeenCalled()
   })
 
@@ -395,11 +405,19 @@ describe("code_search tool", () => {
       expect.objectContaining({ projectId: "proj-1", limit: 5 }),
     )
   })
+
 })
 
 describe("project_status tool", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+  })
+
+  it("describes the readiness path from list to index to stats", () => {
+    const tools = buildToolRegistry(makeConfig())
+    expect(tools.project_status.description).toContain("Start with 'list' to see indexed projects")
+    expect(tools.project_status.description).toContain("use 'index' if a project is missing or stale")
+    expect(tools.project_status.description).toContain("then use 'stats' to confirm the index is ready")
   })
 
   it("calls project_info for list action", async () => {
@@ -567,6 +585,7 @@ describe("project_status tool", () => {
       expect.objectContaining({ path: "/project", force: true }),
     )
   })
+
 })
 
 describe("knowledge_graph tool", () => {

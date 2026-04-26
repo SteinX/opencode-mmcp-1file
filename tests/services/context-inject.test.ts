@@ -394,15 +394,39 @@ describe("fetchCodeIntelContext", () => {
     vi.clearAllMocks()
   })
 
-  it("returns null when no projects are indexed", async () => {
+  it("returns unindexed guidance when no projects are indexed", async () => {
     const config = makeConfig()
     vi.mocked(getProjectListInfo).mockResolvedValue({ action: "list", projects: [], raw: {} } as any)
     const result = await fetchCodeIntelContext(config)
-    expect(result).toBeNull()
+    expect(result).toContain("[CODE INTELLIGENCE] No indexed projects are available yet.")
+    expect(result).toContain("project_status")
+    expect(result).toContain("code_search")
     expect(getProjectListInfo).toHaveBeenCalledWith(config)
   })
 
-  it("returns null when all projects are still indexing", async () => {
+  it("returns actionable guidance when projects exist but none are indexed", async () => {
+    const config = makeConfig()
+    vi.mocked(getProjectListInfo).mockResolvedValue({
+      action: "list",
+      projects: [
+        { id: "proj-1", status: "indexing", chunks: 0, symbols: 0, raw: {} },
+        { id: "proj-2", status: "queued", chunks: 0, symbols: 0, raw: {} },
+      ],
+      raw: {},
+    } as any)
+
+    const result = await fetchCodeIntelContext(config)
+
+    expect(result).toContain("[CODE INTELLIGENCE] No indexed projects are available yet.")
+    expect(result).toContain("proj-1")
+    expect(result).toContain("proj-2")
+    expect(result).toContain("indexing")
+    expect(result).toContain("queued")
+    expect(result).toContain("project_status")
+    expect(result).toContain("code_search")
+  })
+
+  it("returns actionable guidance when all projects are still indexing", async () => {
     const config = makeConfig()
     vi.mocked(getProjectListInfo).mockResolvedValue({
       action: "list",
@@ -410,7 +434,8 @@ describe("fetchCodeIntelContext", () => {
       raw: {},
     } as any)
     const result = await fetchCodeIntelContext(config)
-    expect(result).toBeNull()
+    expect(result).toContain("[CODE INTELLIGENCE] No indexed projects are available yet.")
+    expect(result).toContain("proj-1")
   })
 
   it("returns context string for completed projects", async () => {
@@ -469,6 +494,27 @@ describe("fetchCodeIntelContext", () => {
     vi.mocked(getProjectListInfo).mockResolvedValue(null as any)
     const result = await fetchCodeIntelContext(config)
     expect(result).toBeNull()
+  })
+
+  it("formats indexed projects with symbol and chunk counts", async () => {
+    const config = makeConfig()
+    vi.mocked(getProjectListInfo).mockResolvedValue({
+      action: "list",
+      projects: [
+        { id: "indexed-proj", status: "indexed", chunks: 200, symbols: 80, raw: {} },
+      ],
+      raw: {},
+    } as any)
+
+    const result = await fetchCodeIntelContext(config)
+
+    expect(result).toContain("[CODE INTELLIGENCE] Indexed projects available:")
+    expect(result).toContain("indexed-proj")
+    expect(result).toContain("80 symbols")
+    expect(result).toContain("200 chunks")
+    expect(result).toContain("search_type: \"intent\"")
+    expect(result).toContain("search_type: \"symbol\"")
+    expect(result).toContain("search_type: \"callers\"")
   })
 })
 

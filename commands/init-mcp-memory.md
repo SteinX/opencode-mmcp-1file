@@ -80,7 +80,15 @@ Then verify with:
 project_status(action: "stats", project_id: "<project id>")
 ```
 
-Optionally save one concise `CONTEXT` memory that semantic code search is ready.
+### Verification Loop (Mandatory)
+
+After indexing completes (or if already ready), perform a quick semantic verification:
+
+1. **Test Intent**: `code_search(query: "high-level purpose of this project", search_type: "intent")`
+2. **Test Symbol**: Find a known core function or class and run `code_search(query: "<SymbolName>", search_type: "symbol")`
+3. **Trace Graph**: Use a `symbol_id` from the previous step to run `code_search(symbol_id: "<ID>", search_type: "callers")`
+
+Optionally save one concise `CONTEXT` memory that semantic code search and call graph traversal are verified and ready.
 
 Readiness is evaluated for the current workspace. A shared shard may already contain code-index sync state for other workspaces, but that does not mean the current project is indexed and fresh.
 

@@ -4,7 +4,7 @@
 
 export interface TriggerResult {
   triggered: boolean
-  type: "decision" | "new_task" | "error_context" | null
+  type: "decision" | "new_task" | "error_context" | "code_exploration" | null
   message: string
 }
 
@@ -73,8 +73,40 @@ function detectErrorContext(text: string): boolean {
 }
 
 /**
+ * Detect if text is asking about local code structure, callers, or definitions.
+ */
+function detectCodeExploration(text: string): boolean {
+  const codeLikeSignals = [
+    /\b[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\b/,
+    /\b[A-Za-z_][A-Za-z0-9_]*[A-Z][A-Za-z0-9_]*\b/,
+    /\b[A-Za-z_][A-Za-z0-9_]*_[A-Za-z0-9_]+\b/,
+    /\b(?:config|loader|loading|hook|trigger|helper|function|module|service|class|method|store|index|api|implementation)\b/i,
+  ]
+
+  const hasCodeLikeSignal = codeLikeSignals.some((p) => p.test(text))
+
+  const chineseLocalCodePatterns = [
+    /(?:这个功能怎么实现的|这个功能是怎么实现的|这个怎么实现的|怎么实现的)/,
+    /(?:谁调用\s*[A-Za-z_][\w.]*|在哪里定义\s*[A-Za-z_][\w.]*|谁调用\s*\w|在哪里定义\s*\w)/,
+  ]
+
+  if (chineseLocalCodePatterns.some((p) => p.test(text))) {
+    return true
+  }
+
+  const patterns = [
+    /\b(where is|where are|who calls|what calls|trace callers of|refactor impact for)\b.*\b[A-Za-z_][\w.]*\b/i,
+    /\b(?:where is|where are|who calls|what calls|trace callers of|refactor impact for)\s+[A-Za-z_][\w.]*\b/i,
+    /\b(?:how does|how do)\s+(?:the\s+)?(?:config|loader|loading|hook|trigger|helper|function|module|service|class|method|store|index|api|implementation)\b/i,
+    /\b(?:how does|how do)\s+[^?]{0,80}\b(?:config|loader|loading|hook|trigger|helper|function|module|service|class|method|store|index|api|implementation)\b/i,
+  ]
+
+  return hasCodeLikeSignal && patterns.some((p) => p.test(text))
+}
+
+/**
  * Check all triggers and return the highest priority nudge.
- * Priority: decision > new_task > error_context
+ * Priority: decision > new_task > error_context > code_exploration
  */
 export function checkTriggers(
   sessionID: string,
@@ -111,6 +143,20 @@ export function checkTriggers(
       type: "error_context",
       message:
         "[MEMORY NUDGE] 🔍 An error was mentioned. Consider searching memory for BUGFIX entries before debugging.",
+    }
+  }
+
+  // Check code exploration trigger (lowest priority)
+  if (
+    detectCodeExploration(userText) &&
+    shouldTrigger(sessionID, "code_exploration")
+  ) {
+    recordNudge(sessionID, "code_exploration")
+    return {
+      triggered: true,
+      type: "code_exploration",
+      message:
+        '[MEMORY NUDGE] 🔎 This looks like a local code question. Consider using code_search first; if you need to confirm code-index readiness, check project_status(action: "list") before deciding whether to index.',
     }
   }
 

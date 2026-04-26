@@ -122,6 +122,27 @@ describe("checkTriggers", () => {
     })
   })
 
+  describe("code exploration detection", () => {
+    it("triggers on local code understanding questions in English", () => {
+      const result = checkTriggers(sessionID, "", "where is loadConfig defined?")
+      expect(result.triggered).toBe(true)
+      expect(result.type).toBe("code_exploration")
+      expect(result.message).toContain("code_search")
+      expect(result.message).toContain('project_status(action: "list")')
+    })
+
+    it("triggers on local code understanding questions in Chinese", () => {
+      const result = checkTriggers(sessionID, "", "这个功能怎么实现的")
+      expect(result.triggered).toBe(true)
+      expect(result.type).toBe("code_exploration")
+    })
+
+    it("does not trigger on generic non-local questions", () => {
+      const result = checkTriggers(sessionID, "", "how does deployment pricing work?")
+      expect(result.triggered).toBe(false)
+    })
+  })
+
   describe("priority ordering", () => {
     it("prioritizes decision over new task when both match", () => {
       const result = checkTriggers(
@@ -144,6 +165,12 @@ describe("checkTriggers", () => {
       expect(result.triggered).toBe(true)
       expect(result.type).toBe("new_task")
     })
+
+    it("prioritizes error context over code exploration when both match", () => {
+      const result = checkTriggers(sessionID, "", "The error is in loadConfig, where is it defined?")
+      expect(result.triggered).toBe(true)
+      expect(result.type).toBe("error_context")
+    })
   })
 
   describe("cooldown mechanism", () => {
@@ -161,6 +188,14 @@ describe("checkTriggers", () => {
 
       const result2 = checkTriggers(sessionID, "", "Please implement auth")
       expect(result2.triggered).toBe(true)
+    })
+
+    it("applies cooldown to code exploration independently", () => {
+      const result1 = checkTriggers(sessionID, "", "where is loadConfig defined?")
+      expect(result1.triggered).toBe(true)
+
+      const result2 = checkTriggers(sessionID, "", "who calls loadConfig?")
+      expect(result2.triggered).toBe(false)
     })
   })
 })

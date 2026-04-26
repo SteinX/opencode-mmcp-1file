@@ -189,10 +189,10 @@ reload_config()
 ## Step 5: Next Steps
 
 After setup, suggest:
-- "Run `/init-mcp-memory` to index this codebase and build project memory"
+- "Run `/init-mcp-memory` to index this codebase and build project memory. This enables semantic `code_search` and call graph workflows."
 - "Your config is at `opencode-mmcp-1file.jsonc` — edit it anytime and call `reload_config()` to apply"
 - If auto-capture is enabled: "I'll automatically capture important context from our conversations" (note: works out of the box even without a dedicated API key)
-- If auto-capture is disabled: "You can manually store memories using `store_memory()`"
+- If auto-capture is disabled: "You can manually store memories using `memory_save`"
 
 ## Your Task
 

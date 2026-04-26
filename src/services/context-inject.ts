@@ -168,6 +168,46 @@ function projectKnowledgeContext(config: PluginConfig): MemoryOperationContext |
   return namespace ? { namespace } : undefined
 }
 
+function formatIndexedCodeIntelContext(
+  indexedProjects: Array<{ id: string; symbols?: number | null; chunks?: number | null }>,
+): string {
+  const lines = indexedProjects.map((project) => {
+    const parts = [`- **${project.id}**`]
+    if (project.symbols != null) parts.push(`${project.symbols} symbols`)
+    if (project.chunks != null) parts.push(`${project.chunks} chunks`)
+    return parts.join(" | ")
+  })
+
+  return [
+    "[CODE INTELLIGENCE] Indexed projects available:",
+    ...lines,
+    "",
+    "Next steps: use `code_search` with `search_type: \"intent\"` for semantic search, `search_type: \"symbol\"` for exact symbols, and `search_type: \"callers\" | \"callees\" | \"related\"` to traverse relationships.",
+    "Use `project_status(action: \"list\")` to confirm indexing state before deeper code-intel queries.",
+  ].join("\n")
+}
+
+function formatUnindexedCodeIntelContext(
+  projects: Array<{ id: string; status?: string | null }>,
+): string {
+  const lines = ["[CODE INTELLIGENCE] No indexed projects are available yet."]
+
+  if (projects.length > 0) {
+    lines.push("Discovered projects:")
+    for (const project of projects) {
+      const status = project.status ? ` (${project.status})` : ""
+      lines.push(`- **${project.id}**${status}`)
+    }
+  }
+
+  lines.push(
+    "",
+    "Next steps: use `project_status(action: \"list\")` to confirm what is present, then index a project before using `code_search` for intent, symbol, or relationship traversal queries.",
+  )
+
+  return lines.join("\n")
+}
+
 export async function fetchAndFormatMemories(
   config: PluginConfig,
   userMessageText: string,
@@ -229,23 +269,9 @@ export async function fetchCodeIntelContext(
     const indexed = info.projects.filter(
       (project) => project.status === "completed" || project.status === "indexed",
     )
-    if (indexed.length === 0) return null
+    if (indexed.length === 0) return formatUnindexedCodeIntelContext(info.projects)
 
-    const lines = indexed.map((project) => {
-      const parts = [`- **${project.id}**`]
-      if (project.symbols != null) parts.push(`${project.symbols} symbols`)
-      if (project.chunks != null) parts.push(`${project.chunks} chunks`)
-      return parts.join(" | ")
-    })
-
-    return [
-      "[CODE INTELLIGENCE] Indexed projects available:",
-      ...lines,
-      "",
-      "Use `code_search` with `search_type: \"intent\"` for semantic code search,",
-      "`search_type: \"symbol\"` for symbol lookup, and `search_type: \"callers\" | \"callees\" | \"related\"` to traverse call relationships.",
-      "Use `project_status(action: \"list\")` to verify indexing state before deeper code-intel queries.",
-    ].join("\n")
+    return formatIndexedCodeIntelContext(indexed)
   } catch (err) {
     logger.debug("Failed to fetch code intel context", { error: String(err) })
     return null

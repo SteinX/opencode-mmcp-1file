@@ -258,8 +258,10 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
      */
     code_search: tool({
       description:
-        "Search and understand code. Use natural language to find code by intent/concept (e.g., 'how is auth handled?'). " +
-        "Use symbol_name when you know the exact function/class name. Results include symbol IDs for exploring call relationships.",
+        "Search and understand code. This is semantic code intelligence, not exact literal grep/search: use natural language to find code by intent/concept (e.g. 'how is auth handled?'). " +
+        "Use search_type: \"symbol\" when you know the exact function/class name (e.g. query: \"handleRequest\"). " +
+        "Use search_type: \"callers\" | \"callees\" | \"related\" with symbol_id to traverse relationships, and use the symbol IDs returned by symbol lookup to continue exploring. " +
+        "Examples: code_search({ search_type: \"intent\", query: \"where do we validate memory privacy?\" }), code_search({ search_type: \"symbol\", query: \"handleRequest\" }), code_search({ search_type: \"callers\", query: \"\", symbol_id: \"sym-123\" }).",
       args: {
         query: tool.schema.string(),
         search_type: tool.schema.enum(["intent", "symbol", "callers", "callees", "related"]).optional(),
@@ -289,7 +291,7 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
           case "callees":
           case "related": {
             if (!args.symbol_id) {
-              return `Error: symbol_id is required for ${searchType} search. First use search_type="symbol" to find the symbol ID.`
+              return `Error: symbol_id is required for ${searchType} search. First call code_search({ search_type: "symbol", query: "<name>" }) to find the symbol ID.`
             }
             return proxy("symbol_graph", {
               action: searchType,
@@ -308,7 +310,8 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
      */
     project_status: tool({
       description:
-        "Check project indexing status, build project projections, or index a new project. Use 'list' to see indexed projects, 'index' to add a project, 'stats' for code statistics, 'projection' to build a short-lived projection export, and 'projection_by_locator' to read it back when you already have the ephemeral locator.",
+        "Check project indexing status and verify readiness. Start with 'list' to see indexed projects, use 'index' if a project is missing or stale, then use 'stats' to confirm the index is ready. " +
+        "Use 'projection' to build a short-lived projection export and 'projection_by_locator' to read it back when you already have the ephemeral locator.",
       args: {
         action: tool.schema.enum(["list", "index", "stats", "projection", "projection_by_locator"]),
         path: tool.schema.string().optional(),

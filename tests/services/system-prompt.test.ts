@@ -86,7 +86,9 @@ describe("buildMemorySystemPrompt", () => {
     expect(result).toContain("code_search")
     expect(result).toContain("project_status")
     expect(result).toContain("/init-mcp-memory")
-    expect(result).toContain("Background refresh")
+    expect(result).toContain("Unfamiliar code or \"how does X work?\"")
+    expect(result).toContain("Known symbol name")
+    expect(result).toContain("Call relationships or refactoring impact")
   })
 
   it("uses one-time setup guidance when code index sync is disabled", () => {
@@ -103,11 +105,13 @@ describe("buildMemorySystemPrompt", () => {
     const result = buildMemorySystemPrompt(makeConfig(), ["memory_query", "memory_save"])
     expect(result).not.toContain("### Code Intelligence Tools")
     expect(result).not.toContain("/init-mcp-memory")
+    expect(result).not.toContain("Unfamiliar code or \"how does X work?\"")
   })
 
   it("includes Code Intelligence with code intel tools", () => {
     const result = buildMemorySystemPrompt(makeConfig(), ["code_search"])
     expect(result).toContain("### Code Intelligence Tools")
+    expect(result).toContain("use code_search with search_type: \"intent\"")
   })
 
   it("includes connection warning when connectionOk is false", () => {
