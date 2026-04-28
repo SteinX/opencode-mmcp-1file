@@ -135,10 +135,35 @@ describe("checkTriggers", () => {
       const result = checkTriggers(sessionID, "", "这个功能怎么实现的")
       expect(result.triggered).toBe(true)
       expect(result.type).toBe("code_exploration")
+      expect(result.message).toContain("code_search")
+      expect(result.message).toContain('project_status(action: "list")')
+    })
+
+    it("co-emits code search guidance for Chinese local-code questions with trigger words", () => {
+      const result = checkTriggers(
+        sessionID,
+        "",
+        "这个项目里这个配置怎么触发、谁调用、在哪里定义？",
+      )
+
+      expect(result.triggered).toBe(true)
+      expect(result.type).toBe("code_exploration")
+      expect(result.message).toContain("code_search")
+      expect(result.message).toContain('project_status(action: "list")')
     })
 
     it("does not trigger on generic non-local questions", () => {
       const result = checkTriggers(sessionID, "", "how does deployment pricing work?")
+      expect(result.triggered).toBe(false)
+    })
+
+    it("does not trigger local-code guidance for generic nginx configuration questions", () => {
+      const result = checkTriggers(sessionID, "", "这个怎么配置 nginx")
+      expect(result.triggered).toBe(false)
+    })
+
+    it("does not trigger local-code guidance for generic JavaScript implementation questions", () => {
+      const result = checkTriggers(sessionID, "", "What's the best JavaScript implementation?")
       expect(result.triggered).toBe(false)
     })
   })
@@ -166,10 +191,25 @@ describe("checkTriggers", () => {
       expect(result.type).toBe("new_task")
     })
 
+    it("keeps new task primary while still surfacing code search guidance", () => {
+      const result = checkTriggers(
+        sessionID,
+        "",
+        "Please implement the fix in loadConfig after tracing who calls it",
+      )
+
+      expect(result.triggered).toBe(true)
+      expect(result.type).toBe("new_task")
+      expect(result.message).toContain("code_search")
+      expect(result.message).toContain('project_status(action: "list")')
+    })
+
     it("prioritizes error context over code exploration when both match", () => {
       const result = checkTriggers(sessionID, "", "The error is in loadConfig, where is it defined?")
       expect(result.triggered).toBe(true)
       expect(result.type).toBe("error_context")
+      expect(result.message).toContain("code_search")
+      expect(result.message).toContain('project_status(action: "list")')
     })
   })
 

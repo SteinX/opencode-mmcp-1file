@@ -528,6 +528,28 @@ describe("chat.message hook", () => {
     expect(output.parts).toHaveLength(1)
   })
 
+  it("appends code exploration nudge for mixed local-code questions through the hook", async () => {
+    const { hooks } = await initPlugin({ keywordDetection: { enabled: true, extraPatterns: [] } })
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "The error is in loadConfig, where is it defined?" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+
+    expect(output.parts).toHaveLength(2)
+    expect(output.parts[0]).toMatchObject({
+      type: "text",
+      text: "The error is in loadConfig, where is it defined?",
+    })
+    expect(output.parts[1]).toMatchObject({
+      type: "text",
+      synthetic: true,
+    })
+    expect((output.parts[1] as any).text).toContain("code_search")
+  })
+
   it("injects memory context when query recall gate allows it", async () => {
     const { hooks } = await initPlugin()
     vi.mocked(shouldInjectMemories).mockReturnValue(true)

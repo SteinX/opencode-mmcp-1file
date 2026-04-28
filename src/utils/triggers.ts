@@ -16,6 +16,9 @@ const recentNudges = new Map<
 
 const NUDGE_COOLDOWN_MS = 5 * 60 * 1000 // 5 minutes cooldown per trigger type
 
+const CODE_SEARCH_GUIDANCE =
+  ' Also consider code_search first; if you need to confirm code-index readiness, check project_status(action: "list").'
+
 function shouldTrigger(sessionID: string, type: string): boolean {
   const key = `${sessionID}:${type}`
   const lastNudge = recentNudges.get(key)
@@ -29,6 +32,10 @@ function shouldTrigger(sessionID: string, type: string): boolean {
 function recordNudge(sessionID: string, type: string): void {
   const key = `${sessionID}:${type}`
   recentNudges.set(key, { type, timestamp: Date.now() })
+}
+
+function withCodeSearchGuidance(message: string, shouldAdd: boolean): string {
+  return shouldAdd ? `${message}${CODE_SEARCH_GUIDANCE}` : message
 }
 
 /**
@@ -88,6 +95,8 @@ function detectCodeExploration(text: string): boolean {
   const chineseLocalCodePatterns = [
     /(?:这个功能怎么实现的|这个功能是怎么实现的|这个怎么实现的|怎么实现的)/,
     /(?:谁调用\s*[A-Za-z_][\w.]*|在哪里定义\s*[A-Za-z_][\w.]*|谁调用\s*\w|在哪里定义\s*\w)/,
+    /(?:这个|这段|这个项目|这个模块|这个配置|本地代码|本地项目).{0,16}(?:怎么|如何).{0,12}(?:触发|调用|定义|实现|工作|运行)/,
+    /(?:项目里|项目中|代码里|本地代码里|本地项目里).{0,16}(?:触发|调用|定义|实现|工作原理|怎么走)/,
   ]
 
   if (chineseLocalCodePatterns.some((p) => p.test(text))) {
@@ -99,6 +108,8 @@ function detectCodeExploration(text: string): boolean {
     /\b(?:where is|where are|who calls|what calls|trace callers of|refactor impact for)\s+[A-Za-z_][\w.]*\b/i,
     /\b(?:how does|how do)\s+(?:the\s+)?(?:config|loader|loading|hook|trigger|helper|function|module|service|class|method|store|index|api|implementation)\b/i,
     /\b(?:how does|how do)\s+[^?]{0,80}\b(?:config|loader|loading|hook|trigger|helper|function|module|service|class|method|store|index|api|implementation)\b/i,
+    /\b(?:in this project|in the repo|in this codebase|locally|local code|this module|this file|this config)\b.*\b(?:where is|where are|who calls|what calls|how does|how do|defined|implemented|triggered)\b/i,
+    /\b(?:where is|where are|who calls|what calls|how does|how do|defined|implemented|triggered)\b.*\b(?:in this project|in the repo|in this codebase|locally|local code|this module|this file|this config)\b/i,
   ]
 
   return hasCodeLikeSignal && patterns.some((p) => p.test(text))
@@ -113,14 +124,18 @@ export function checkTriggers(
   agentText: string,
   userText: string,
 ): TriggerResult {
+  const addCodeSearchGuidance = detectCodeExploration(userText)
+
   // Check decision trigger (highest priority)
   if (detectDecisionPoint(agentText) && shouldTrigger(sessionID, "decision")) {
     recordNudge(sessionID, "decision")
     return {
       triggered: true,
       type: "decision",
-      message:
+      message: withCodeSearchGuidance(
         "[MEMORY NUDGE] 💡 You just made a decision. Consider storing it with memory_save using the DECISION prefix — include alternatives you considered.",
+        addCodeSearchGuidance,
+      ),
     }
   }
 
@@ -130,8 +145,10 @@ export function checkTriggers(
     return {
       triggered: true,
       type: "new_task",
-      message:
+      message: withCodeSearchGuidance(
         "[MEMORY NUDGE] 🚀 Starting a new task? Consider calling memory_query to find relevant context and past decisions first.",
+        addCodeSearchGuidance,
+      ),
     }
   }
 
@@ -141,8 +158,10 @@ export function checkTriggers(
     return {
       triggered: true,
       type: "error_context",
-      message:
+      message: withCodeSearchGuidance(
         "[MEMORY NUDGE] 🔍 An error was mentioned. Consider searching memory for BUGFIX entries before debugging.",
+        addCodeSearchGuidance,
+      ),
     }
   }
 
