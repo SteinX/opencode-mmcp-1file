@@ -91,6 +91,24 @@ describe("buildMemorySystemPrompt", () => {
     expect(result).toContain("Call relationships or refactoring impact")
   })
 
+  it("guides local code understanding and debugging to use code_search first", () => {
+    const result = buildMemorySystemPrompt(makeConfig(), ["code_search", "project_status"])
+
+    expect(result).toContain("use code_search first")
+    expect(result).toContain("local code understanding")
+    expect(result).toContain("debugging")
+    expect(result).toContain("refactoring impact")
+    expect(result).toContain("where or how something is implemented")
+    expect(result).toContain("before falling back to grep/LSP")
+  })
+
+  it("renders the Code Intelligence heading exactly once when code intel tools are available", () => {
+    const result = buildMemorySystemPrompt(makeConfig(), ["memory_query", "code_search", "project_status"])
+    const headingCount = result.match(/### Code Intelligence Tools/g)?.length ?? 0
+
+    expect(headingCount).toBe(1)
+  })
+
   it("uses one-time setup guidance when code index sync is disabled", () => {
     const result = buildMemorySystemPrompt(
       makeConfig({ codeIndexSync: { enabled: false, debounceMs: 10000, minReindexIntervalMs: 300000 } }),

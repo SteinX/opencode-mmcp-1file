@@ -106,12 +106,12 @@ function buildCodeIntelligenceSection(config: PluginConfig): string {
 
   return `
 ### Code Intelligence Tools
-When code_search or project_status are available, use them first for semantic understanding before falling back to grep/LSP.
+When code_search or project_status are available, use code_search first for local code understanding, debugging, refactoring impact, and questions about where or how something is implemented before falling back to grep/LSP.
 
 #### Action Triggers
-1. **Unfamiliar code or "how does X work?"** → use code_search with search_type: "intent"
-2. **Known symbol name** → use code_search with search_type: "symbol"
-3. **Call relationships or refactoring impact** → use code_search with search_type: "callers", "callees", or "related"
+1. **Unfamiliar code or "how does X work?"** → use code_search first with search_type: "intent" for local code understanding and debugging; use code_search with search_type: "intent" when you need to find where or how something is implemented
+2. **Known symbol name** → use code_search first with search_type: "symbol"
+3. **Call relationships or refactoring impact** → use code_search first with search_type: "callers", "callees", or "related"
 4. **Before searching** → use project_status(action: "list") to confirm indexing when needed
 ${reindexGuidance}
 
