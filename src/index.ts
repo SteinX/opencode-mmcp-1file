@@ -18,6 +18,15 @@ import {
   shouldInjectKnowledgeGraph,
   type InjectionSource,
 } from "./services/context-inject.js"
+import {
+  shouldInjectLearnedPreferences,
+  fetchAndFormatLearnedPreferences,
+  markLearnedPreferencesInjected,
+  markLearnedPreferencesCompacted,
+  detectPreferenceSignal,
+  extractPreferenceCandidates,
+  storePreferenceCandidates,
+} from "./services/preference-learning.js"
 import { performAutoCapture } from "./services/auto-capture.js"
 import { buildCompactionRecoveryContext } from "./services/compaction.js"
 import {
@@ -199,33 +208,49 @@ const plugin: Plugin = async (input) => {
         }
       }
 
-      if (!shouldInjectMemories(config, hookInput.sessionID, isAfterCompaction)) {
-        return
+      if (userText) {
+        await learnPreferencesFromText(config, userText, {
+          source: "chat.message",
+        })
       }
 
       if (!userText) return
 
-      const formattedPromise = shouldInjectQueryRecall(config, hookInput.sessionID, isAfterCompaction)
+      const shouldInjectExistingMemories = shouldInjectMemories(config, hookInput.sessionID, isAfterCompaction)
+      const shouldInjectLearned = shouldInjectLearnedPreferences(config, hookInput.sessionID, isAfterCompaction)
+
+      if (!shouldInjectExistingMemories && !shouldInjectLearned) {
+        return
+      }
+
+      const formattedPromise = shouldInjectExistingMemories
+        && shouldInjectQueryRecall(config, hookInput.sessionID, isAfterCompaction)
         ? fetchAndFormatMemories(config, userText)
         : Promise.resolve(null)
-      const projectKnowledgePromise = shouldInjectProjectKnowledge(config, hookInput.sessionID, isAfterCompaction)
+      const projectKnowledgePromise = shouldInjectExistingMemories
+        && shouldInjectProjectKnowledge(config, hookInput.sessionID, isAfterCompaction)
         ? fetchProjectKnowledge(config)
         : Promise.resolve(null)
-      const codeIntelPromise = shouldInjectCodeIntel(config, hookInput.sessionID, isAfterCompaction)
+      const codeIntelPromise = shouldInjectExistingMemories
+        && shouldInjectCodeIntel(config, hookInput.sessionID, isAfterCompaction)
         ? fetchCodeIntelContext(config)
         : Promise.resolve(null)
-      const knowledgeGraphPromise = shouldInjectKnowledgeGraph(config, hookInput.sessionID, isAfterCompaction)
+      const knowledgeGraphPromise = shouldInjectExistingMemories
+        && shouldInjectKnowledgeGraph(config, hookInput.sessionID, isAfterCompaction)
         ? fetchKnowledgeGraphContext(config, userText)
         : Promise.resolve(null)
+      const learnedPreferencesPromise = shouldInjectLearned
+        ? fetchAndFormatLearnedPreferences(config)
+        : Promise.resolve(null)
 
-      const [formatted, projectKnowledge, codeIntelContext, knowledgeGraphContext] = await Promise.all([
+      const [formatted, projectKnowledge, codeIntelContext, knowledgeGraphContext, learnedPreferences] = await Promise.all([
         formattedPromise,
         projectKnowledgePromise,
         codeIntelPromise,
         knowledgeGraphPromise,
+        learnedPreferencesPromise,
       ])
 
-      let injected = false
       const injectedSources: InjectionSource[] = []
 
       if (formatted) {
@@ -239,8 +264,19 @@ const plugin: Plugin = async (input) => {
         }
 
         output.parts.unshift(syntheticPart as any)
-        injected = true
         injectedSources.push("query_recall")
+      }
+
+      if (learnedPreferences) {
+        output.parts.unshift({
+          id: `prt-learned-preferences-${Date.now()}`,
+          sessionID: hookInput.sessionID,
+          messageID: output.message.id || `msg-memory-fallback-${Date.now()}`,
+          type: "text" as const,
+          text: learnedPreferences,
+          synthetic: true,
+        } as any)
+        markLearnedPreferencesInjected(hookInput.sessionID)
       }
 
       if (projectKnowledge) {
@@ -252,7 +288,6 @@ const plugin: Plugin = async (input) => {
           text: projectKnowledge,
           synthetic: true,
         } as any)
-        injected = true
         injectedSources.push("project_knowledge")
       }
 
@@ -265,7 +300,6 @@ const plugin: Plugin = async (input) => {
           text: codeIntelContext,
           synthetic: true,
         } as any)
-        injected = true
         injectedSources.push("code_intel")
       }
 
@@ -278,13 +312,12 @@ const plugin: Plugin = async (input) => {
           text: knowledgeGraphContext,
           synthetic: true,
         } as any)
-        injected = true
         injectedSources.push("knowledge_graph")
       }
 
-      if (!injected) return
-
-      markSessionInjected(hookInput.sessionID, injectedSources)
+      if (injectedSources.length > 0) {
+        markSessionInjected(hookInput.sessionID, injectedSources)
+      }
     },
 
     event: async (eventInput) => {
@@ -317,9 +350,20 @@ const plugin: Plugin = async (input) => {
 
         compactedSessions.add(sessionID)
         markSessionCompacted(sessionID)
+        markLearnedPreferencesCompacted(sessionID)
         resetSessionState(sessionID)
         clearNudgeHistory(sessionID)
         await handleCompactionRecovery(config, input, sessionID)
+      }
+
+      if (event.type === "message.updated" && config.preferenceLearning.enabled) {
+        const messageText = extractEventMessageText(event)
+        if (messageText) {
+          await learnPreferencesFromText(config, messageText, {
+            source: "message.updated",
+            eventType: "message.updated",
+          })
+        }
       }
 
       if (event.type === "message.updated" && config.preemptiveCompaction.enabled) {
@@ -460,6 +504,36 @@ function extractEventMessageText(event: any): string | null {
     logger.debug("failed to extract event message text", { error: String(err) })
     return null
   }
+}
+
+async function learnPreferencesFromText(
+  config: PluginConfig,
+  text: string,
+  context: { source: string; eventType?: string },
+): Promise<void> {
+  if (!config.preferenceLearning.enabled) return
+  if (!text.trim()) return
+
+  if (isFullyPrivate(text)) return
+
+  const filteredText = stripPrivateContent(text).trim()
+  if (!filteredText || isFullyPrivate(filteredText)) return
+
+  const signal = detectPreferenceSignal(filteredText, config.preferenceLearning, {
+    source: context.source,
+    eventType: context.eventType,
+  })
+  if (!signal) return
+
+  const candidates = await extractPreferenceCandidates(config, filteredText, signal)
+  if (candidates.length === 0) return
+
+  await storePreferenceCandidates(config, candidates, {
+    metadata: {
+      source: context.source,
+      ...(context.eventType ? { eventType: context.eventType } : {}),
+    },
+  })
 }
 
 async function handleIdleCapture(

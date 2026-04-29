@@ -101,6 +101,23 @@ vi.mock("../src/services/code-index-sync.js", () => ({
   resetCodeIndexSyncState: vi.fn(),
 }))
 
+vi.mock("../src/services/preference-learning.js", () => ({
+  shouldInjectLearnedPreferences: vi.fn().mockReturnValue(false),
+  fetchAndFormatLearnedPreferences: vi.fn().mockResolvedValue(null),
+  markLearnedPreferencesInjected: vi.fn(),
+  markLearnedPreferencesCompacted: vi.fn(),
+  detectPreferenceSignal: vi.fn().mockReturnValue(null),
+  extractPreferenceCandidates: vi.fn().mockResolvedValue([]),
+  storePreferenceCandidates: vi.fn().mockResolvedValue({
+    stored: 0,
+    skippedDuplicate: 0,
+    skippedPrivate: 0,
+    skippedThrottled: 0,
+    skippedLimit: 0,
+    failed: 0,
+  }),
+}))
+
 // ─── Import mocked modules for assertions ──────────────────────────
 
 const { loadConfig, resolveDataDir } = await import("../src/config.js")
@@ -136,6 +153,15 @@ const { trackMessageTokens, shouldTriggerCompaction, performPreemptiveCompaction
 const { buildMemorySystemPrompt } = await import("../src/services/system-prompt.js")
 const { buildToolRegistry } = await import("../src/services/tool-registry.js")
 const { ensureCodeIndexFresh, resetCodeIndexSyncState } = await import("../src/services/code-index-sync.js")
+const {
+  shouldInjectLearnedPreferences,
+  fetchAndFormatLearnedPreferences,
+  markLearnedPreferencesInjected,
+  markLearnedPreferencesCompacted,
+  detectPreferenceSignal,
+  extractPreferenceCandidates,
+  storePreferenceCandidates,
+} = await import("../src/services/preference-learning.js")
 const { existsSync, mkdirSync, copyFileSync } = await import("node:fs")
 
 // ─── Import the plugin under test ──────────────────────────────────
@@ -154,11 +180,34 @@ function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
     privacy: { enabled: true },
     compactionSummaryCapture: { enabled: true },
     codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
+    preferenceLearning: {
+      enabled: false,
+      learnOnCorrections: true,
+      learnOnNegations: true,
+      learnOnMessageUpdated: true,
+      injectOn: "first",
+      scope: "project",
+      minConfidence: 0.7,
+      candidateConfidence: 0.4,
+      maxPreferences: 5,
+      maxCandidates: 3,
+      debounceMs: 10000,
+      maxInputChars: 4000,
+      maxStoredPreferences: 50,
+    },
     captureModel: { provider: "openai", model: "gpt-4o-mini", apiUrl: "", apiKey: "test-key" },
+    memoryScope: {
+      namespace: "",
+      shareAcrossAgents: true,
+      includeAgentMetadata: true,
+      includeRunMetadata: false,
+      userId: "",
+      defaultMetadata: {},
+    },
     mcpServer: { command: ["npx", "-y", "memory-mcp-1file"], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1", reconnectIntervalMs: 30000, heartbeatIntervalMs: 20000 },
     systemPrompt: { enabled: true },
     ...overrides,
-  } as PluginConfig
+  }
 }
 
 function makePluginInput(directoryOverride?: string) {
@@ -628,6 +677,171 @@ describe("chat.message hook", () => {
     expect(markSessionInjected).toHaveBeenCalledWith("s1", ["knowledge_graph"])
   })
 
+  it("injects learned preferences even when base memory injection is disabled", async () => {
+    const { hooks } = await initPlugin({
+      preferenceLearning: { ...makeConfig().preferenceLearning, enabled: true },
+    })
+    vi.mocked(shouldInjectMemories).mockReturnValue(false)
+    vi.mocked(shouldInjectLearnedPreferences).mockReturnValue(true)
+    vi.mocked(fetchAndFormatLearnedPreferences).mockResolvedValue("[MEMORY] Learned User Preferences\n\n- Use concise answers")
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "help me with setup" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+
+    expect(fetchAndFormatMemories).not.toHaveBeenCalled()
+    expect(output.parts[0]).toMatchObject({
+      type: "text",
+      text: "[MEMORY] Learned User Preferences\n\n- Use concise answers",
+      synthetic: true,
+    })
+    expect(markLearnedPreferencesInjected).toHaveBeenCalledWith("s1")
+    expect(markSessionInjected).not.toHaveBeenCalled()
+  })
+
+  it("does not mark learned preferences injected when formatter returns null", async () => {
+    const { hooks } = await initPlugin({
+      preferenceLearning: { ...makeConfig().preferenceLearning, enabled: true },
+    })
+    vi.mocked(shouldInjectMemories).mockReturnValue(false)
+    vi.mocked(shouldInjectLearnedPreferences).mockReturnValue(true)
+    vi.mocked(fetchAndFormatLearnedPreferences).mockResolvedValue(null)
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "help me with setup" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+
+    expect(markLearnedPreferencesInjected).not.toHaveBeenCalled()
+    expect(output.parts).toHaveLength(1)
+  })
+
+  it("passes isAfterCompaction=true to learned preference injection gate on first post-compaction message", async () => {
+    const { hooks } = await initPlugin({
+      preferenceLearning: { ...makeConfig().preferenceLearning, enabled: true },
+      compaction: { enabled: true, memoryLimit: 10 },
+    })
+
+    await hooks.event({
+      event: {
+        type: "session.compacted",
+        properties: { sessionID: "s-learned-compact" },
+      },
+    })
+
+    vi.mocked(shouldInjectMemories).mockReturnValue(false)
+    vi.mocked(shouldInjectLearnedPreferences).mockReturnValue(false)
+
+    await hooks["chat.message"](
+      { sessionID: "s-learned-compact" },
+      {
+        message: { id: "msg1" },
+        parts: [{ type: "text", text: "continue after compaction" }],
+      },
+    )
+
+    expect(shouldInjectLearnedPreferences).toHaveBeenCalledWith(
+      expect.anything(),
+      "s-learned-compact",
+      true,
+    )
+
+    vi.clearAllMocks()
+    vi.mocked(shouldInjectMemories).mockReturnValue(false)
+    vi.mocked(shouldInjectLearnedPreferences).mockReturnValue(false)
+
+    await hooks["chat.message"](
+      { sessionID: "s-learned-compact" },
+      {
+        message: { id: "msg2" },
+        parts: [{ type: "text", text: "second message" }],
+      },
+    )
+
+    expect(shouldInjectLearnedPreferences).toHaveBeenCalledWith(
+      expect.anything(),
+      "s-learned-compact",
+      false,
+    )
+  })
+
+  it("does not learn preferences from chat.message when preference learning is disabled", async () => {
+    const { hooks } = await initPlugin({
+      preferenceLearning: { ...makeConfig().preferenceLearning, enabled: false },
+    })
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "I prefer concise answers" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s-disabled-chat" }, output)
+
+    expect(stripPrivateContent).not.toHaveBeenCalledWith("I prefer concise answers")
+    expect(detectPreferenceSignal).not.toHaveBeenCalled()
+    expect(extractPreferenceCandidates).not.toHaveBeenCalled()
+    expect(storePreferenceCandidates).not.toHaveBeenCalled()
+  })
+
+  it("learns preferences from chat.message when enabled and signal exists", async () => {
+    const { hooks, config } = await initPlugin({
+      preferenceLearning: { ...makeConfig().preferenceLearning, enabled: true },
+    })
+    vi.mocked(detectPreferenceSignal).mockReturnValue({
+      signalType: "explicit_preference",
+      excerpt: "I prefer concise answers",
+      source: "chat.message",
+    })
+    const candidates = [{
+      content: "Use concise answers",
+      confidence: 0.9,
+      signalType: "explicit_preference" as const,
+      status: "confirmed" as const,
+    }]
+    vi.mocked(extractPreferenceCandidates).mockResolvedValue(candidates)
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "I prefer concise answers" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s-pref" }, output)
+
+    expect(stripPrivateContent).toHaveBeenCalledWith("I prefer concise answers")
+    expect(detectPreferenceSignal).toHaveBeenCalledWith(
+      "I prefer concise answers",
+      config.preferenceLearning,
+      { source: "chat.message", eventType: undefined },
+    )
+    expect(extractPreferenceCandidates).toHaveBeenCalledWith(config, "I prefer concise answers", expect.any(Object))
+    expect(storePreferenceCandidates).toHaveBeenCalledWith(config, candidates, {
+      metadata: { source: "chat.message" },
+    })
+  })
+
+  it("skips preference extraction/storage for fully private chat.message text", async () => {
+    const { hooks } = await initPlugin({
+      preferenceLearning: { ...makeConfig().preferenceLearning, enabled: true },
+    })
+    vi.mocked(isFullyPrivate).mockReturnValueOnce(true)
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "<private>keep this secret</private>" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s-private" }, output)
+
+    expect(detectPreferenceSignal).not.toHaveBeenCalled()
+    expect(extractPreferenceCandidates).not.toHaveBeenCalled()
+    expect(storePreferenceCandidates).not.toHaveBeenCalled()
+  })
+
   it("does not inject knowledge graph part when KG source returns null", async () => {
     const { hooks } = await initPlugin()
     vi.mocked(shouldInjectMemories).mockReturnValue(true)
@@ -1060,6 +1274,7 @@ describe("event handler: session.compacted", () => {
 
     expect(resetSessionState).toHaveBeenCalledWith("s-cmp")
     expect(markSessionCompacted).toHaveBeenCalledWith("s-cmp")
+    expect(markLearnedPreferencesCompacted).toHaveBeenCalledWith("s-cmp")
     expect(buildCompactionRecoveryContext).toHaveBeenCalled()
   })
 
@@ -1166,6 +1381,50 @@ describe("event handler: message.updated", () => {
     })
 
     expect(trackMessageTokens).toHaveBeenCalledWith("s1", "hello world")
+  })
+
+  it("passes eventType=message.updated to preference signal detection", async () => {
+    const { hooks, config } = await initPlugin({
+      preferenceLearning: { ...makeConfig().preferenceLearning, enabled: true },
+    })
+    vi.mocked(isFullyPrivate).mockReturnValue(false)
+
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: {
+          sessionID: "s-pref-updated",
+          parts: [{ type: "text", text: "Actually, use markdown bullets" }],
+        },
+      },
+    })
+
+    expect(detectPreferenceSignal).toHaveBeenCalledWith(
+      "Actually, use markdown bullets",
+      config.preferenceLearning,
+      { source: "message.updated", eventType: "message.updated" },
+    )
+  })
+
+  it("does not learn preferences on message.updated when preference learning is disabled", async () => {
+    const { hooks } = await initPlugin({
+      preferenceLearning: { ...makeConfig().preferenceLearning, enabled: false },
+    })
+
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: {
+          sessionID: "s-disabled-updated",
+          parts: [{ type: "text", text: "Actually, use markdown bullets" }],
+        },
+      },
+    })
+
+    expect(stripPrivateContent).not.toHaveBeenCalledWith("Actually, use markdown bullets")
+    expect(detectPreferenceSignal).not.toHaveBeenCalled()
+    expect(extractPreferenceCandidates).not.toHaveBeenCalled()
+    expect(storePreferenceCandidates).not.toHaveBeenCalled()
   })
 
   it("triggers preemptive compaction when threshold met", async () => {
@@ -1357,6 +1616,7 @@ describe("captureCompactionSummary (via message.updated)", () => {
     })
 
     const summaryText = "Summary with <private>secret</private> data" + "x".repeat(50)
+    vi.mocked(isFullyPrivate).mockReturnValue(false)
     vi.mocked(stripPrivateContent).mockReturnValue("Summary with [REDACTED] data" + "x".repeat(50))
 
     input.client.session.messages.mockResolvedValue({
