@@ -14,21 +14,71 @@ vi.mock("os", () => ({
 const { readFileSync, existsSync } = await import("fs")
 
 function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
-  return {
-    chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 30, injectOn: "first", projectKnowledgeInjectOn: "first", codeIntelInjectOn: "first", knowledgeGraphInjectOn: "first", maxKnowledgeGraphItems: 10, knowledgeGraphRelatedDepth: 1, knowledgeGraphEntityMatch: true, projectKnowledgeTiers: [{ categories: ["USER"], limit: 5 }, { categories: ["DECISION", "PATTERN"], limit: 5 }, { categories: ["CONTEXT"], limit: 5 }] },
-    autoCapture: { enabled: false, debounceMs: 10000, language: "en" },
-    compaction: { enabled: true, memoryLimit: 10 },
-    keywordDetection: { enabled: true, extraPatterns: [] },
-    preemptiveCompaction: { enabled: true, thresholdPercent: 80, modelContextLimit: 200000, autoContinue: true },
-    privacy: { enabled: true },
-    compactionSummaryCapture: { enabled: true },
-    codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
-    captureModel: { provider: "", model: "", apiUrl: "", apiKey: "" },
-    memoryScope: { namespace: "", shareAcrossAgents: true, includeAgentMetadata: true, includeRunMetadata: false, userId: "", defaultMetadata: {} },
-    mcpServer: { command: ["npm", "exec", "-y", "memory-mcp-1file", "--"], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1", reconnectIntervalMs: 30000, heartbeatIntervalMs: 20000 },
-    systemPrompt: { enabled: true },
+  const merged: PluginConfig = {
+    ...DEFAULT_CONFIG,
+    mcpServer: {
+      ...DEFAULT_CONFIG.mcpServer,
+      tag: "default",
+    },
     ...overrides,
-  } as PluginConfig
+  }
+
+  return {
+    ...merged,
+    chatMessage: {
+      ...DEFAULT_CONFIG.chatMessage,
+      ...overrides?.chatMessage,
+    },
+    autoCapture: {
+      ...DEFAULT_CONFIG.autoCapture,
+      ...overrides?.autoCapture,
+    },
+    compaction: {
+      ...DEFAULT_CONFIG.compaction,
+      ...overrides?.compaction,
+    },
+    keywordDetection: {
+      ...DEFAULT_CONFIG.keywordDetection,
+      ...overrides?.keywordDetection,
+    },
+    preemptiveCompaction: {
+      ...DEFAULT_CONFIG.preemptiveCompaction,
+      ...overrides?.preemptiveCompaction,
+    },
+    privacy: {
+      ...DEFAULT_CONFIG.privacy,
+      ...overrides?.privacy,
+    },
+    compactionSummaryCapture: {
+      ...DEFAULT_CONFIG.compactionSummaryCapture,
+      ...overrides?.compactionSummaryCapture,
+    },
+    codeIndexSync: {
+      ...DEFAULT_CONFIG.codeIndexSync,
+      ...overrides?.codeIndexSync,
+    },
+    preferenceLearning: {
+      ...DEFAULT_CONFIG.preferenceLearning,
+      ...overrides?.preferenceLearning,
+    },
+    captureModel: {
+      ...DEFAULT_CONFIG.captureModel,
+      ...overrides?.captureModel,
+    },
+    memoryScope: {
+      ...DEFAULT_CONFIG.memoryScope,
+      ...overrides?.memoryScope,
+    },
+    mcpServer: {
+      ...DEFAULT_CONFIG.mcpServer,
+      tag: "default",
+      ...overrides?.mcpServer,
+    },
+    systemPrompt: {
+      ...DEFAULT_CONFIG.systemPrompt,
+      ...overrides?.systemPrompt,
+    },
+  }
 }
 
 describe("resolveDataDir", () => {
@@ -77,6 +127,21 @@ describe("loadConfig", () => {
     expect(config.mcpServer.tag).toBe("")
     expect(config.privacy.enabled).toBe(true)
     expect(config.codeIndexSync.enabled).toBe(true)
+    expect(config.preferenceLearning).toEqual({
+      enabled: false,
+      learnOnCorrections: true,
+      learnOnNegations: true,
+      learnOnMessageUpdated: true,
+      injectOn: "first",
+      scope: "project",
+      minConfidence: 0.7,
+      candidateConfidence: 0.4,
+      maxPreferences: 5,
+      maxCandidates: 3,
+      debounceMs: 10000,
+      maxInputChars: 4000,
+      maxStoredPreferences: 50,
+    })
     expect(config.memoryScope.shareAcrossAgents).toBe(true)
     expect(config.memoryScope.includeAgentMetadata).toBe(true)
     expect(config.mcpServer.reconnectIntervalMs).toBe(30000)
@@ -120,6 +185,80 @@ describe("loadConfig", () => {
     expect(config.mcpServer.reconnectIntervalMs).toBe(45000)
     expect(config.mcpServer.heartbeatIntervalMs).toBe(15000)
     expect(config.mcpServer.port).toBe(23817)
+  })
+
+  it("merges preferenceLearning overrides while preserving defaults", () => {
+    vi.mocked(existsSync).mockImplementation((p) =>
+      String(p).endsWith("opencode-mmcp-1file.jsonc"),
+    )
+    vi.mocked(readFileSync).mockReturnValue(
+      `{
+        "preferenceLearning": {
+          "enabled": true,
+          "scope": "global",
+          "maxPreferences": 8
+        }
+      }`,
+    )
+
+    const config = loadConfig("/dir")
+    expect(config.preferenceLearning.enabled).toBe(true)
+    expect(config.preferenceLearning.scope).toBe("global")
+    expect(config.preferenceLearning.maxPreferences).toBe(8)
+    expect(config.preferenceLearning.injectOn).toBe("first")
+    expect(config.preferenceLearning.maxCandidates).toBe(3)
+    expect(config.preferenceLearning.minConfidence).toBe(0.7)
+  })
+
+  it("accepts non-default preferenceLearning injectOn values", () => {
+    vi.mocked(existsSync).mockImplementation((p) =>
+      String(p).endsWith("opencode-mmcp-1file.jsonc"),
+    )
+    vi.mocked(readFileSync).mockReturnValue(
+      `{
+        "preferenceLearning": {
+          "injectOn": "never"
+        }
+      }`,
+    )
+
+    const config = loadConfig("/dir")
+    expect(config.preferenceLearning.injectOn).toBe("never")
+    expect(config.preferenceLearning.scope).toBe("project")
+  })
+
+  it("accepts preferenceLearning injectOn=always", () => {
+    vi.mocked(existsSync).mockImplementation((p) =>
+      String(p).endsWith("opencode-mmcp-1file.jsonc"),
+    )
+    vi.mocked(readFileSync).mockReturnValue(
+      `{
+        "preferenceLearning": {
+          "injectOn": "always"
+        }
+      }`,
+    )
+
+    const config = loadConfig("/dir")
+    expect(config.preferenceLearning.injectOn).toBe("always")
+    expect(config.preferenceLearning.scope).toBe("project")
+  })
+
+  it("accepts preferenceLearning injectOn=compaction", () => {
+    vi.mocked(existsSync).mockImplementation((p) =>
+      String(p).endsWith("opencode-mmcp-1file.jsonc"),
+    )
+    vi.mocked(readFileSync).mockReturnValue(
+      `{
+        "preferenceLearning": {
+          "injectOn": "compaction"
+        }
+      }`,
+    )
+
+    const config = loadConfig("/dir")
+    expect(config.preferenceLearning.injectOn).toBe("compaction")
+    expect(config.preferenceLearning.scope).toBe("project")
   })
 
   it("strips block comments from JSONC", () => {
@@ -393,5 +532,28 @@ describe("applyConfig", () => {
     expect(changed).toContain("memoryScope")
     expect(target.memoryScope.namespace).toBe("workspace-a")
     expect(target.memoryScope.shareAcrossAgents).toBe(false)
+  })
+
+  it("detects preferenceLearning changes", () => {
+    vi.mocked(existsSync).mockImplementation((p) =>
+      String(p).endsWith("opencode-mmcp-1file.jsonc"),
+    )
+    vi.mocked(readFileSync).mockReturnValue(
+      `{
+        "preferenceLearning": {
+          "enabled": true,
+          "injectOn": "always",
+          "minConfidence": 0.8
+        }
+      }`,
+    )
+
+    const target = makeConfig()
+    const changed = applyConfig(target, "/dir")
+    expect(changed).toContain("preferenceLearning")
+    expect(target.preferenceLearning.enabled).toBe(true)
+    expect(target.preferenceLearning.injectOn).toBe("always")
+    expect(target.preferenceLearning.minConfidence).toBe(0.8)
+    expect(target.preferenceLearning.scope).toBe("project")
   })
 })

@@ -60,6 +60,21 @@ export interface PluginConfig {
     debounceMs: number
     minReindexIntervalMs: number
   }
+  preferenceLearning: {
+    enabled: boolean
+    learnOnCorrections: boolean
+    learnOnNegations: boolean
+    learnOnMessageUpdated: boolean
+    injectOn: "first" | "always" | "compaction" | "never"
+    scope: "project" | "global"
+    minConfidence: number
+    candidateConfidence: number
+    maxPreferences: number
+    maxCandidates: number
+    debounceMs: number
+    maxInputChars: number
+    maxStoredPreferences: number
+  }
   captureModel: {
     provider: string
     model: string
@@ -156,6 +171,21 @@ export const DEFAULT_CONFIG: PluginConfig = {
     debounceMs: 10_000,
     minReindexIntervalMs: 300_000,
   },
+  preferenceLearning: {
+    enabled: false,
+    learnOnCorrections: true,
+    learnOnNegations: true,
+    learnOnMessageUpdated: true,
+    injectOn: "first",
+    scope: "project",
+    minConfidence: 0.7,
+    candidateConfidence: 0.4,
+    maxPreferences: 5,
+    maxCandidates: 3,
+    debounceMs: 10_000,
+    maxInputChars: 4_000,
+    maxStoredPreferences: 50,
+  },
   captureModel: {
     provider: "",
     model: "",
@@ -229,6 +259,7 @@ function mergeConfig(defaults: PluginConfig, overrides: Partial<any>): PluginCon
     privacy: { ...defaults.privacy, ...overrides.privacy },
     compactionSummaryCapture: { ...defaults.compactionSummaryCapture, ...overrides.compactionSummaryCapture },
     codeIndexSync: { ...defaults.codeIndexSync, ...overrides.codeIndexSync },
+    preferenceLearning: { ...defaults.preferenceLearning, ...overrides.preferenceLearning },
     captureModel: { ...defaults.captureModel, ...overrides.captureModel },
     memoryScope: { ...defaults.memoryScope, ...overrides.memoryScope },
     mcpServer: { ...defaults.mcpServer, ...overrides.mcpServer },

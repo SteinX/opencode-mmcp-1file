@@ -136,6 +136,23 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
     "minReindexIntervalMs": 300000  // Cooldown between successful force re-indexes
   },
 
+  // Preference learning from conversational signals
+  "preferenceLearning": {
+    "enabled": false,
+    "learnOnCorrections": true,      // Learn when users correct prior assistant output
+    "learnOnNegations": true,        // Learn when users reject/negate suggestions
+    "learnOnMessageUpdated": true,   // Learn from message-updated events when available
+    "injectOn": "first",            // "first" | "always" | "compaction" | "never"
+    "scope": "project",             // "project" or "global"
+    "minConfidence": 0.7,            // Minimum confidence required to persist a learned preference
+    "candidateConfidence": 0.4,      // Lower threshold for candidate preferences pending stronger evidence
+    "maxPreferences": 5,             // Max injected preferences per retrieval
+    "maxCandidates": 3,              // Max candidate preferences tracked per cycle
+    "debounceMs": 10000,             // Debounce learning updates to avoid rapid duplicate writes
+    "maxInputChars": 4000,           // Truncate oversized inputs before preference extraction
+    "maxStoredPreferences": 50       // Upper bound for stored preference records per scope
+  },
+
   // LLM for auto-capture summarization
   // When apiKey is set: uses direct HTTP to the specified API (fastest)
   // When apiKey is empty: uses OpenCode's session API with your configured providers (zero-config)
@@ -190,6 +207,7 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
 | **privacy** | Redaction of `<private>` tagged content |
 | **compactionSummaryCapture** | Saves compaction summaries as memories |
 | **codeIndexSync** | Detects stale workspace indexes and refreshes code intelligence in the background |
+| **preferenceLearning** | Controls preference extraction, confidence thresholds, scope, and injection cadence for learned user preferences |
 | **captureModel** | LLM for auto-capture summarization — uses direct HTTP when apiKey is set, otherwise OpenCode session API |
 | **memoryScope** | Logical scope, agent-sharing defaults, and default metadata layered inside the current shard |
 | **mcpServer** | [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server command, physical data shard, embedding model, transport mode, and HTTP reconnect/heartbeat timing |

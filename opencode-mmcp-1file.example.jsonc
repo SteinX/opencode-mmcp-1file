@@ -71,6 +71,23 @@
     "minReindexIntervalMs": 300000  // Cooldown between successful force re-indexes
   },
 
+  // Preference learning from conversational signals
+  "preferenceLearning": {
+    "enabled": false,
+    "learnOnCorrections": true,      // Learn when users correct prior assistant output
+    "learnOnNegations": true,        // Learn when users reject/negate suggestions
+    "learnOnMessageUpdated": true,   // Learn from message-updated events when available
+    "injectOn": "first",            // "first" | "always" | "compaction" | "never"
+    "scope": "project",             // "project" or "global"
+    "minConfidence": 0.7,            // Minimum confidence required to persist a learned preference
+    "candidateConfidence": 0.4,      // Lower threshold for candidate preferences pending stronger evidence
+    "maxPreferences": 5,             // Max injected preferences per retrieval
+    "maxCandidates": 3,              // Max candidate preferences tracked per cycle
+    "debounceMs": 10000,             // Debounce learning updates to avoid rapid duplicate writes
+    "maxInputChars": 4000,           // Truncate oversized inputs before preference extraction
+    "maxStoredPreferences": 50       // Upper bound for stored preference records per scope
+  },
+
   // LLM for auto-capture summarization
   // apiKey set → direct HTTP to apiUrl; apiKey empty → OpenCode session API (zero-config)
   "captureModel": {
