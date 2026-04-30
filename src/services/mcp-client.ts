@@ -446,8 +446,26 @@ let heartbeatPromise: Promise<void> | null = null
 
 const HEALTH_CHECK_THROTTLE_MS = 5_000
 
+function collectErrorText(value: unknown, depth = 0, seen = new Set<unknown>()): string {
+  if (value == null || depth > 4) return ""
+  if (typeof value === "string") return value
+  if (typeof value === "number" || typeof value === "boolean") return String(value)
+  if (value instanceof Error) {
+    return [value.name, value.message, value.stack, collectErrorText((value as any).cause, depth + 1, seen)]
+      .filter(Boolean)
+      .join(" ")
+  }
+  if (!isRecord(value) || seen.has(value)) return String(value)
+
+  seen.add(value)
+  return Object.values(value)
+    .map((entry) => collectErrorText(entry, depth + 1, seen))
+    .filter(Boolean)
+    .join(" ")
+}
+
 function isRecoverableHttpSessionError(err: unknown): boolean {
-  const message = String(err).toLowerCase()
+  const message = collectErrorText(err).toLowerCase()
   return message.includes("session not found")
     || message.includes("mcp-session-id")
     || (message.includes("session") && message.includes("unauthorized"))
@@ -456,7 +474,7 @@ function isRecoverableHttpSessionError(err: unknown): boolean {
 function isRecoverableConnectionError(config: PluginConfig, err: unknown): boolean {
   if (isRecoverableHttpSessionError(err)) return config.mcpServer.transport === "http"
 
-  const message = String(err).toLowerCase()
+  const message = collectErrorText(err).toLowerCase()
   const genericSignals = [
     "econnrefused",
     "econnreset",
@@ -574,35 +592,52 @@ async function resetClientConnection(config: PluginConfig): Promise<Client> {
   return client
 }
 
-async function callToolWithRetry(
+async function withConnectionRetry<T>(
   config: PluginConfig,
-  toolName: string,
-  args: Record<string, unknown>,
-): Promise<Awaited<ReturnType<Client["callTool"]>>> {
+  operation: (client: Client) => Promise<T>,
+  logContext: Record<string, unknown>,
+  isRecoverable: (config: PluginConfig, err: unknown) => boolean = isRecoverableConnectionError,
+): Promise<T> {
   const client = await getMemoryClient(config)
 
   try {
-    return await client.callTool({ name: toolName, arguments: args })
+    return await operation(client)
   } catch (err) {
-    if (!isRecoverableConnectionError(config, err)) {
+    if (!isRecoverable(config, err)) {
       throw err
     }
 
     logger.warn("Recoverable MCP connection error; reconnecting and retrying once", {
-      toolName,
+      ...logContext,
       error: String(err),
     })
 
     try {
       const retryClient = await resetClientConnection(config)
-      return await retryClient.callTool({ name: toolName, arguments: args })
+      return await operation(retryClient)
     } catch (retryErr) {
-      if (isRecoverableConnectionError(config, retryErr)) {
+      if (isRecoverable(config, retryErr)) {
         await failActiveConnection()
       }
       throw retryErr
     }
   }
+}
+
+function isRecoverableHttpSessionConnectionError(config: PluginConfig, err: unknown): boolean {
+  return config.mcpServer.transport === "http" && isRecoverableHttpSessionError(err)
+}
+
+async function callToolWithRetry(
+  config: PluginConfig,
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<Awaited<ReturnType<Client["callTool"]>>> {
+  return withConnectionRetry(
+    config,
+    (client) => client.callTool({ name: toolName, arguments: args }),
+    { toolName },
+  )
 }
 
 export function registerConnectionFailureHandler(handler: (() => void) | null): void {
@@ -688,8 +723,12 @@ function buildStdioCommand(config: PluginConfig): string[] | null {
 
 export async function discoverTools(config: PluginConfig): Promise<string[]> {
   try {
-    const client = await getMemoryClient(config)
-    const result = await client.listTools()
+    const result = await withConnectionRetry(
+      config,
+      (client) => client.listTools(),
+      { operation: "listTools" },
+      isRecoverableHttpSessionConnectionError,
+    )
     return result.tools.map((t) => t.name)
   } catch (err) {
     logger.error("discoverTools failed", { error: String(err) })

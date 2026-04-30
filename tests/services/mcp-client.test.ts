@@ -27,6 +27,7 @@ function makeConfig(transportOverride?: "stdio" | "http"): PluginConfig {
     privacy: { enabled: true },
     compactionSummaryCapture: { enabled: true },
     codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
+    preferenceLearning: { enabled: false, learnOnCorrections: true, learnOnNegations: true, learnOnMessageUpdated: true, injectOn: "first", scope: "project", minConfidence: 0.7, candidateConfidence: 0.4, maxPreferences: 5, maxCandidates: 3, debounceMs: 10000, maxInputChars: 4000, maxStoredPreferences: 50 },
     captureModel: { provider: "openai", model: "gpt-4o-mini", apiUrl: "", apiKey: "" },
     memoryScope: { namespace: "", shareAcrossAgents: true, includeAgentMetadata: true, includeRunMetadata: false, userId: "", defaultMetadata: {} },
     mcpServer: { command: ["npx", "-y", "memory-mcp-1file"], tag: "default", model: "qwen3", transport: transportOverride ?? "stdio", port: 23817, bind: "127.0.0.1", reconnectIntervalMs: 30000, heartbeatIntervalMs: 20000, mcpServerName: "memory-mcp-1file" },
@@ -94,6 +95,64 @@ async function setupModule() {
 
   const mod = await import("../../src/services/mcp-client.js")
   return { mod, mockClient }
+}
+
+async function setupModuleWithClientFactory(clients: ReturnType<typeof createMockClient>[]) {
+  vi.resetModules()
+
+  let connectionFailed = false
+  const mockHttpTransport = vi.fn(function (this: { url?: URL }, url: URL) {
+    this.url = url
+  })
+  const mockStdioTransport = vi.fn(function (this: { options?: unknown }, options: unknown) {
+    this.options = options
+  })
+
+  mockConnectionState = {
+    isConnectionFailed: vi.fn(() => connectionFailed),
+    markConnectionFailed: vi.fn(() => {
+      connectionFailed = true
+    }),
+    markConnectionHealthy: vi.fn(() => {
+      connectionFailed = false
+    }),
+  }
+
+  const mockClientConstructor = vi.fn(function () {
+      const client = clients.shift()
+      if (!client) throw new Error("unexpected extra Client construction")
+      return client
+  })
+
+  vi.doMock("@modelcontextprotocol/sdk/client/index.js", () => ({
+    Client: mockClientConstructor,
+  }))
+  vi.doMock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
+    StdioClientTransport: mockStdioTransport,
+  }))
+  vi.doMock("@modelcontextprotocol/sdk/client/sse.js", () => ({
+    SSEClientTransport: vi.fn(),
+  }))
+  vi.doMock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
+    StreamableHTTPClientTransport: mockHttpTransport,
+  }))
+  vi.doMock("../../src/services/server-process.js", () => ({
+    getServerUrl: vi.fn(() => "http://127.0.0.1:23817"),
+    isServerRunning: vi.fn(() => Promise.resolve(false)),
+    ensureServerRunning: vi.fn(() => Promise.resolve("http://127.0.0.1:23817")),
+    stopServer: vi.fn(() => Promise.resolve()),
+  }))
+  vi.doMock("../../src/utils/logger.js", () => ({
+    logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  }))
+  vi.doMock("../../src/config.js", async (importOriginal) => {
+    const original = await importOriginal<typeof import("../../src/config.js")>()
+    return { ...original, resolveDataDir: vi.fn(() => "/tmp/test-data") }
+  })
+  vi.doMock("../../src/services/connection-state.js", () => mockConnectionState)
+
+  const mod = await import("../../src/services/mcp-client.js")
+  return { mod, mockHttpTransport, mockStdioTransport }
 }
 
 describe("mcp-client", () => {
@@ -841,27 +900,107 @@ describe("HTTP transport", () => {
     expect(mockStopServer).not.toHaveBeenCalled()
   })
 
-  it("reconnects and retries once for recoverable HTTP session errors", async () => {
-    const { mod, mockClient } = await setupModule()
+  it("reconnects with a new HTTP client and retries once for recoverable HTTP stale session errors", async () => {
+    const staleClient = createMockClient()
+    const retryClient = createMockClient()
+    const { mod, mockHttpTransport, mockStdioTransport } = await setupModuleWithClientFactory([staleClient, retryClient])
     const config = makeConfig("http")
 
-    mockClient.callTool
+    staleClient.callTool
       .mockRejectedValueOnce(new Error("Unauthorized: Session not found"))
-      .mockResolvedValueOnce({ content: [] })
+    retryClient.callTool.mockResolvedValueOnce({ content: [] })
 
     const result = await mod.storeMemory(config, "test content", "semantic")
 
     expect(result).toBe(true)
-    expect(mockClient.connect).toHaveBeenCalledTimes(2)
-    expect(mockClient.callTool).toHaveBeenCalledTimes(2)
-    expect(mockClient.callTool).toHaveBeenNthCalledWith(1, {
+    expect(staleClient.close).toHaveBeenCalledTimes(1)
+    expect(staleClient.connect).toHaveBeenCalledTimes(1)
+    expect(retryClient.connect).toHaveBeenCalledTimes(1)
+    expect(mockHttpTransport).toHaveBeenCalledTimes(2)
+    expect(mockStdioTransport).not.toHaveBeenCalled()
+    expect(staleClient.callTool).toHaveBeenCalledTimes(1)
+    expect(retryClient.callTool).toHaveBeenCalledTimes(1)
+    expect(staleClient.callTool).toHaveBeenCalledWith({
       name: "store_memory",
       arguments: { content: "test content", memory_type: "semantic" },
     })
-    expect(mockClient.callTool).toHaveBeenNthCalledWith(2, {
+    expect(retryClient.callTool).toHaveBeenCalledWith({
       name: "store_memory",
       arguments: { content: "test content", memory_type: "semantic" },
     })
+  })
+
+  it("detects wrapped HTTP stale session error text and reconnects with a new transport", async () => {
+    const staleClient = createMockClient()
+    const retryClient = createMockClient()
+    const { mod, mockHttpTransport } = await setupModuleWithClientFactory([staleClient, retryClient])
+    const config = makeConfig("http")
+
+    staleClient.callTool.mockRejectedValueOnce(new Error("MCP error: {\"error\":\"mcp-session-id header rejected\"}"))
+    retryClient.callTool.mockResolvedValueOnce({ content: [{ type: "text", text: "ok" }] })
+
+    const result = await mod.callMemoryTool(config, "project_info", { action: "list" })
+
+    expect(result).toBe("ok")
+    expect(staleClient.close).toHaveBeenCalledTimes(1)
+    expect(staleClient.connect).toHaveBeenCalledTimes(1)
+    expect(retryClient.connect).toHaveBeenCalledTimes(1)
+    expect(mockHttpTransport).toHaveBeenCalledTimes(2)
+    expect(staleClient.callTool).toHaveBeenCalledTimes(1)
+    expect(retryClient.callTool).toHaveBeenCalledTimes(1)
+  })
+
+  it("detects nested HTTP stale session error fields and reconnects", async () => {
+    const staleClient = createMockClient()
+    const retryClient = createMockClient()
+    const { mod, mockHttpTransport } = await setupModuleWithClientFactory([staleClient, retryClient])
+    const config = makeConfig("http")
+
+    staleClient.callTool.mockRejectedValueOnce({
+      response: {
+        data: {
+          error: {
+            message: "Session not found",
+          },
+        },
+      },
+    })
+    retryClient.callTool.mockResolvedValueOnce({ content: [] })
+
+    const result = await mod.storeMemory(config, "test content", "semantic")
+
+    expect(result).toBe(true)
+    expect(staleClient.close).toHaveBeenCalledTimes(1)
+    expect(staleClient.connect).toHaveBeenCalledTimes(1)
+    expect(retryClient.connect).toHaveBeenCalledTimes(1)
+    expect(mockHttpTransport).toHaveBeenCalledTimes(2)
+    expect(staleClient.callTool).toHaveBeenCalledTimes(1)
+    expect(retryClient.callTool).toHaveBeenCalledTimes(1)
+  })
+
+  it("does not loop when the HTTP stale session retry also fails", async () => {
+    const staleClient = createMockClient()
+    const retryClient = createMockClient()
+    const { mod, mockHttpTransport } = await setupModuleWithClientFactory([staleClient, retryClient])
+    const config = makeConfig("http")
+    const handler = vi.fn()
+
+    mod.registerConnectionFailureHandler(handler)
+    staleClient.callTool.mockRejectedValueOnce(new Error("Session not found"))
+    retryClient.callTool.mockRejectedValueOnce(new Error("Unauthorized: Session not found"))
+
+    const result = await mod.storeMemory(config, "test content", "semantic")
+
+    expect(result).toBe(false)
+    expect(staleClient.close).toHaveBeenCalledTimes(1)
+    expect(retryClient.close).toHaveBeenCalledTimes(1)
+    expect(staleClient.connect).toHaveBeenCalledTimes(1)
+    expect(retryClient.connect).toHaveBeenCalledTimes(1)
+    expect(mockHttpTransport).toHaveBeenCalledTimes(2)
+    expect(staleClient.callTool).toHaveBeenCalledTimes(1)
+    expect(retryClient.callTool).toHaveBeenCalledTimes(1)
+    expect(mockConnectionState.markConnectionFailed).toHaveBeenCalledTimes(1)
+    expect(handler).toHaveBeenCalledTimes(1)
   })
 
   it("does not retry non-session HTTP errors", async () => {
@@ -877,17 +1016,124 @@ describe("HTTP transport", () => {
     expect(mockClient.callTool).toHaveBeenCalledTimes(1)
   })
 
-  it("does not retry recoverable-looking errors in stdio mode", async () => {
-    const { mod, mockClient } = await setupModule()
+  it("does not retry stale session looking errors in stdio mode", async () => {
+    const stdioClient = createMockClient()
+    const unexpectedRetryClient = createMockClient()
+    const { mod, mockHttpTransport, mockStdioTransport } = await setupModuleWithClientFactory([stdioClient, unexpectedRetryClient])
     const config = makeConfig("stdio")
 
-    mockClient.callTool.mockRejectedValue(new Error("Unauthorized: Session not found"))
+    stdioClient.callTool.mockRejectedValue(new Error("Unauthorized: Session not found"))
 
     const result = await mod.storeMemory(config, "test content", "semantic")
 
     expect(result).toBe(false)
-    expect(mockClient.connect).toHaveBeenCalledTimes(1)
-    expect(mockClient.callTool).toHaveBeenCalledTimes(1)
+    expect(stdioClient.connect).toHaveBeenCalledTimes(1)
+    expect(stdioClient.close).not.toHaveBeenCalled()
+    expect(stdioClient.callTool).toHaveBeenCalledTimes(1)
+    expect(unexpectedRetryClient.connect).not.toHaveBeenCalled()
+    expect(mockStdioTransport).toHaveBeenCalledTimes(1)
+    expect(mockHttpTransport).not.toHaveBeenCalled()
+  })
+
+  it("discoverTools reconnects with a new HTTP client and retries once for stale session errors", async () => {
+    const staleClient = createMockClient()
+    const retryClient = createMockClient()
+    const { mod, mockHttpTransport, mockStdioTransport } = await setupModuleWithClientFactory([staleClient, retryClient])
+    const config = makeConfig("http")
+
+    staleClient.listTools.mockRejectedValueOnce(new Error("Unauthorized: Session not found"))
+    retryClient.listTools.mockResolvedValueOnce({ tools: [{ name: "recall" }, { name: "store_memory" }] })
+
+    const result = await mod.discoverTools(config)
+
+    expect(result).toEqual(["recall", "store_memory"])
+    expect(staleClient.close).toHaveBeenCalledTimes(1)
+    expect(staleClient.connect).toHaveBeenCalledTimes(1)
+    expect(retryClient.connect).toHaveBeenCalledTimes(1)
+    expect(mockHttpTransport).toHaveBeenCalledTimes(2)
+    expect(mockStdioTransport).not.toHaveBeenCalled()
+    expect(staleClient.listTools).toHaveBeenCalledTimes(1)
+    expect(retryClient.listTools).toHaveBeenCalledTimes(1)
+  })
+
+  it("discoverTools returns empty array and does not loop when stale session retry also fails", async () => {
+    const staleClient = createMockClient()
+    const retryClient = createMockClient()
+    const { mod, mockHttpTransport } = await setupModuleWithClientFactory([staleClient, retryClient])
+    const config = makeConfig("http")
+    const handler = vi.fn()
+
+    mod.registerConnectionFailureHandler(handler)
+    staleClient.listTools.mockRejectedValueOnce(new Error("Session not found"))
+    retryClient.listTools.mockRejectedValueOnce(new Error("Unauthorized: Session not found"))
+
+    const result = await mod.discoverTools(config)
+
+    expect(result).toEqual([])
+    expect(staleClient.close).toHaveBeenCalledTimes(1)
+    expect(retryClient.close).toHaveBeenCalledTimes(1)
+    expect(staleClient.connect).toHaveBeenCalledTimes(1)
+    expect(retryClient.connect).toHaveBeenCalledTimes(1)
+    expect(mockHttpTransport).toHaveBeenCalledTimes(2)
+    expect(staleClient.listTools).toHaveBeenCalledTimes(1)
+    expect(retryClient.listTools).toHaveBeenCalledTimes(1)
+    expect(mockConnectionState.markConnectionFailed).toHaveBeenCalledTimes(1)
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+
+  it("discoverTools does not retry non-session HTTP errors", async () => {
+    const staleClient = createMockClient()
+    const unexpectedRetryClient = createMockClient()
+    const { mod, mockHttpTransport } = await setupModuleWithClientFactory([staleClient, unexpectedRetryClient])
+    const config = makeConfig("http")
+
+    staleClient.listTools.mockRejectedValueOnce(new Error("503 service unavailable"))
+
+    const result = await mod.discoverTools(config)
+
+    expect(result).toEqual([])
+    expect(staleClient.connect).toHaveBeenCalledTimes(1)
+    expect(staleClient.close).not.toHaveBeenCalled()
+    expect(staleClient.listTools).toHaveBeenCalledTimes(1)
+    expect(unexpectedRetryClient.connect).not.toHaveBeenCalled()
+    expect(mockHttpTransport).toHaveBeenCalledTimes(1)
+  })
+
+  it("discoverTools does not retry generic HTTP transport errors", async () => {
+    const staleClient = createMockClient()
+    const unexpectedRetryClient = createMockClient()
+    const { mod, mockHttpTransport } = await setupModuleWithClientFactory([staleClient, unexpectedRetryClient])
+    const config = makeConfig("http")
+
+    staleClient.listTools.mockRejectedValueOnce(new Error("transport closed"))
+
+    const result = await mod.discoverTools(config)
+
+    expect(result).toEqual([])
+    expect(staleClient.connect).toHaveBeenCalledTimes(1)
+    expect(staleClient.close).not.toHaveBeenCalled()
+    expect(staleClient.listTools).toHaveBeenCalledTimes(1)
+    expect(unexpectedRetryClient.connect).not.toHaveBeenCalled()
+    expect(mockHttpTransport).toHaveBeenCalledTimes(1)
+  })
+
+  it("discoverTools does not retry stale session looking errors in stdio mode", async () => {
+    const stdioClient = createMockClient()
+    const unexpectedRetryClient = createMockClient()
+    const { mod, mockHttpTransport, mockStdioTransport } = await setupModuleWithClientFactory([stdioClient, unexpectedRetryClient])
+    const config = makeConfig("stdio")
+
+    stdioClient.listTools.mockRejectedValueOnce(new Error("Unauthorized: Session not found"))
+
+    const result = await mod.discoverTools(config)
+
+    expect(result).toEqual([])
+    expect(stdioClient.connect).toHaveBeenCalledTimes(1)
+    expect(stdioClient.close).not.toHaveBeenCalled()
+    expect(stdioClient.listTools).toHaveBeenCalledTimes(1)
+    expect(unexpectedRetryClient.connect).not.toHaveBeenCalled()
+    expect(mockStdioTransport).toHaveBeenCalledTimes(1)
+    expect(mockHttpTransport).not.toHaveBeenCalled()
   })
 
   it("retries generic tool calls once for recoverable HTTP session errors", async () => {
@@ -992,5 +1238,80 @@ describe("HTTP transport", () => {
     await mod.getMemoryClient(config)
 
     expect(serverProcess.isServerRunning).toHaveBeenCalledTimes(2)
+  })
+
+  it("recovers from heartbeat-failed state and allows bounded stale-session retry for storeMemory", async () => {
+    const heartbeatClient = createMockClient()
+    const postReconnectClient = createMockClient()
+    const retryClient = createMockClient()
+    const { mod, mockHttpTransport } = await setupModuleWithClientFactory([
+      heartbeatClient,
+      postReconnectClient,
+      retryClient,
+    ])
+    const config = makeConfig("http")
+    config.mcpServer.heartbeatIntervalMs = 10_000
+    const handler = vi.fn()
+
+    const serverProcess = await import("../../src/services/server-process.js")
+    vi.mocked(serverProcess.isServerRunning).mockResolvedValue(false)
+
+    mod.registerConnectionFailureHandler(handler)
+    await mod.getMemoryClient(config)
+
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(mockConnectionState.markConnectionFailed).toHaveBeenCalledTimes(1)
+
+    postReconnectClient.callTool.mockRejectedValueOnce(new Error("Unauthorized: Session not found"))
+    retryClient.callTool.mockResolvedValueOnce({ content: [] })
+
+    await expect(mod.tryReconnect(config)).resolves.toBe(true)
+    await expect(mod.storeMemory(config, "test content", "semantic")).resolves.toBe(true)
+
+    expect(handler).toHaveBeenCalledTimes(1)
+    expect(heartbeatClient.close).toHaveBeenCalledTimes(1)
+    expect(postReconnectClient.close).toHaveBeenCalledTimes(1)
+    expect(retryClient.close).not.toHaveBeenCalled()
+    expect(postReconnectClient.callTool).toHaveBeenCalledTimes(1)
+    expect(retryClient.callTool).toHaveBeenCalledTimes(1)
+    expect(mockHttpTransport).toHaveBeenCalledTimes(3)
+    expect(mockConnectionState.markConnectionFailed).toHaveBeenCalledTimes(1)
+    expect(mockConnectionState.markConnectionHealthy).toHaveBeenCalledTimes(3)
+  })
+
+  it("recoverable callMemoryTool stale-session retry remains bounded to one reconnect", async () => {
+    const staleClient = createMockClient()
+    const retryClient = createMockClient()
+    const { mod, mockHttpTransport } = await setupModuleWithClientFactory([staleClient, retryClient])
+    const config = makeConfig("http")
+
+    staleClient.callTool.mockRejectedValueOnce(new Error("Session not found"))
+    retryClient.callTool.mockResolvedValueOnce({ content: [{ type: "text", text: "ok" }] })
+
+    await expect(mod.callMemoryTool(config, "project_info", { action: "list" })).resolves.toBe("ok")
+
+    expect(staleClient.callTool).toHaveBeenCalledTimes(1)
+    expect(retryClient.callTool).toHaveBeenCalledTimes(1)
+    expect(staleClient.close).toHaveBeenCalledTimes(1)
+    expect(retryClient.close).not.toHaveBeenCalled()
+    expect(mockHttpTransport).toHaveBeenCalledTimes(2)
+  })
+
+  it("recoverable discoverTools stale-session retry remains bounded to one reconnect", async () => {
+    const staleClient = createMockClient()
+    const retryClient = createMockClient()
+    const { mod, mockHttpTransport } = await setupModuleWithClientFactory([staleClient, retryClient])
+    const config = makeConfig("http")
+
+    staleClient.listTools.mockRejectedValueOnce(new Error("Unauthorized: Session not found"))
+    retryClient.listTools.mockResolvedValueOnce({ tools: [{ name: "recall" }] })
+
+    await expect(mod.discoverTools(config)).resolves.toEqual(["recall"])
+
+    expect(staleClient.listTools).toHaveBeenCalledTimes(1)
+    expect(retryClient.listTools).toHaveBeenCalledTimes(1)
+    expect(staleClient.close).toHaveBeenCalledTimes(1)
+    expect(retryClient.close).not.toHaveBeenCalled()
+    expect(mockHttpTransport).toHaveBeenCalledTimes(2)
   })
 })
