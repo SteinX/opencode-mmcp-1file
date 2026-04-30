@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process"
-import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync, renameSync } from "node:fs"
+import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync, renameSync, openSync, closeSync } from "node:fs"
 import { join, dirname } from "node:path"
 import { randomBytes } from "node:crypto"
 import type { PluginConfig } from "../config.js"
@@ -25,10 +25,45 @@ interface RawLockFileData {
   startedAt?: string
 }
 
+interface StartupLockData {
+  ownerPid: number
+  ownerId: string
+  port: number
+  bind: string
+  createdAt: string
+  staleAfterMs: number
+}
+
+interface RawStartupLockData {
+  ownerPid?: number
+  ownerId?: string
+  port?: number
+  bind?: string
+  createdAt?: string
+  staleAfterMs?: number
+}
+
+const STARTUP_LOCK_STALE_AFTER_MS = 10000
+const STARTUP_LOCK_WAIT_MS = 15000
+const STARTUP_LOCK_POLL_MS = 500
+const inFlightStartups = new Map<string, Promise<string>>()
+
 function getLockFilePath(config: PluginConfig): string | null {
   const dataDir = resolveDataDir(config)
   if (!dataDir) return null
   return join(dataDir, ".server-lock")
+}
+
+function getStartupLockFilePath(config: PluginConfig): string | null {
+  const dataDir = resolveDataDir(config)
+  if (!dataDir) return null
+  return join(dataDir, ".server-startup-lock")
+}
+
+function getStartupKey(config: PluginConfig): string | null {
+  const dataDir = resolveDataDir(config)
+  if (!dataDir) return null
+  return `${dataDir}|${config.mcpServer.bind}|${config.mcpServer.port}`
 }
 
 function readLockFile(lockPath: string): LockFileData | null {
@@ -76,6 +111,65 @@ function writeLockFileAtomic(lockPath: string, data: LockFileData): void {
   }
   writeFileSync(tmpPath, JSON.stringify(serialized, null, 2), "utf-8")
   renameSync(tmpPath, lockPath)
+}
+
+function readStartupLockFile(lockPath: string): StartupLockData | null {
+  try {
+    if (!existsSync(lockPath)) return null
+    const raw = JSON.parse(readFileSync(lockPath, "utf-8")) as RawStartupLockData
+    if (typeof raw.ownerPid !== "number" || typeof raw.ownerId !== "string") return null
+    return {
+      ownerPid: raw.ownerPid,
+      ownerId: raw.ownerId,
+      port: raw.port ?? 0,
+      bind: raw.bind ?? "",
+      createdAt: raw.createdAt ?? new Date(0).toISOString(),
+      staleAfterMs: raw.staleAfterMs ?? STARTUP_LOCK_STALE_AFTER_MS,
+    }
+  } catch {
+    return null
+  }
+}
+
+function isStartupLockStale(lock: StartupLockData, now = Date.now()): boolean {
+  const createdAtMs = Date.parse(lock.createdAt)
+  if (!Number.isFinite(createdAtMs)) return true
+  return now - createdAtMs >= lock.staleAfterMs
+}
+
+function removeStartupLock(lockPath: string, ownerId?: string): void {
+  try {
+    if (ownerId) {
+      const current = readStartupLockFile(lockPath)
+      if (!current || current.ownerId !== ownerId) return
+    }
+    unlinkSync(lockPath)
+  } catch {}
+}
+
+function tryAcquireStartupLock(lockPath: string, config: PluginConfig): StartupLockData | null {
+  const lock: StartupLockData = {
+    ownerPid: process.pid,
+    ownerId: `${process.pid}-${Date.now()}-${randomBytes(4).toString("hex")}`,
+    port: config.mcpServer.port,
+    bind: config.mcpServer.bind,
+    createdAt: new Date().toISOString(),
+    staleAfterMs: STARTUP_LOCK_STALE_AFTER_MS,
+  }
+
+  const dir = dirname(lockPath)
+  mkdirSync(dir, { recursive: true })
+  try {
+    const fd = openSync(lockPath, "wx")
+    try {
+      writeFileSync(fd, JSON.stringify(lock, null, 2), "utf-8")
+    } finally {
+      closeSync(fd)
+    }
+    return lock
+  } catch {
+    return null
+  }
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -199,8 +293,28 @@ function spawnServerProcess(config: PluginConfig): ChildProcess | null {
 }
 
 export async function ensureServerRunning(config: PluginConfig): Promise<string> {
+  const startupKey = getStartupKey(config)
+  if (!startupKey) throw new Error("Cannot resolve data directory for server lock file")
+
+  const existingStartup = inFlightStartups.get(startupKey)
+  if (existingStartup) return existingStartup
+
+  const startup = ensureServerRunningUnshared(config)
+  inFlightStartups.set(startupKey, startup)
+  try {
+    return await startup
+  } finally {
+    if (inFlightStartups.get(startupKey) === startup) {
+      inFlightStartups.delete(startupKey)
+    }
+  }
+}
+
+async function ensureServerRunningUnshared(config: PluginConfig): Promise<string> {
   const lockPath = getLockFilePath(config)
   if (!lockPath) throw new Error("Cannot resolve data directory for server lock file")
+  const startupLockPath = getStartupLockFilePath(config)
+  if (!startupLockPath) throw new Error("Cannot resolve data directory for server startup lock file")
 
   const url = getServerUrl(config)
   const myPid = process.pid
@@ -227,6 +341,66 @@ export async function ensureServerRunning(config: PluginConfig): Promise<string>
     return url
   }
 
+  const startupDeadline = Date.now() + STARTUP_LOCK_WAIT_MS
+  let startupOwner = tryAcquireStartupLock(startupLockPath, config)
+  while (!startupOwner) {
+    const lock = readStartupLockFile(startupLockPath)
+    if (!lock || isStartupLockStale(lock) || !isProcessAlive(lock.ownerPid)) {
+      removeStartupLock(startupLockPath)
+      startupOwner = tryAcquireStartupLock(startupLockPath, config)
+      if (startupOwner) break
+    } else {
+      if (await isServerRunning(config)) {
+        const existingLock = readLockFile(lockPath)
+        if (existingLock) {
+          const liveHolders = pruneDeadHolders(existingLock.holders)
+          if (!liveHolders.includes(myPid)) {
+            liveHolders.push(myPid)
+          }
+          writeLockFileAtomic(lockPath, { ...existingLock, holders: liveHolders })
+          logger.info(`Joined existing MCP server (pid=${existingLock.pid}, holders=${liveHolders.length})`)
+        } else {
+          writeLockFileAtomic(lockPath, {
+            pid: 0,
+            port: config.mcpServer.port,
+            bind: config.mcpServer.bind,
+            holders: [myPid],
+            unknownHolders: 0,
+            startedAt: new Date().toISOString(),
+          })
+        }
+        return url
+      }
+      if (Date.now() >= startupDeadline) {
+        throw new Error(`Timed out waiting for MCP server startup lock owner (pid=${lock.ownerPid})`)
+      }
+      await new Promise((r) => setTimeout(r, STARTUP_LOCK_POLL_MS))
+    }
+  }
+
+  if (await isServerRunning(config)) {
+    removeStartupLock(startupLockPath, startupOwner.ownerId)
+    const existingLock = readLockFile(lockPath)
+    if (existingLock) {
+      const liveHolders = pruneDeadHolders(existingLock.holders)
+      if (!liveHolders.includes(myPid)) {
+        liveHolders.push(myPid)
+      }
+      writeLockFileAtomic(lockPath, { ...existingLock, holders: liveHolders })
+      logger.info(`Joined existing MCP server (pid=${existingLock.pid}, holders=${liveHolders.length})`)
+    } else {
+      writeLockFileAtomic(lockPath, {
+        pid: 0,
+        port: config.mcpServer.port,
+        bind: config.mcpServer.bind,
+        holders: [myPid],
+        unknownHolders: 0,
+        startedAt: new Date().toISOString(),
+      })
+    }
+    return url
+  }
+
   const staleLock = readLockFile(lockPath)
   if (staleLock) {
     if (staleLock.pid > 0 && isProcessAlive(staleLock.pid)) {
@@ -237,12 +411,14 @@ export async function ensureServerRunning(config: PluginConfig): Promise<string>
 
   const child = spawnServerProcess(config)
   if (!child || !child.pid) {
+    removeStartupLock(startupLockPath, startupOwner.ownerId)
     throw new Error("Failed to spawn MCP server process")
   }
 
   const healthy = await waitForHealth(config)
   if (!healthy) {
     try { process.kill(child.pid, "SIGKILL") } catch {}
+    removeStartupLock(startupLockPath, startupOwner.ownerId)
     throw new Error(`MCP server failed to become healthy within timeout (port ${config.mcpServer.port})`)
   }
 
@@ -254,6 +430,7 @@ export async function ensureServerRunning(config: PluginConfig): Promise<string>
     unknownHolders: 0,
     startedAt: new Date().toISOString(),
   })
+  removeStartupLock(startupLockPath, startupOwner.ownerId)
 
   logger.info(`Spawned MCP server (pid=${child.pid}, port=${config.mcpServer.port})`)
   return url

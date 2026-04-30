@@ -3,11 +3,32 @@ import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { randomBytes } from "node:crypto"
+import type { ChildProcess } from "node:child_process"
 import type { PluginConfig } from "../../src/config.js"
 
 function makeConfig(overrides: Partial<PluginConfig["mcpServer"]> = {}): PluginConfig {
   return {
-    chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 30, maxInjectedMemories: 6, injectOn: "first", shortQueryMinLength: 3, minScore: 0.35 },
+    chatMessage: {
+      enabled: true,
+      maxMemories: 5,
+      maxProjectMemories: 30,
+      maxInjectedMemories: 6,
+      injectOn: "first",
+      shortQueryMinLength: 3,
+      minScore: 0.35,
+      projectKnowledgeInjectOn: "first",
+      codeIntelInjectOn: "first",
+      knowledgeGraphInjectOn: "first",
+      maxKnowledgeGraphItems: 10,
+      knowledgeGraphRelatedDepth: 1,
+      knowledgeGraphEntityMatch: true,
+      projectKnowledgeValidOnly: false,
+      projectKnowledgeTiers: [
+        { categories: ["USER"], limit: 5 },
+        { categories: ["DECISION", "PATTERN"], limit: 5 },
+        { categories: ["CONTEXT"], limit: 5 },
+      ],
+    },
     autoCapture: { enabled: false, debounceMs: 10000, language: "en" },
     compaction: { enabled: true, memoryLimit: 10 },
     keywordDetection: { enabled: true, extraPatterns: [] },
@@ -15,6 +36,21 @@ function makeConfig(overrides: Partial<PluginConfig["mcpServer"]> = {}): PluginC
     privacy: { enabled: true },
     compactionSummaryCapture: { enabled: true },
     codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
+    preferenceLearning: {
+      enabled: false,
+      learnOnCorrections: true,
+      learnOnNegations: true,
+      learnOnMessageUpdated: true,
+      injectOn: "first",
+      scope: "project",
+      minConfidence: 0.7,
+      candidateConfidence: 0.4,
+      maxPreferences: 5,
+      maxCandidates: 3,
+      debounceMs: 10000,
+      maxInputChars: 4000,
+      maxStoredPreferences: 50,
+    },
     captureModel: { provider: "", model: "", apiUrl: "", apiKey: "" },
     memoryScope: { namespace: "", shareAcrossAgents: true, includeAgentMetadata: true, includeRunMetadata: false, userId: "", defaultMetadata: {} },
     mcpServer: {
@@ -51,6 +87,17 @@ function writeNewLock(lockPath: string, pid: number, holders: number[]): void {
   }))
 }
 
+function writeStartupLock(lockPath: string, ownerPid: number, ownerId: string, createdAt: string): void {
+  writeFileSync(lockPath, JSON.stringify({
+    ownerPid,
+    ownerId,
+    port: 23817,
+    bind: "127.0.0.1",
+    createdAt,
+    staleAfterMs: 10000,
+  }))
+}
+
 let testDir: string
 let mockFetch: ReturnType<typeof vi.fn>
 
@@ -66,6 +113,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.restoreAllMocks()
   try {
     const lockPath = join(testDir, ".server-lock")
@@ -244,6 +292,130 @@ describe("stopServer", () => {
 })
 
 describe("ensureServerRunning", () => {
+  it("concurrent same-process calls spawn at most one server when health is initially false", async () => {
+    vi.resetModules()
+    vi.doMock("../../src/config.js", async (importOriginal) => {
+      const original = await importOriginal<typeof import("../../src/config.js")>()
+      return { ...original, resolveDataDir: () => testDir }
+    })
+    const mockSpawn = vi.fn(() => ({
+      pid: 424242,
+      unref: vi.fn(),
+    } as unknown as ChildProcess))
+    vi.doMock("node:child_process", () => ({ spawn: mockSpawn }))
+    const { ensureServerRunning } = await import("../../src/services/server-process.js")
+    const config = makeConfig()
+
+    mockFetch
+      .mockResolvedValueOnce({ ok: false })
+      .mockResolvedValueOnce({ ok: false })
+      .mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ status: "ok" }),
+      })
+
+    const [firstUrl, secondUrl] = await Promise.all([
+      ensureServerRunning(config),
+      ensureServerRunning(config),
+    ])
+
+    expect(firstUrl).toBe("http://127.0.0.1:23817")
+    expect(secondUrl).toBe("http://127.0.0.1:23817")
+    expect(mockSpawn).toHaveBeenCalledTimes(1)
+
+    const lock = JSON.parse(readFileSync(join(testDir, ".server-lock"), "utf-8"))
+    expect(lock.pid).toBe(424242)
+    expect(lock.holders.filter((pid: number) => pid === process.pid)).toHaveLength(1)
+    expect(existsSync(join(testDir, ".server-startup-lock"))).toBe(false)
+  })
+
+  it("startup lock with live owner waits and joins healthy server instead of spawning", async () => {
+    vi.resetModules()
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-04-30T00:00:00.000Z"))
+    vi.doMock("../../src/config.js", async (importOriginal) => {
+      const original = await importOriginal<typeof import("../../src/config.js")>()
+      return { ...original, resolveDataDir: () => testDir }
+    })
+    const mockSpawn = vi.fn(() => ({
+      pid: 424242,
+      unref: vi.fn(),
+    } as unknown as ChildProcess))
+    vi.doMock("node:child_process", () => ({ spawn: mockSpawn }))
+    const { ensureServerRunning } = await import("../../src/services/server-process.js")
+    const config = makeConfig()
+
+    const startupLockPath = join(testDir, ".server-startup-lock")
+    writeStartupLock(startupLockPath, process.pid, "owner-process", "2026-04-30T00:00:00.000Z")
+
+    vi.spyOn(process, "kill").mockImplementation((pid, _sig) => {
+      if (pid === process.pid) return true
+      throw new Error("ESRCH")
+    })
+
+    mockFetch
+      .mockResolvedValueOnce({ ok: false })
+      .mockResolvedValueOnce({ ok: false })
+      .mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ status: "ok" }),
+      })
+
+    const pending = ensureServerRunning(config)
+    await vi.advanceTimersByTimeAsync(500)
+
+    await expect(pending).resolves.toBe("http://127.0.0.1:23817")
+    expect(mockSpawn).not.toHaveBeenCalled()
+
+    const lock = JSON.parse(readFileSync(join(testDir, ".server-lock"), "utf-8"))
+    expect(lock.pid).toBe(0)
+    expect(lock.holders).toContain(process.pid)
+    expect(JSON.parse(readFileSync(startupLockPath, "utf-8"))).toMatchObject({
+      ownerPid: process.pid,
+      ownerId: "owner-process",
+      staleAfterMs: 10000,
+    })
+  })
+
+  it("startup lock with stale owner is reclaimed before spawning", async () => {
+    vi.resetModules()
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-04-30T00:00:20.000Z"))
+    vi.doMock("../../src/config.js", async (importOriginal) => {
+      const original = await importOriginal<typeof import("../../src/config.js")>()
+      return { ...original, resolveDataDir: () => testDir }
+    })
+    const mockSpawn = vi.fn(() => ({
+      pid: 424242,
+      unref: vi.fn(),
+    } as unknown as ChildProcess))
+    vi.doMock("node:child_process", () => ({ spawn: mockSpawn }))
+    const { ensureServerRunning } = await import("../../src/services/server-process.js")
+    const config = makeConfig()
+
+    const startupLockPath = join(testDir, ".server-startup-lock")
+    writeStartupLock(startupLockPath, 999999999, "stale-owner", "2026-04-30T00:00:00.000Z")
+
+    mockFetch
+      .mockResolvedValueOnce({ ok: false })
+      .mockResolvedValueOnce({ ok: false })
+      .mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ status: "ok" }),
+      })
+
+    const pending = ensureServerRunning(config)
+    await vi.advanceTimersByTimeAsync(500)
+
+    await expect(pending).resolves.toBe("http://127.0.0.1:23817")
+    expect(mockSpawn).toHaveBeenCalledTimes(1)
+
+    const lock = JSON.parse(readFileSync(join(testDir, ".server-lock"), "utf-8"))
+    expect(lock.pid).toBe(424242)
+    expect(lock.holders).toContain(process.pid)
+    expect(existsSync(startupLockPath)).toBe(false)
+  })
+
   it("adds own PID to holders when joining existing server", async () => {
     vi.resetModules()
     vi.doMock("../../src/config.js", async (importOriginal) => {
