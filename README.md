@@ -352,9 +352,28 @@ You can also re-run `/setup-mcp-memory` anytime to update your configuration.
 - Node.js 18+
 - For auto-capture: Works out of the box using OpenCode's session API; optionally set an API key for direct HTTP mode
 
+## Troubleshooting: legacy `access_count` warning
+
+If you see a startup warning like:
+
+`Failed to deserialize field 'access_count' on type 'Memory': Expected number, got none`
+
+this plugin should be treated as a **diagnose-only layer**. The warning is typically a
+`memory-mcp-1file` storage/model compatibility issue, not a plugin-side schema or mutation path.
+
+Recommended diagnosis path:
+
+1. Confirm your `memory-mcp-1file` version and changelog for storage/model compatibility updates.
+2. If core memory flows still work (`memory_query`, `memory_save`, `memory_manage`), keep the plugin running and monitor.
+3. If warnings persist or functionality degrades, upgrade the `memory-mcp-1file` server and validate in a safe/staging environment first.
+
+Safety guardrail:
+
+- Do **not** manually edit or delete production memory DB records as a normal fix path from this plugin repository.
+
 ## Limitations
 
-- **HTTP transport sharing** — In HTTP mode (`"transport": "http"`), multiple plugin processes share one MCP server instance via a file-based holder list. The lock file (`{dataDir}/.server-lock`) records the PID of each live client; on every read, dead PIDs are pruned so a crash-killed process cannot orphan the shared server indefinitely. The first live holder also acts as the code-index sync leader, so follower clients skip redundant fingerprint/debounce/cooldown work and rely on the leader to trigger background re-indexing. Code-index sync state is still persisted under the shared shard, but it is now tracked per workspace so multiple workspaces sharing one `tag` / `dataDir` do not overwrite each other's freshness metadata or cooldown timestamps. The lock file uses rename-based atomic writes but not OS-level file locks, so a narrow race window exists during concurrent startup — in practice harmless, as the second spawn attempt fails because the port is already taken and the retry health check succeeds.
+- **HTTP transport sharing** — In HTTP mode (`"transport": "http"`), multiple plugin processes share one MCP server instance via a file-based holder list. The lock file (`{dataDir}/.server-lock`) records the PID of each live client; on every read, dead PIDs are pruned so a crash-killed process cannot orphan the shared server indefinitely. The first live holder also acts as the code-index sync leader, so follower clients skip redundant fingerprint/debounce/cooldown work and rely on the leader to trigger background re-indexing. Code-index sync state is still persisted under the shared shard, but it is now tracked per workspace so multiple workspaces sharing one `tag` / `dataDir` do not overwrite each other's freshness metadata or cooldown timestamps. The shared server startup is coordinated via a separate `.server-startup-lock` which ensures that even during concurrent plugin launches, only one process attempts to spawn the server while others wait for it to become healthy. This eliminates the narrow race window previously present in rename-based atomic writes.
 - **Auto-capture LLM routing** — When `captureModel.apiKey` is set, auto-capture uses direct HTTP to the specified API. When empty, it falls back to OpenCode's session API (creates an ephemeral session, prompts, then deletes). The session API approach is zero-config but slightly slower due to session lifecycle overhead.
 - **In-memory session tracking** — Duplicate-prevention state (`injectedSessions`, `capturedSessions`) is held in memory and resets on process restart. The first message after a restart may re-inject memories that were already injected in the previous session.
 - **Tag-based privacy only** — Content is redacted only when explicitly wrapped in `<private>…</private>` tags. There is no automatic PII or secret detection.
