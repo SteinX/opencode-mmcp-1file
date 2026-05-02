@@ -1960,6 +1960,7 @@ describe("installCommand (called during plugin init)", () => {
       // Source files exist
       if (s.includes("commands/init-mcp-memory.md")) return true
       if (s.includes("commands/setup-mcp-memory.md")) return true
+      if (s.includes("commands/manage-mcp-server.md")) return true
       // Target files don't exist
       return false
     })
@@ -1967,7 +1968,10 @@ describe("installCommand (called during plugin init)", () => {
     await initPlugin()
 
     expect(mkdirSync).toHaveBeenCalled()
-    expect(copyFileSync).toHaveBeenCalledTimes(2)
+    expect(copyFileSync).toHaveBeenCalledTimes(3)
+    
+    const copiedFiles = vi.mocked(copyFileSync).mock.calls.map(call => call[0])
+    expect(copiedFiles.some(f => f.endsWith("manage-mcp-server.md"))).toBe(true)
   })
 
   it("skips copying when target already exists", async () => {
