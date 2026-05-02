@@ -289,6 +289,70 @@ describe("mcp-client", () => {
     expect(mockClient.close).toHaveBeenCalled()
   })
 
+  it("resetMemoryClientForServerControl closes connection and allows recreating the client without server lifecycle calls", async () => {
+    vi.resetModules()
+    const firstClient = createMockClient()
+    const secondClient = createMockClient()
+    const mockReleaseServerHolder = vi.fn().mockResolvedValue(undefined)
+    const mockStopServer = vi.fn().mockResolvedValue(undefined)
+    const mockHttpTransport = vi.fn(function (this: { url?: URL }, url: URL) {
+      this.url = url
+    })
+
+    mockConnectionState = {
+      isConnectionFailed: vi.fn().mockReturnValue(false),
+      markConnectionFailed: vi.fn(),
+      markConnectionHealthy: vi.fn(),
+    }
+
+    const mockClientConstructor = vi.fn(function () {
+      if (mockClientConstructor.mock.calls.length === 1) return firstClient
+      if (mockClientConstructor.mock.calls.length === 2) return secondClient
+      throw new Error("unexpected extra Client construction")
+    })
+
+    vi.doMock("@modelcontextprotocol/sdk/client/index.js", () => ({
+      Client: mockClientConstructor,
+    }))
+    vi.doMock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
+      StdioClientTransport: vi.fn(),
+    }))
+    vi.doMock("@modelcontextprotocol/sdk/client/sse.js", () => ({
+      SSEClientTransport: vi.fn(),
+    }))
+    vi.doMock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
+      StreamableHTTPClientTransport: mockHttpTransport,
+    }))
+    vi.doMock("../../src/services/server-process.js", () => ({
+      getServerUrl: vi.fn(() => "http://127.0.0.1:23817"),
+      isServerRunning: vi.fn(() => Promise.resolve(false)),
+      ensureServerRunning: vi.fn(() => Promise.resolve("http://127.0.0.1:23817")),
+      releaseServerHolder: mockReleaseServerHolder,
+      stopServer: mockStopServer,
+    }))
+    vi.doMock("../../src/utils/logger.js", () => ({
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    }))
+    vi.doMock("../../src/config.js", async (importOriginal) => {
+      const original = await importOriginal<typeof import("../../src/config.js")>()
+      return { ...original, resolveDataDir: vi.fn(() => "/tmp/test-data") }
+    })
+    vi.doMock("../../src/services/connection-state.js", () => mockConnectionState)
+
+    const mod = await import("../../src/services/mcp-client.js")
+    const config = makeConfig("http")
+
+    await mod.getMemoryClient(config)
+    await mod.resetMemoryClientForServerControl()
+    await mod.getMemoryClient(config)
+
+    expect(firstClient.close).toHaveBeenCalledTimes(1)
+    expect(secondClient.close).not.toHaveBeenCalled()
+    expect(mockHttpTransport).toHaveBeenCalledTimes(2)
+    expect(mockReleaseServerHolder).not.toHaveBeenCalled()
+    expect(mockStopServer).not.toHaveBeenCalled()
+  })
+
   it("getMemoryClient reuses existing connection (singleton)", async () => {
     const { mod, mockClient } = await setupModule()
     const config = makeConfig()
@@ -852,6 +916,7 @@ describe("HTTP transport", () => {
     await mod.disconnectMemoryClient(config)
 
     expect(mockClient.close).toHaveBeenCalled()
+    expect(mockReleaseServerHolder).toHaveBeenCalledTimes(1)
     expect(mockReleaseServerHolder).toHaveBeenCalledWith(config)
     expect(mockStopServer).not.toHaveBeenCalled()
   })

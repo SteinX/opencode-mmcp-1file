@@ -1025,3 +1025,9 @@ export async function disconnectMemoryClient(config?: PluginConfig): Promise<voi
     }
   }
 }
+
+export async function resetMemoryClientForServerControl(): Promise<void> {
+  await disposeClient()
+  lastHealthCheckAt = 0
+  healthCheckPromise = null
+}
