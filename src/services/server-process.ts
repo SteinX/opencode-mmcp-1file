@@ -43,6 +43,19 @@ interface RawStartupLockData {
   staleAfterMs?: number
 }
 
+export interface ServerRuntimeStatus {
+  transport: PluginConfig["mcpServer"]["transport"] | null
+  url: string | null
+  running: boolean
+  lockPresent: boolean
+  pid: number | null
+  holders: number[]
+  unknownHolders: number
+  holderCount: number
+  message: string
+  error?: string
+}
+
 const STARTUP_LOCK_STALE_AFTER_MS = 10000
 const STARTUP_LOCK_WAIT_MS = 15000
 const STARTUP_LOCK_POLL_MS = 500
@@ -70,30 +83,71 @@ function readLockFile(lockPath: string): LockFileData | null {
   try {
     if (!existsSync(lockPath)) return null
     const raw = JSON.parse(readFileSync(lockPath, "utf-8")) as RawLockFileData
-    if (typeof raw.pid !== "number") return null
-
-    const holders: number[] =
-      Array.isArray(raw.holders)
-        ? (raw.holders as unknown[]).filter((h): h is number => typeof h === "number")
-        : []
-
-    const unknownHolders =
-      typeof raw.unknownHolders === "number" && raw.unknownHolders > 0
-        ? raw.unknownHolders
-        : typeof raw.refCount === "number" && raw.refCount > 0
-          ? raw.refCount
-          : 0
-
-    return {
-      pid: raw.pid,
-      port: raw.port ?? 0,
-      bind: raw.bind ?? "",
-      holders,
-      unknownHolders,
-      startedAt: raw.startedAt ?? new Date().toISOString(),
-    }
+    return normalizeLockData(raw)
   } catch {
     return null
+  }
+}
+
+function normalizeLockData(raw: RawLockFileData | null | undefined): LockFileData | null {
+  if (!raw || typeof raw.pid !== "number") return null
+
+  const holders: number[] =
+    Array.isArray(raw.holders)
+      ? (raw.holders as unknown[]).filter((h): h is number => typeof h === "number")
+      : []
+
+  const unknownHolders =
+    typeof raw.unknownHolders === "number" && raw.unknownHolders > 0
+      ? raw.unknownHolders
+      : typeof raw.refCount === "number" && raw.refCount > 0
+        ? raw.refCount
+        : 0
+
+  return {
+    pid: raw.pid,
+    port: raw.port ?? 0,
+    bind: raw.bind ?? "",
+    holders,
+    unknownHolders,
+    startedAt: raw.startedAt ?? new Date().toISOString(),
+  }
+}
+
+function buildNoopRuntimeStatus(config: PluginConfig | undefined, message: string): ServerRuntimeStatus {
+  return {
+    transport: config?.mcpServer.transport ?? null,
+    url: config?.mcpServer.transport === "http" ? getServerUrl(config) : null,
+    running: false,
+    lockPresent: false,
+    pid: null,
+    holders: [],
+    unknownHolders: 0,
+    holderCount: 0,
+    message,
+  }
+}
+
+function formatRuntimeStatusMessage(status: Pick<ServerRuntimeStatus, "running" | "lockPresent" | "holderCount" | "pid" | "unknownHolders">): string {
+  if (!status.lockPresent) {
+    return status.running ? "HTTP server is healthy but no lock file is present." : "HTTP server is not healthy and no lock file is present."
+  }
+
+  const holderLabel = status.holderCount === 1 ? "holder" : "holders"
+  const pidLabel = status.pid && status.pid > 0 ? `pid=${status.pid}` : "pid=unknown"
+  const stateLabel = status.running ? "healthy" : "unhealthy"
+  return `HTTP server lock found (${pidLabel}, ${status.holderCount} ${holderLabel}, ${status.unknownHolders} unknown, ${stateLabel}).`
+}
+
+async function readRuntimeLockStatus(lockPath: string): Promise<{ lock: LockFileData | null; error: string | null }> {
+  try {
+    if (!existsSync(lockPath)) return { lock: null, error: null }
+    const raw = JSON.parse(readFileSync(lockPath, "utf-8")) as RawLockFileData
+    const lock = normalizeLockData(raw)
+    if (!lock) return { lock: null, error: "Malformed server lock file." }
+    return { lock, error: null }
+  } catch (err) {
+    return { lock: null, error: err instanceof Error ? err.message : String(err) }
   }
 }
 
@@ -240,6 +294,92 @@ export async function isServerRunning(config: PluginConfig): Promise<boolean> {
     return body.status === "ok"
   } catch {
     return false
+  }
+}
+
+export async function getServerRuntimeStatus(config?: PluginConfig): Promise<ServerRuntimeStatus> {
+  if (!config) {
+    return buildNoopRuntimeStatus(config, "Server status unavailable without configuration.")
+  }
+
+  if (config.mcpServer.transport !== "http") {
+    return buildNoopRuntimeStatus(config, `Server status unavailable for ${config.mcpServer.transport} transport.`)
+  }
+
+  const lockPath = getLockFilePath(config)
+  if (!lockPath) {
+    return buildNoopRuntimeStatus(config, "Server status unavailable because the data directory is disabled.")
+  }
+
+  try {
+    const running = await isServerRunning(config)
+    const { lock, error } = await readRuntimeLockStatus(lockPath)
+
+    if (error) {
+      return {
+        transport: config.mcpServer.transport,
+        url: getServerUrl(config),
+        running: false,
+        lockPresent: false,
+        pid: null,
+        holders: [],
+        unknownHolders: 0,
+        holderCount: 0,
+        message: `HTTP server lock unavailable: ${error}`,
+        error,
+      }
+    }
+
+    if (!lock) {
+      return {
+        transport: config.mcpServer.transport,
+        url: getServerUrl(config),
+        running,
+        lockPresent: false,
+        pid: null,
+        holders: [],
+        unknownHolders: 0,
+        holderCount: 0,
+        message: error
+          ? `HTTP server lock unavailable: ${error}`
+          : formatRuntimeStatusMessage({ running, lockPresent: false, holderCount: 0, pid: null, unknownHolders: 0 }),
+        ...(error ? { error } : {}),
+      }
+    }
+
+    const holders = pruneDeadHolders(lock.holders)
+    const holderCount = holders.length + lock.unknownHolders
+
+    return {
+      transport: config.mcpServer.transport,
+      url: getServerUrl(config),
+      running,
+      lockPresent: true,
+      pid: lock.pid,
+      holders,
+      unknownHolders: lock.unknownHolders,
+      holderCount,
+      message: formatRuntimeStatusMessage({
+        running,
+        lockPresent: true,
+        holderCount,
+        pid: lock.pid,
+        unknownHolders: lock.unknownHolders,
+      }),
+    }
+  } catch (err) {
+    return {
+      transport: config.mcpServer.transport,
+      url: getServerUrl(config),
+      running: false,
+      lockPresent: false,
+      pid: null,
+      holders: [],
+      unknownHolders: 0,
+      holderCount: 0,
+      message: "HTTP server status check failed.",
+      error: err instanceof Error ? err.message : String(err),
+    }
   }
 }
 
