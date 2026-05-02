@@ -4,9 +4,29 @@ import type { PluginConfig } from "../../src/config.js"
 
 vi.mock("../../src/services/mcp-client.js", () => ({
   callMemoryTool: vi.fn().mockResolvedValue("ok"),
+  getMemoryClient: vi.fn().mockResolvedValue({}),
+  resetMemoryClientForServerControl: vi.fn().mockResolvedValue(undefined),
   getProjectProjectionInfo: vi.fn().mockResolvedValue({ action: "projection", raw: { ok: true } }),
   getProjectProjectionByLocatorInfo: vi.fn().mockResolvedValue({ action: "projection_by_locator", raw: { ok: true } }),
   isMissingProjectLocator: vi.fn().mockReturnValue(false),
+}))
+
+vi.mock("../../src/services/server-process.js", () => ({
+  ensureServerRunning: vi.fn().mockResolvedValue("http://127.0.0.1:23817"),
+  isServerRunning: vi.fn().mockResolvedValue(true),
+  getServerUrl: vi.fn().mockReturnValue("http://127.0.0.1:23817"),
+  stopServer: vi.fn().mockResolvedValue(undefined),
+  getServerRuntimeStatus: vi.fn().mockResolvedValue({
+    transport: "http",
+    url: "http://127.0.0.1:23817",
+    running: true,
+    lockPresent: true,
+    pid: 123,
+    holders: [111],
+    unknownHolders: 0,
+    holderCount: 1,
+    message: "ok",
+  }),
 }))
 
 vi.mock("../../src/utils/logger.js", () => ({
@@ -37,10 +57,19 @@ vi.mock("../../src/services/connection-state.js", () => ({
 
 const {
   callMemoryTool,
+  getMemoryClient,
+  resetMemoryClientForServerControl,
   getProjectProjectionInfo,
   getProjectProjectionByLocatorInfo,
   isMissingProjectLocator,
 } = await import("../../src/services/mcp-client.js")
+const {
+  ensureServerRunning,
+  isServerRunning: isHttpServerRunning,
+  getServerUrl,
+  stopServer,
+  getServerRuntimeStatus,
+} = await import("../../src/services/server-process.js")
 const { stripPrivateContent } = await import("../../src/utils/privacy.js")
 const { applyConfig } = await import("../../src/config.js")
 const { isConnectionFailed, getConnectionStatus } = await import("../../src/services/connection-state.js")
@@ -57,7 +86,7 @@ function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
     codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
     captureModel: { provider: "openai", model: "gpt-4o-mini", apiUrl: "", apiKey: "" },
     memoryScope: { namespace: "", shareAcrossAgents: true, includeAgentMetadata: true, includeRunMetadata: false, userId: "", defaultMetadata: {} },
-    mcpServer: { command: [], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file" },
+    mcpServer: { command: [], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1", reconnectIntervalMs: 30000, heartbeatIntervalMs: 20000 },
     systemPrompt: { enabled: true },
     ...overrides,
   } as PluginConfig
@@ -79,7 +108,7 @@ describe("buildToolRegistry", () => {
     vi.clearAllMocks()
   })
 
-  it("returns 8 unified tools", () => {
+  it("returns 9 unified tools", () => {
     const tools = buildToolRegistry(makeConfig())
     const toolNames = Object.keys(tools)
     expect(toolNames).toEqual([
@@ -91,6 +120,7 @@ describe("buildToolRegistry", () => {
       "knowledge_graph",
       "get_status",
       "reload_config",
+      "mcp_server_control",
     ])
   })
 
@@ -680,7 +710,19 @@ describe("reload_config tool", () => {
     const tools = buildToolRegistry(makeConfig())
     const result = await tools.reload_config.execute({}, mockContext)
     expect(result).toContain("mcpServer")
-    expect(result).toContain("restart")
+    expect(result).toContain("restart the editor")
+  })
+
+  it("warns with manage-mcp-server restart for HTTP transport", async () => {
+    vi.mocked(applyConfig).mockReturnValue(["mcpServer"])
+    const tools = buildToolRegistry(makeConfig({
+      mcpServer: {
+        ...makeConfig().mcpServer,
+        transport: "http",
+      },
+    }))
+    const result = await tools.reload_config.execute({}, mockContext)
+    expect(result).toContain("/manage-mcp-server restart")
   })
 
   it("returns error message when applyConfig throws", async () => {
@@ -691,6 +733,298 @@ describe("reload_config tool", () => {
     const result = await tools.reload_config.execute({}, mockContext)
     expect(result).toContain("Config reload failed")
     expect(result).toContain("file read failed")
+  })
+})
+
+describe("mcp_server_control tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("returns stdio no-op for status without lifecycle calls", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.mcp_server_control.execute({ action: "status" }, mockContext)
+    const parsed = JSON.parse(result as string)
+    expect(parsed).toMatchObject({
+      ok: true,
+      action: "status",
+      transport: "stdio",
+      running: false,
+    })
+    expect(parsed.message).toContain("does not use a shared HTTP MCP server")
+    expect(getServerRuntimeStatus).not.toHaveBeenCalled()
+    expect(stopServer).not.toHaveBeenCalled()
+    expect(ensureServerRunning).not.toHaveBeenCalled()
+    expect(resetMemoryClientForServerControl).not.toHaveBeenCalled()
+    expect(getMemoryClient).not.toHaveBeenCalled()
+  })
+
+  it("returns stdio no-op for stop without lifecycle calls", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.mcp_server_control.execute({ action: "stop" }, mockContext)
+    const parsed = JSON.parse(result as string)
+    expect(parsed).toMatchObject({
+      ok: true,
+      action: "stop",
+      transport: "stdio",
+      running: false,
+    })
+    expect(stopServer).not.toHaveBeenCalled()
+    expect(ensureServerRunning).not.toHaveBeenCalled()
+    expect(resetMemoryClientForServerControl).not.toHaveBeenCalled()
+    expect(getMemoryClient).not.toHaveBeenCalled()
+  })
+
+  it("returns stdio no-op for restart without lifecycle calls", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.mcp_server_control.execute({ action: "restart" }, mockContext)
+    const parsed = JSON.parse(result as string)
+    expect(parsed).toMatchObject({
+      ok: true,
+      action: "restart",
+      transport: "stdio",
+      running: false,
+    })
+    expect(stopServer).not.toHaveBeenCalled()
+    expect(ensureServerRunning).not.toHaveBeenCalled()
+    expect(resetMemoryClientForServerControl).not.toHaveBeenCalled()
+    expect(getMemoryClient).not.toHaveBeenCalled()
+  })
+
+  it("returns HTTP status via getServerRuntimeStatus without mutating calls", async () => {
+    const status = {
+      transport: "http",
+      url: "http://127.0.0.1:23817",
+      running: true,
+      lockPresent: true,
+      pid: 123,
+      holders: [111],
+      unknownHolders: 0,
+      holderCount: 1,
+      message: "healthy",
+    }
+    vi.mocked(getServerRuntimeStatus).mockResolvedValueOnce(status as any)
+
+    const tools = buildToolRegistry(makeConfig({
+      mcpServer: {
+        ...makeConfig().mcpServer,
+        transport: "http",
+      },
+    }))
+    const result = await tools.mcp_server_control.execute({ action: "status" }, mockContext)
+    const parsed = JSON.parse(result as string)
+
+    expect(getServerRuntimeStatus).toHaveBeenCalledWith(expect.anything())
+    expect(parsed).toMatchObject({ ok: true, action: "status", ...status })
+    expect(stopServer).not.toHaveBeenCalled()
+    expect(ensureServerRunning).not.toHaveBeenCalled()
+  })
+
+  it("stops HTTP server with reset + stopServer exactly once", async () => {
+    vi.mocked(getServerRuntimeStatus)
+      .mockResolvedValueOnce({
+        transport: "http",
+        url: "http://127.0.0.1:23817",
+        running: true,
+        lockPresent: true,
+        pid: 123,
+        holders: [111],
+        unknownHolders: 0,
+        holderCount: 1,
+        message: "before",
+      } as any)
+      .mockResolvedValueOnce({
+        transport: "http",
+        url: "http://127.0.0.1:23817",
+        running: false,
+        lockPresent: false,
+        pid: null,
+        holders: [],
+        unknownHolders: 0,
+        holderCount: 0,
+        message: "after",
+      } as any)
+
+    const tools = buildToolRegistry(makeConfig({
+      mcpServer: {
+        ...makeConfig().mcpServer,
+        transport: "http",
+      },
+    }))
+    const result = await tools.mcp_server_control.execute({ action: "stop" }, mockContext)
+    const parsed = JSON.parse(result as string)
+
+    expect(resetMemoryClientForServerControl).toHaveBeenCalledTimes(1)
+    expect(stopServer).toHaveBeenCalledTimes(1)
+    expect(stopServer).toHaveBeenCalledWith(expect.anything())
+    expect(parsed.ok).toBe(true)
+    expect(parsed.action).toBe("stop")
+    expect(parsed.stopped).toBe(true)
+  })
+
+  it("restarts HTTP server and eagerly reconnects when health passes", async () => {
+    vi.mocked(getServerRuntimeStatus)
+      .mockResolvedValueOnce({
+        transport: "http",
+        url: "http://127.0.0.1:23817",
+        running: true,
+        lockPresent: true,
+        pid: 123,
+        holders: [111],
+        unknownHolders: 0,
+        holderCount: 1,
+        message: "before",
+      } as any)
+      .mockResolvedValueOnce({
+        transport: "http",
+        url: "http://127.0.0.1:23817",
+        running: false,
+        lockPresent: false,
+        pid: null,
+        holders: [],
+        unknownHolders: 0,
+        holderCount: 0,
+        message: "afterStop",
+      } as any)
+      .mockResolvedValueOnce({
+        transport: "http",
+        url: "http://127.0.0.1:23817",
+        running: true,
+        lockPresent: true,
+        pid: 456,
+        holders: [222],
+        unknownHolders: 0,
+        holderCount: 1,
+        message: "afterStart",
+      } as any)
+
+    const tools = buildToolRegistry(makeConfig({
+      mcpServer: {
+        ...makeConfig().mcpServer,
+        transport: "http",
+      },
+    }))
+    const result = await tools.mcp_server_control.execute({ action: "restart" }, mockContext)
+    const parsed = JSON.parse(result as string)
+
+    expect(resetMemoryClientForServerControl).toHaveBeenCalledTimes(1)
+    expect(stopServer).toHaveBeenCalledTimes(1)
+    expect(ensureServerRunning).toHaveBeenCalledTimes(1)
+    expect(isHttpServerRunning).toHaveBeenCalledTimes(1)
+    expect(getMemoryClient).toHaveBeenCalledTimes(1)
+    expect(parsed.ok).toBe(true)
+    expect(parsed.action).toBe("restart")
+    expect(parsed.running).toBe(true)
+    expect(parsed.url).toBe("http://127.0.0.1:23817")
+  })
+
+  it("returns ok:false on restart failure instead of throwing", async () => {
+    vi.mocked(getServerRuntimeStatus)
+      .mockResolvedValueOnce({
+        transport: "http",
+        url: "http://127.0.0.1:23817",
+        running: true,
+        lockPresent: true,
+        pid: 123,
+        holders: [111],
+        unknownHolders: 0,
+        holderCount: 1,
+        message: "before",
+      } as any)
+      .mockResolvedValueOnce({
+        transport: "http",
+        url: "http://127.0.0.1:23817",
+        running: false,
+        lockPresent: false,
+        pid: null,
+        holders: [],
+        unknownHolders: 0,
+        holderCount: 0,
+        message: "afterStop",
+      } as any)
+    vi.mocked(ensureServerRunning).mockRejectedValueOnce(new Error("spawn failed"))
+
+    const tools = buildToolRegistry(makeConfig({
+      mcpServer: {
+        ...makeConfig().mcpServer,
+        transport: "http",
+      },
+    }))
+    const result = await tools.mcp_server_control.execute({ action: "restart" }, mockContext)
+    const parsed = JSON.parse(result as string)
+
+    expect(parsed.ok).toBe(false)
+    expect(parsed.action).toBe("restart")
+    expect(parsed.error).toContain("spawn failed")
+  })
+
+  it("returns ok:false when post-start health check fails", async () => {
+    vi.mocked(getServerRuntimeStatus)
+      .mockResolvedValueOnce({
+        transport: "http",
+        url: "http://127.0.0.1:23817",
+        running: true,
+        lockPresent: true,
+        pid: 123,
+        holders: [111],
+        unknownHolders: 0,
+        holderCount: 1,
+        message: "before",
+      } as any)
+      .mockResolvedValueOnce({
+        transport: "http",
+        url: "http://127.0.0.1:23817",
+        running: false,
+        lockPresent: false,
+        pid: null,
+        holders: [],
+        unknownHolders: 0,
+        holderCount: 0,
+        message: "afterStop",
+      } as any)
+    vi.mocked(isHttpServerRunning).mockResolvedValueOnce(false)
+
+    const tools = buildToolRegistry(makeConfig({
+      mcpServer: {
+        ...makeConfig().mcpServer,
+        transport: "http",
+      },
+    }))
+    const result = await tools.mcp_server_control.execute({ action: "restart" }, mockContext)
+    const parsed = JSON.parse(result as string)
+
+    expect(parsed.ok).toBe(false)
+    expect(parsed.action).toBe("restart")
+    expect(parsed.error).toContain("Health verification failed")
+    expect(getMemoryClient).not.toHaveBeenCalled()
+  })
+
+  it("includes URL from getServerUrl in restart failure payload", async () => {
+    vi.mocked(getServerRuntimeStatus).mockResolvedValueOnce({
+      transport: "http",
+      url: "http://127.0.0.1:23817",
+      running: true,
+      lockPresent: true,
+      pid: 123,
+      holders: [111],
+      unknownHolders: 0,
+      holderCount: 1,
+      message: "before",
+    } as any)
+    vi.mocked(ensureServerRunning).mockRejectedValueOnce(new Error("boom"))
+
+    const tools = buildToolRegistry(makeConfig({
+      mcpServer: {
+        ...makeConfig().mcpServer,
+        transport: "http",
+      },
+    }))
+    const result = await tools.mcp_server_control.execute({ action: "restart" }, mockContext)
+    const parsed = JSON.parse(result as string)
+
+    expect(getServerUrl).toHaveBeenCalledTimes(1)
+    expect(parsed.url).toBe("http://127.0.0.1:23817")
+    expect(parsed.ok).toBe(false)
   })
 })
 
