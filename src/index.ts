@@ -650,7 +650,7 @@ function installCommand(): void {
     const commandsDir = join(pluginDir, "..", "commands")
     const targetDir = join(homedir(), ".config", "opencode", "command")
 
-    const commands = ["init-mcp-memory.md", "setup-mcp-memory.md"]
+    const commands = ["init-mcp-memory.md", "setup-mcp-memory.md", "manage-mcp-server.md"]
     const installed: string[] = []
 
     for (const cmd of commands) {
