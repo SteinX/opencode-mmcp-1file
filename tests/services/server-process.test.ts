@@ -130,6 +130,214 @@ describe("getServerUrl", () => {
   })
 })
 
+describe("getServerRuntimeStatus", () => {
+  it("returns a no-op status when config is undefined", async () => {
+    vi.resetModules()
+    const { getServerRuntimeStatus } = await import("../../src/services/server-process.js")
+
+    const result = await getServerRuntimeStatus()
+
+    expect(result).toMatchObject({
+      transport: null,
+      url: null,
+      running: false,
+      lockPresent: false,
+      pid: null,
+      holders: [],
+      unknownHolders: 0,
+      holderCount: 0,
+    })
+    expect(result.message).toContain("without configuration")
+  })
+
+  it("returns a no-op status for stdio transport without touching server paths", async () => {
+    vi.resetModules()
+    const { getServerRuntimeStatus } = await import("../../src/services/server-process.js")
+    const config = makeConfig({ transport: "stdio" })
+
+    const result = await getServerRuntimeStatus(config)
+
+    expect(result).toMatchObject({
+      transport: "stdio",
+      url: null,
+      running: false,
+      lockPresent: false,
+      pid: null,
+      holders: [],
+      unknownHolders: 0,
+      holderCount: 0,
+    })
+    expect(result.message).toContain("stdio transport")
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it("returns HTTP status without a lock file", async () => {
+    vi.resetModules()
+    vi.doMock("../../src/config.js", async (importOriginal) => {
+      const original = await importOriginal<typeof import("../../src/config.js")>()
+      return { ...original, resolveDataDir: () => testDir }
+    })
+    const { getServerRuntimeStatus } = await import("../../src/services/server-process.js")
+    const config = makeConfig()
+
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ status: "ok" }),
+    })
+
+    const result = await getServerRuntimeStatus(config)
+
+    expect(result).toMatchObject({
+      transport: "http",
+      url: "http://127.0.0.1:23817",
+      running: true,
+      lockPresent: false,
+      pid: null,
+      holders: [],
+      unknownHolders: 0,
+      holderCount: 0,
+    })
+    expect(result.message).toContain("no lock file")
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it("returns live holders, prunes dead holders, and preserves unknown holder counts", async () => {
+    vi.resetModules()
+    vi.doMock("../../src/config.js", async (importOriginal) => {
+      const original = await importOriginal<typeof import("../../src/config.js")>()
+      return { ...original, resolveDataDir: () => testDir }
+    })
+    const { getServerRuntimeStatus } = await import("../../src/services/server-process.js")
+    const config = makeConfig()
+
+    const deadPid = 999999999
+    const lockPath = join(testDir, ".server-lock")
+    writeFileSync(lockPath, JSON.stringify({
+      pid: 12345,
+      port: 23817,
+      bind: "127.0.0.1",
+      holders: [process.pid, deadPid],
+      unknownHolders: 1,
+      startedAt: new Date().toISOString(),
+    }))
+
+    vi.spyOn(process, "kill").mockImplementation((pid, sig) => {
+      if (sig === 0 || sig === "0" || sig == null) {
+        if (pid === deadPid) throw Object.assign(new Error("ESRCH"), { code: "ESRCH" })
+        return true
+      }
+      return true
+    })
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ status: "ok" }),
+    })
+
+    const result = await getServerRuntimeStatus(config)
+
+    expect(result).toMatchObject({
+      transport: "http",
+      url: "http://127.0.0.1:23817",
+      running: true,
+      lockPresent: true,
+      pid: 12345,
+      holders: [process.pid],
+      unknownHolders: 1,
+      holderCount: 2,
+    })
+    expect(result.message).toContain("2 holders")
+    expect(result.message).toContain("healthy")
+  })
+
+  it("treats legacy refCount locks as unknown holders", async () => {
+    vi.resetModules()
+    vi.doMock("../../src/config.js", async (importOriginal) => {
+      const original = await importOriginal<typeof import("../../src/config.js")>()
+      return { ...original, resolveDataDir: () => testDir }
+    })
+    const { getServerRuntimeStatus } = await import("../../src/services/server-process.js")
+    const config = makeConfig()
+
+    const lockPath = join(testDir, ".server-lock")
+    writeFileSync(lockPath, JSON.stringify({
+      pid: 12345,
+      port: 23817,
+      bind: "127.0.0.1",
+      refCount: 2,
+      startedAt: new Date().toISOString(),
+    }))
+
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ status: "ok" }),
+    })
+
+    const result = await getServerRuntimeStatus(config)
+
+    expect(result).toMatchObject({
+      lockPresent: true,
+      pid: 12345,
+      holders: [],
+      unknownHolders: 2,
+      holderCount: 2,
+    })
+    expect(result.message).toContain("2 unknown")
+  })
+
+  it("returns structured error status for malformed lock files", async () => {
+    vi.resetModules()
+    vi.doMock("../../src/config.js", async (importOriginal) => {
+      const original = await importOriginal<typeof import("../../src/config.js")>()
+      return { ...original, resolveDataDir: () => testDir }
+    })
+    const { getServerRuntimeStatus } = await import("../../src/services/server-process.js")
+    const config = makeConfig()
+
+    writeFileSync(join(testDir, ".server-lock"), "not-json")
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ status: "ok" }),
+    })
+
+    const result = await getServerRuntimeStatus(config)
+
+    expect(result).toMatchObject({
+      transport: "http",
+      url: "http://127.0.0.1:23817",
+      running: false,
+      lockPresent: false,
+      pid: null,
+      holders: [],
+      unknownHolders: 0,
+      holderCount: 0,
+    })
+    expect(result.error).toBeTruthy()
+    expect(result.message).toContain("lock unavailable")
+  })
+
+  it("returns disabled-data-dir no-op status for HTTP transport", async () => {
+    vi.resetModules()
+    vi.doUnmock("../../src/config.js")
+    const { getServerRuntimeStatus } = await import("../../src/services/server-process.js")
+    const config = makeConfig({ tag: "", transport: "http" })
+
+    const result = await getServerRuntimeStatus(config)
+
+    expect(result).toMatchObject({
+      transport: "http",
+      url: "http://127.0.0.1:23817",
+      running: false,
+      lockPresent: false,
+      pid: null,
+      holders: [],
+      unknownHolders: 0,
+      holderCount: 0,
+    })
+    expect(result.message).toContain("data directory is disabled")
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+})
+
 describe("isServerRunning", () => {
   it("returns true when health check succeeds", async () => {
     vi.resetModules()
