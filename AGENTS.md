@@ -27,7 +27,7 @@ Plugin hooks (index.ts)
   └── tool:memory        → fallback memory tool (search/store/list)
         ↓
   Services layer (src/services/)
-    ├── tool-registry.ts  → register 8 unified tools (consolidating 17 MCP operations)
+    ├── tool-registry.ts  → register 9 unified tools (consolidating 17 MCP operations)
     ├── mcp-client.ts     → stdio/HTTP transport to MCP server
     ├── server-process.ts → HTTP server lifecycle (spawn, health check, refcount)
     └── ...other services
@@ -37,7 +37,7 @@ Plugin hooks (index.ts)
     └── http: shared server via StreamableHTTPClientTransport + file-based refcount
 ```
 
-**Data flow**: Plugin hooks → services → MCP client → MCP server. In stdio mode, `StdioClientTransport` manages the server process. In HTTP mode, `server-process.ts` manages a shared server with file-based reference counting — first process spawns, last process kills. LLM client (`llm-client.ts`) used only for auto-capture summarization.
+**Data flow**: Plugin hooks → services → MCP client → MCP server. In stdio mode, `StdioClientTransport` manages the server process. In HTTP mode, `server-process.ts` manages a shared server with file-based holder tracking; the shared server remains resident by default and can be managed through the `mcp_server_control` unified tool (`status`/`stop`/`restart`) and `/manage-mcp-server` command. Controlled stop/restart does not force-kill when other live holders remain. LLM client (`llm-client.ts`) used only for auto-capture summarization.
 
 ## Conventions
 
@@ -61,7 +61,8 @@ Plugin hooks (index.ts)
 | `src/config.ts` | Config schema + loader + hot-reload | `PluginConfig`, `loadConfig()`, `resolveDataDir()`, `applyConfig()` |
 | `src/services/server-process.ts` | HTTP server lifecycle: spawn, health check, refcount lock file | `getServerUrl()`, `isServerRunning()`, `ensureServerRunning()`, `stopServer()` |
 | `src/services/mcp-client.ts` | MCP connection singleton (stdio or HTTP) | `recall()`, `searchMemory()`, `storeMemory()`, `listMemories()`, `discoverTools()`, `disconnectMemoryClient()` |
-| `src/services/tool-registry.ts` | Register 8 unified tools (consolidating 17 MCP operations) | `buildToolRegistry()` |
+| `src/services/tool-registry.ts` | Register 9 unified tools (consolidating 17 MCP operations, including `mcp_server_control`) | `buildToolRegistry()` |
+| `commands/manage-mcp-server.md` | `/manage-mcp-server` slash command for shared HTTP MCP server control | N/A (Markdown prompt) |
 | `src/services/system-prompt.ts` | Memory Protocol system prompt builder | `buildMemorySystemPrompt()` |
 | `src/services/auto-capture.ts` | Session-idle memory extraction | `performAutoCapture()` |
 | `src/services/code-index-sync.ts` | Workspace fingerprinting + deferred re-index | `ensureCodeIndexFresh()`, `computeWorkspaceFingerprint()` |
@@ -80,7 +81,7 @@ Plugin hooks (index.ts)
 ## Gotchas
 
 - **Import extensions**: Always use `.js` in import paths, even for `.ts` source files. TypeScript's `bundler` module resolution requires this.
-- **MCP server lifecycle**: In stdio mode, `StdioClientTransport` manages the process. In HTTP mode, `server-process.ts` manages a shared server with a lock file at `{dataDir}/.server-lock` containing PID, port, and refcount. First process spawns, last process kills.
+- **MCP server lifecycle**: In stdio mode, `StdioClientTransport` manages the process and there is no shared HTTP server to stop/restart. In HTTP mode, `server-process.ts` manages a shared server with a lock file at `{dataDir}/.server-lock` containing PID, port, and holders. The server remains resident by default; use `mcp_server_control` (or `/manage-mcp-server`) for controlled status/stop/restart. Controlled stop/restart does not force-kill when other holders remain.
 - **MCP client transport selection**: `mcp-client.ts` branches on `config.mcpServer.transport` — `"stdio"` uses `StdioClientTransport`, `"http"` uses `StreamableHTTPClientTransport`. Connection is lazy-initialized as a singleton.
 - **Session tracking**: `injectedSessions` Set in `context-inject.ts` and `capturedSessions` Set in `auto-capture.ts` prevent duplicate operations per session. These reset only on process restart.
 - **Config path**: `loadConfig()` searches for `opencode-mmcp-1file.jsonc` relative to CWD, not plugin install dir. The repo tracks `opencode-mmcp-1file.example.jsonc` as a template; `opencode-mmcp-1file.jsonc` is gitignored for local use.

@@ -9,7 +9,7 @@ Persistent memory for OpenCode agents via [memory-mcp-1file](https://github.com/
 
 ## What it does
 
-This OpenCode plugin gives agents persistent memory across sessions. It connects to a `memory-mcp-1file` MCP server via stdio and registers **8 unified tools** as plugin tools — consolidating memory search, storage, lifecycle management, code intelligence, and project indexing into an ergonomic interface with automatic routing. The plugin also provides automatic context injection, idle-time capture, background code-index refresh, compaction recovery, smart trigger nudges, agent guidance via system prompt, a `/init-mcp-memory` bootstrap command for deep project onboarding, and a `/setup-mcp-memory` guided configuration wizard.
+This OpenCode plugin gives agents persistent memory across sessions. It connects to a `memory-mcp-1file` MCP server via stdio and registers **9 unified tools** as plugin tools — consolidating memory search, storage, lifecycle management, code intelligence, project indexing, and shared HTTP server control into an ergonomic interface with automatic routing. The plugin also provides automatic context injection, idle-time capture, background code-index refresh, compaction recovery, smart trigger nudges, agent guidance via system prompt, a `/init-mcp-memory` bootstrap command for deep project onboarding, a `/setup-mcp-memory` guided configuration wizard, and a `/manage-mcp-server` command for controlled HTTP lifecycle actions.
 
 The plugin now distinguishes between a **physical storage shard** and a **logical retrieval scope**:
 - `mcpServer.tag` / `dataDir` decide which on-disk memory store you are using.
@@ -20,13 +20,14 @@ The plugin now distinguishes between a **physical storage shard** and a **logica
 
 ### Agent-facing (via plugin tool registration)
 
-- **Unified Memory Tools (8 tools)** — The plugin consolidates 17 underlying MCP operations into 8 ergonomic tools:
+- **Unified Memory Tools (9 tools)** — The plugin consolidates 17 underlying MCP operations into 9 ergonomic tools:
   - `memory_query` — Unified search with auto/semantic/keyword/recent modes. Routes to the best search strategy automatically.
   - `memory_save` — Smart storage with auto-categorization (DECISION, TASK, PATTERN, BUGFIX, etc.) and privacy filtering.
   - `memory_manage` — Memory lifecycle: get, update, delete, or invalidate by ID.
   - `code_search` — Unified code intelligence: intent-based search, symbol lookup, and call graph traversal (callers/callees/related).
   - `project_status` — Project indexing and projections: list indexed projects, index new ones, view code statistics, build short-lived projections, or read them back by ephemeral locator.
-- `knowledge_graph` — Map and query architectural relationships between codebase components. Use when analyzing system architecture, tracing module dependencies, or recording structural relationships. Actions: create_entity, create_relation, get_related, detect_communities.
+  - `mcp_server_control` — Manage shared HTTP MCP server lifecycle with `status`, `stop`, and `restart` actions. HTTP transport only.
+  - `knowledge_graph` — Map and query architectural relationships between codebase components. Use when analyzing system architecture, tracing module dependencies, or recording structural relationships. Actions: create_entity, create_relation, get_related, detect_communities.
   - `get_status` — Memory system status and startup progress.
   - `reload_config` — Hot-reload configuration from disk without restart.
 - **System Prompt Guidance** — Injects a Memory Protocol into the system prompt via `experimental.chat.system.transform`, teaching the agent when and how to use memory tools, prefix conventions, memory lifecycle, action triggers, and anti-patterns.
@@ -268,10 +269,10 @@ Plugin hooks (index.ts)
   ├── event:session.idle → auto-capture + code-index freshness check
   ├── event:compacted    → inject recovery context
   ├── event:message.updated → preemptive compaction + summary capture
-  └── tool              → 8 unified plugin tools
+  └── tool              → 9 unified plugin tools
         ↓
   Services layer (src/services/)
-    ├── tool-registry.ts  → register 8 unified tools (consolidating 17 MCP operations)
+    ├── tool-registry.ts  → register 9 unified tools (consolidating 17 MCP operations)
     ├── mcp-client.ts     → stdio/HTTP transport + centralized contract adapters
     ├── system-prompt.ts  → Memory Protocol prompt builder
     ├── auto-capture.ts   → LLM summarization + store
@@ -287,9 +288,11 @@ Plugin hooks (index.ts)
 
 ## How It Works
 
-The plugin spawns a [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server via stdio and registers 8 unified tools that consolidate 17 underlying MCP operations into an ergonomic interface. The agent calls these tools directly; each call is automatically routed to the appropriate MCP operation.
+The plugin spawns a [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server via stdio and registers 9 unified tools that consolidate 17 underlying MCP operations into an ergonomic interface. The agent calls these tools directly; each call is automatically routed to the appropriate MCP operation.
 
-`project_status` remains part of that same 8-tool surface. In addition to `list`, `index`, and `stats`, it now supports projection workflows with `action: "projection"` and `action: "projection_by_locator"`. Projection requests default to `relation_scope: "all"` and `sort_mode: "canonical"`, and any locator returned by the server is treated as an opaque, same-process, non-persistable handle.
+`project_status` remains part of that same 9-tool surface. In addition to `list`, `index`, and `stats`, it now supports projection workflows with `action: "projection"` and `action: "projection_by_locator"`. Projection requests default to `relation_scope: "all"` and `sort_mode: "canonical"`, and any locator returned by the server is treated as an opaque, same-process, non-persistable handle.
+
+`mcp_server_control` is also part of the same 9-tool surface and supports `action: "status" | "stop" | "restart"` for controlled shared HTTP MCP server lifecycle operations.
 
 Memory context is also handled through **synthetic parts** — invisible in the OpenCode TUI but received by the LLM as part of the conversation. The agent has full access to past project context without cluttering the user's view.
 
@@ -320,6 +323,7 @@ If auto-install doesn't work (e.g. permissions), copy the command files manually
 ```bash
 cp node_modules/opencode-mmcp-1file/commands/init-mcp-memory.md ~/.config/opencode/command/
 cp node_modules/opencode-mmcp-1file/commands/setup-mcp-memory.md ~/.config/opencode/command/
+cp node_modules/opencode-mmcp-1file/commands/manage-mcp-server.md ~/.config/opencode/command/
 ```
 
 ## Configuration Setup
@@ -345,6 +349,29 @@ The agent will walk you through:
 After answering, the agent generates `opencode-mmcp-1file.jsonc` in the project root and calls `reload_config()` to apply changes immediately — no restart needed.
 
 You can also re-run `/setup-mcp-memory` anytime to update your configuration.
+
+## MCP Server Management
+
+The plugin ships with a `/manage-mcp-server` slash command that controls the current shared HTTP MCP server through the local unified tool `mcp_server_control`.
+
+### Usage
+
+In OpenCode, run:
+
+```
+/manage-mcp-server
+```
+
+Choose one action:
+
+1. `status` — returns current transport, running state, and HTTP URL/port when available.
+2. `stop` — performs a controlled shutdown request in HTTP mode. If other live holders remain, it does not force-kill the shared server and reports that it is still running/reused.
+3. `restart` — performs controlled HTTP restart by ensuring a running/healthy shared server and reports final URL/port after health verification.
+
+Behavior by transport:
+
+- **HTTP (`"transport": "http"`)** — all three actions are supported with controlled lifecycle behavior.
+- **stdio (`"transport": "stdio"`)** — there is no shared HTTP server to stop or restart; actions return no-op status guidance.
 
 ## Requirements
 
@@ -373,7 +400,8 @@ Safety guardrail:
 
 ## Limitations
 
-- **HTTP transport sharing** — In HTTP mode (`"transport": "http"`), multiple plugin processes share one MCP server instance via a file-based holder list. The lock file (`{dataDir}/.server-lock`) records the PID of each live client; on every read, dead PIDs are pruned to maintain an accurate holder count. The server remains resident for fast subsequent connections even after the last plugin process disconnects. Termination only occurs through explicit/manual teardown or if the server is proven stale or unhealthy during startup recovery. The first live holder also acts as the code-index sync leader, so follower clients skip redundant fingerprint/debounce/cooldown work and rely on the leader to trigger background re-indexing. Code-index sync state is tracked per workspace so multiple workspaces sharing one `tag` / `dataDir` do not overwrite each other's freshness metadata or cooldown timestamps. The shared server startup is coordinated via a separate `.server-startup-lock` which ensures that even during concurrent plugin launches, only one process attempts to spawn the server while others wait for it to become healthy. This eliminates the narrow race window previously present in rename-based atomic writes.
+- **HTTP transport sharing** — In HTTP mode (`"transport": "http"`), multiple plugin processes share one MCP server instance via a file-based holder list. The lock file (`{dataDir}/.server-lock`) records the PID of each live client; on every read, dead PIDs are pruned to maintain an accurate holder count. The server remains resident by default for fast subsequent connections even after the last plugin process disconnects. `/manage-mcp-server` provides controlled status/stop/restart operations for this shared server. Controlled stop/restart does not force-kill when other live holders remain; the result reports that the server is still running/reused. Restart success is health-gated and reports the final server URL/port after verification. The first live holder also acts as the code-index sync leader, so follower clients skip redundant fingerprint/debounce/cooldown work and rely on the leader to trigger background re-indexing. Code-index sync state is tracked per workspace so multiple workspaces sharing one `tag` / `dataDir` do not overwrite each other's freshness metadata or cooldown timestamps. The shared server startup is coordinated via a separate `.server-startup-lock` which ensures that even during concurrent plugin launches, only one process attempts to spawn the server while others wait for it to become healthy. This eliminates the narrow race window previously present in rename-based atomic writes.
+- **stdio lifecycle scope** — In stdio mode (`"transport": "stdio"`), each plugin process manages its own MCP server connection through stdio transport. There is no shared HTTP server for `/manage-mcp-server` to stop or restart.
 - **Auto-capture LLM routing** — When `captureModel.apiKey` is set, auto-capture uses direct HTTP to the specified API. When empty, it falls back to OpenCode's session API (creates an ephemeral session, prompts, then deletes). The session API approach is zero-config but slightly slower due to session lifecycle overhead.
 - **In-memory session tracking** — Duplicate-prevention state (`injectedSessions`, `capturedSessions`) is held in memory and resets on process restart. The first message after a restart may re-inject memories that were already injected in the previous session.
 - **Tag-based privacy only** — Content is redacted only when explicitly wrapped in `<private>…</private>` tags. There is no automatic PII or secret detection.
