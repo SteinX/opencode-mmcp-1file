@@ -1,5 +1,5 @@
 /**
- * Unified tool registry — consolidates 17 memory tools into 8 ergonomic tools.
+ * Unified tool registry — consolidates 17 memory tools into 9 ergonomic tools.
  * Each tool automatically routes to the appropriate underlying MCP operation.
  */
 
@@ -8,10 +8,19 @@ import type { PluginConfig } from "../config.js"
 import { applyConfig } from "../config.js"
 import {
   callMemoryTool,
+  getMemoryClient,
   getProjectProjectionByLocatorInfo,
   getProjectProjectionInfo,
   isMissingProjectLocator,
+  resetMemoryClientForServerControl,
 } from "./mcp-client.js"
+import {
+  ensureServerRunning,
+  getServerRuntimeStatus,
+  getServerUrl,
+  isServerRunning,
+  stopServer,
+} from "./server-process.js"
 import { stripPrivateContent, isFullyPrivate } from "../utils/privacy.js"
 import { logger } from "../utils/logger.js"
 import { isConnectionFailed, getConnectionStatus } from "./connection-state.js"
@@ -453,11 +462,125 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
           const mcpChanged = changed.includes("mcpServer")
           let msg = `Config reloaded. Updated sections: ${changed.join(", ")}.`
           if (mcpChanged) {
-            msg += "\n⚠️ mcpServer settings changed — restart the editor for server changes to take effect."
+            if (config.mcpServer.transport === "http") {
+              msg += "\n⚠️ mcpServer settings changed — use /manage-mcp-server restart to apply server process changes for HTTP transport. Otherwise restart the editor for non-server changes."
+            } else {
+              msg += "\n⚠️ mcpServer settings changed — restart the editor for changes to take effect."
+            }
           }
           return msg
         } catch (err) {
           return `Config reload failed: ${String(err)}`
+        }
+      },
+    }),
+
+    mcp_server_control: tool({
+      description:
+        "Manage the shared HTTP MCP server lifecycle. Supports status, controlled stop, and controlled restart. " +
+        "Only applies to HTTP transport; stdio returns a no-op response.",
+      args: {
+        action: tool.schema.enum(["status", "stop", "restart"]),
+      },
+      execute: async (args) => {
+        const transport = config.mcpServer.transport
+
+        if (args.action === "status") {
+          if (transport !== "http") {
+            return JSON.stringify({
+              ok: true,
+              action: "status",
+              transport,
+              running: false,
+              message: "stdio transport does not use a shared HTTP MCP server.",
+            })
+          }
+
+          const status = await getServerRuntimeStatus(config)
+          return JSON.stringify({ ok: true, action: "status", ...status })
+        }
+
+        if (args.action === "stop") {
+          if (transport !== "http") {
+            return JSON.stringify({
+              ok: true,
+              action: "stop",
+              transport,
+              running: false,
+              message: "stdio transport does not use a shared HTTP MCP server.",
+            })
+          }
+
+          const before = await getServerRuntimeStatus(config)
+          await resetMemoryClientForServerControl()
+          await stopServer(config)
+          const after = await getServerRuntimeStatus(config)
+
+          return JSON.stringify({
+            ok: true,
+            action: "stop",
+            transport,
+            stopped: !after.running,
+            serverStillRunningDueToOtherHolders: after.running && after.holderCount > 0,
+            before,
+            after,
+            message: after.running
+              ? "Stop requested; shared HTTP MCP server is still running due to other active holders."
+              : "Stop requested; shared HTTP MCP server is not running.",
+          })
+        }
+
+        let before: Awaited<ReturnType<typeof getServerRuntimeStatus>> | undefined
+        let afterStop: Awaited<ReturnType<typeof getServerRuntimeStatus>> | undefined
+
+        if (transport !== "http") {
+          return JSON.stringify({
+            ok: true,
+            action: "restart",
+            transport,
+            running: false,
+            message: "stdio transport does not use a shared HTTP MCP server.",
+          })
+        }
+
+        try {
+          before = await getServerRuntimeStatus(config)
+          await resetMemoryClientForServerControl()
+          await stopServer(config)
+          afterStop = await getServerRuntimeStatus(config)
+
+          const url = await ensureServerRunning(config)
+          const healthy = await isServerRunning(config)
+          if (!healthy) {
+            throw new Error("Health verification failed after restart.")
+          }
+
+          await getMemoryClient(config)
+          const afterStart = await getServerRuntimeStatus(config)
+
+          return JSON.stringify({
+            ok: true,
+            action: "restart",
+            transport,
+            url,
+            running: true,
+            restarted: !afterStop.running,
+            serverReusedDueToOtherHolders: afterStop.running && afterStop.holderCount > 0,
+            before,
+            afterStop,
+            afterStart,
+            message: "Restart completed and MCP client reconnected.",
+          })
+        } catch (err) {
+          return JSON.stringify({
+            ok: false,
+            action: "restart",
+            transport,
+            url: getServerUrl(config),
+            error: String(err),
+            ...(before ? { before } : {}),
+            ...(afterStop ? { afterStop } : {}),
+          })
         }
       },
     }),
