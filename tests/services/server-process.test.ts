@@ -186,6 +186,103 @@ describe("isServerRunning", () => {
   })
 })
 
+describe("releaseServerHolder", () => {
+  it("does nothing when config is undefined", async () => {
+    vi.resetModules()
+    const { releaseServerHolder } = await import("../../src/services/server-process.js")
+    await expect(releaseServerHolder()).resolves.toBeUndefined()
+  })
+
+  it("does nothing when transport is stdio", async () => {
+    vi.resetModules()
+    const { releaseServerHolder } = await import("../../src/services/server-process.js")
+    const config = makeConfig({ transport: "stdio" })
+    await expect(releaseServerHolder(config)).resolves.toBeUndefined()
+  })
+
+  it("removes own PID from holders and keeps the lock when no other holders remain", async () => {
+    vi.resetModules()
+    vi.doMock("../../src/config.js", async (importOriginal) => {
+      const original = await importOriginal<typeof import("../../src/config.js")>()
+      return { ...original, resolveDataDir: () => testDir }
+    })
+    const { releaseServerHolder } = await import("../../src/services/server-process.js")
+    const config = makeConfig()
+
+    const lockPath = join(testDir, ".server-lock")
+    writeNewLock(lockPath, 999999, [process.pid])
+
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((_pid, sig) => {
+      if (sig == null || sig === 0 || sig === "0") return true
+      return true
+    })
+
+    await releaseServerHolder(config)
+
+    const updated = JSON.parse(readFileSync(lockPath, "utf-8"))
+    expect(updated.holders).toEqual([])
+    expect(existsSync(lockPath)).toBe(true)
+    expect(killSpy).not.toHaveBeenCalledWith(999999, "SIGTERM")
+    expect(killSpy).not.toHaveBeenCalledWith(999999, "SIGKILL")
+  })
+
+  it("prunes dead holder PIDs without terminating the lock pid or deleting the lock when holders become empty", async () => {
+    vi.resetModules()
+    vi.doMock("../../src/config.js", async (importOriginal) => {
+      const original = await importOriginal<typeof import("../../src/config.js")>()
+      return { ...original, resolveDataDir: () => testDir }
+    })
+    const { releaseServerHolder } = await import("../../src/services/server-process.js")
+    const config = makeConfig()
+
+    const lockPath = join(testDir, ".server-lock")
+    const deadPid = 999999999
+    writeNewLock(lockPath, 12345, [process.pid, deadPid])
+
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, sig) => {
+      if (sig == null || sig === 0 || sig === "0") {
+        if (pid === deadPid) throw Object.assign(new Error("ESRCH"), { code: "ESRCH" })
+        return true
+      }
+      return true
+    })
+
+    await releaseServerHolder(config)
+
+    const updated = JSON.parse(readFileSync(lockPath, "utf-8"))
+    expect(updated.holders).toEqual([])
+    expect(existsSync(lockPath)).toBe(true)
+    expect(killSpy).not.toHaveBeenCalledWith(12345, "SIGTERM")
+    expect(killSpy).not.toHaveBeenCalledWith(12345, "SIGKILL")
+    expect(killSpy).toHaveBeenCalledWith(deadPid, 0)
+  })
+
+  it("preserves unknown holders when migrating legacy refCount locks", async () => {
+    vi.resetModules()
+    vi.doMock("../../src/config.js", async (importOriginal) => {
+      const original = await importOriginal<typeof import("../../src/config.js")>()
+      return { ...original, resolveDataDir: () => testDir }
+    })
+    const { releaseServerHolder } = await import("../../src/services/server-process.js")
+    const config = makeConfig()
+
+    const lockPath = join(testDir, ".server-lock")
+    writeLegacyLock(lockPath, 12345, 2)
+
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((_pid, _sig) => true)
+
+    await releaseServerHolder(config)
+
+    const updated = JSON.parse(readFileSync(lockPath, "utf-8"))
+    expect(updated.holders).toEqual([])
+    expect(updated.unknownHolders).toBe(1)
+    expect(updated.refCount).toBeUndefined()
+    expect(existsSync(lockPath)).toBe(true)
+    expect(killSpy).not.toHaveBeenCalledWith(12345, "SIGTERM")
+    expect(killSpy).not.toHaveBeenCalledWith(12345, "SIGKILL")
+  })
+})
+
 describe("stopServer", () => {
   it("does nothing when config is undefined", async () => {
     vi.resetModules()

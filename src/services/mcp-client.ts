@@ -5,7 +5,7 @@ import { PluginConfig, resolveDataDir } from "../config.js"
 import type { MemoryEntry } from "../utils/format.js"
 import { logger } from "../utils/logger.js"
 import { isConnectionFailed, markConnectionFailed, markConnectionHealthy } from "./connection-state.js"
-import { ensureServerRunning, isServerRunning, stopServer } from "./server-process.js"
+import { ensureServerRunning, isServerRunning, releaseServerHolder } from "./server-process.js"
 
 export type RetrievalStatus = "ok" | "empty" | "failed" | "unavailable"
 
@@ -1018,6 +1018,10 @@ export async function disconnectMemoryClient(config?: PluginConfig): Promise<voi
   lastHealthCheckAt = 0
   healthCheckPromise = null
   if (config?.mcpServer.transport === "http") {
-    await stopServer(config)
+    try {
+      await releaseServerHolder(config)
+    } catch (err) {
+      logger.debug("failed to release HTTP MCP server holder during disconnect", { error: String(err) })
+    }
   }
 }

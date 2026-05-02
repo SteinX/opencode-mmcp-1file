@@ -770,6 +770,7 @@ describe("commandPath override", () => {
       getServerUrl: vi.fn(() => "http://127.0.0.1:23817"),
       isServerRunning: vi.fn(() => Promise.resolve(false)),
       ensureServerRunning: vi.fn(() => Promise.resolve("http://127.0.0.1:23817")),
+      releaseServerHolder: vi.fn(() => Promise.resolve()),
       stopServer: vi.fn(() => Promise.resolve()),
     }))
     vi.doMock("../../src/utils/logger.js", () => ({
@@ -804,10 +805,11 @@ describe("HTTP transport", () => {
     expect(client).toBeDefined()
   })
 
-  it("calls stopServer on disconnect when transport is http", async () => {
+  it("does not stop the HTTP server on disconnect", async () => {
     vi.resetModules()
     const mockClient = createMockClient()
     const mockStopServer = vi.fn().mockResolvedValue(undefined)
+    const mockReleaseServerHolder = vi.fn().mockResolvedValue(undefined)
 
     mockConnectionState = {
       isConnectionFailed: vi.fn().mockReturnValue(false),
@@ -831,6 +833,7 @@ describe("HTTP transport", () => {
       getServerUrl: vi.fn(() => "http://127.0.0.1:23817"),
       isServerRunning: vi.fn(() => Promise.resolve(false)),
       ensureServerRunning: vi.fn(() => Promise.resolve("http://127.0.0.1:23817")),
+      releaseServerHolder: mockReleaseServerHolder,
       stopServer: mockStopServer,
     }))
     vi.doMock("../../src/utils/logger.js", () => ({
@@ -849,13 +852,15 @@ describe("HTTP transport", () => {
     await mod.disconnectMemoryClient(config)
 
     expect(mockClient.close).toHaveBeenCalled()
-    expect(mockStopServer).toHaveBeenCalledWith(config)
+    expect(mockReleaseServerHolder).toHaveBeenCalledWith(config)
+    expect(mockStopServer).not.toHaveBeenCalled()
   })
 
   it("does not call stopServer on disconnect when transport is stdio", async () => {
     vi.resetModules()
     const mockClient = createMockClient()
     const mockStopServer = vi.fn().mockResolvedValue(undefined)
+    const mockReleaseServerHolder = vi.fn().mockResolvedValue(undefined)
 
     mockConnectionState = {
       isConnectionFailed: vi.fn().mockReturnValue(false),
@@ -879,6 +884,7 @@ describe("HTTP transport", () => {
       getServerUrl: vi.fn(() => "http://127.0.0.1:23817"),
       isServerRunning: vi.fn(() => Promise.resolve(false)),
       ensureServerRunning: vi.fn(() => Promise.resolve("http://127.0.0.1:23817")),
+      releaseServerHolder: mockReleaseServerHolder,
       stopServer: mockStopServer,
     }))
     vi.doMock("../../src/utils/logger.js", () => ({
@@ -897,6 +903,7 @@ describe("HTTP transport", () => {
     await mod.disconnectMemoryClient(config)
 
     expect(mockClient.close).toHaveBeenCalled()
+    expect(mockReleaseServerHolder).not.toHaveBeenCalled()
     expect(mockStopServer).not.toHaveBeenCalled()
   })
 

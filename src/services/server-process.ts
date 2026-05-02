@@ -185,6 +185,17 @@ function pruneDeadHolders(holders: number[]): number[] {
   return holders.filter((pid) => pid > 0 && isProcessAlive(pid))
 }
 
+function applyHolderRelease(lock: LockFileData, myPid: number): LockFileData {
+  const knownHolders = pruneDeadHolders(lock.holders)
+  const hadKnownOwnership = knownHolders.includes(myPid)
+  const liveHolders = knownHolders.filter((pid) => pid !== myPid)
+  const unknownHolders = !hadKnownOwnership && lock.unknownHolders > 0
+    ? lock.unknownHolders - 1
+    : lock.unknownHolders
+
+  return { ...lock, holders: liveHolders, unknownHolders }
+}
+
 export async function shouldCoordinateCodeIndexSync(config: PluginConfig): Promise<boolean> {
   if (config.mcpServer.transport !== "http") return true
 
@@ -445,13 +456,8 @@ export async function stopServer(config?: PluginConfig): Promise<void> {
   const lock = readLockFile(lockPath)
   if (!lock) return
 
-  const myPid = process.pid
-  const knownHolders = pruneDeadHolders(lock.holders)
-  const hadKnownOwnership = knownHolders.includes(myPid)
-  const liveHolders = knownHolders.filter((pid) => pid !== myPid)
-  const unknownHolders = !hadKnownOwnership && lock.unknownHolders > 0
-    ? lock.unknownHolders - 1
-    : lock.unknownHolders
+  const updatedLock = applyHolderRelease(lock, process.pid)
+  const { holders: liveHolders, unknownHolders } = updatedLock
 
   if (liveHolders.length === 0 && unknownHolders === 0) {
     logger.info(`Last client disconnecting — shutting down MCP server (pid=${lock.pid})`)
@@ -468,7 +474,21 @@ export async function stopServer(config?: PluginConfig): Promise<void> {
     }
     try { unlinkSync(lockPath) } catch {}
   } else {
-    writeLockFileAtomic(lockPath, { ...lock, holders: liveHolders, unknownHolders })
+    writeLockFileAtomic(lockPath, updatedLock)
     logger.info(`Removed from holders; ${liveHolders.length} known holder(s) and ${unknownHolders} unknown holder(s) remain`)
   }
+}
+
+export async function releaseServerHolder(config?: PluginConfig): Promise<void> {
+  if (!config || config.mcpServer.transport !== "http") return
+
+  const lockPath = getLockFilePath(config)
+  if (!lockPath) return
+
+  const lock = readLockFile(lockPath)
+  if (!lock) return
+
+  const updatedLock = applyHolderRelease(lock, process.pid)
+  writeLockFileAtomic(lockPath, updatedLock)
+  logger.info(`Released HTTP holder; ${updatedLock.holders.length} known holder(s) and ${updatedLock.unknownHolders} unknown holder(s) remain`)
 }
