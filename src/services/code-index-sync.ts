@@ -48,6 +48,7 @@ const TRACKED_EXTENSIONS = new Set([
   ".cpp",
   ".cs",
   ".css",
+  ".dart",
   ".go",
   ".h",
   ".hpp",
@@ -59,31 +60,59 @@ const TRACKED_EXTENSIONS = new Set([
   ".jsx",
   ".kt",
   ".kts",
+  ".m",
+  ".mm",
   ".mjs",
   ".mts",
   ".php",
+  ".plist",
+  ".properties",
   ".py",
   ".rb",
   ".rs",
   ".scss",
   ".sql",
+  ".storyboard",
   ".swift",
   ".toml",
   ".ts",
   ".tsx",
   ".vue",
+  ".xcconfig",
+  ".xib",
+  ".xml",
   ".yaml",
   ".yml",
+  ".pbxproj",
 ])
 
 const TRACKED_FILENAMES = new Set([
   "AGENTS.md",
+  "AndroidManifest.xml",
   "Cargo.lock",
   "Cargo.toml",
+  "Cartfile",
+  "Cartfile.resolved",
+  "Fastfile",
+  "Gemfile",
+  "Gemfile.lock",
+  "Package.resolved",
+  "Package.swift",
+  "Podfile",
+  "Podfile.lock",
   "README.md",
+  "analysis_options.yaml",
+  "build.gradle",
+  "build.gradle.kts",
+  "gradle.properties",
+  "gradlew",
   "package-lock.json",
   "package.json",
   "pnpm-lock.yaml",
+  "pubspec.lock",
+  "pubspec.yaml",
+  "settings.gradle",
+  "settings.gradle.kts",
   "tsconfig.json",
   "vite.config.ts",
   "vitest.config.ts",
@@ -91,10 +120,17 @@ const TRACKED_FILENAMES = new Set([
 ])
 
 const IGNORED_DIRECTORIES = new Set([
+  ".build",
+  ".dart_tool",
   ".git",
+  ".gradle",
+  ".idea",
   ".next",
   ".turbo",
   ".vscode",
+  "Carthage",
+  "DerivedData",
+  "Pods",
   "build",
   "coverage",
   "dist",
@@ -194,7 +230,13 @@ function writeWorkspaceSyncMetadata(config: PluginConfig, workspaceDir: string, 
   writeSyncState(config, state)
 }
 
+function hasIgnoredDirectorySegment(path: string): boolean {
+  return path.split("/").some((segment) => IGNORED_DIRECTORIES.has(segment))
+}
+
 function shouldTrackPathForCodeIndex(path: string): boolean {
+  if (hasIgnoredDirectorySegment(path)) return false
+
   const baseName = path.split("/").pop() || path
   if (TRACKED_FILENAMES.has(baseName)) return true
 
@@ -211,7 +253,7 @@ function walkTrackedFiles(rootDir: string, currentDir: string, output: string[])
     const relPath = relative(rootDir, fullPath)
 
     if (entry.isDirectory()) {
-      if (IGNORED_DIRECTORIES.has(entry.name)) continue
+      if (hasIgnoredDirectorySegment(fullPath)) continue
       walkTrackedFiles(rootDir, fullPath, output)
       continue
     }
