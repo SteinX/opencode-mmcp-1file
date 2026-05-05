@@ -32,13 +32,14 @@ const {
 
 function makeConfig(dataDir: string): PluginConfig {
   return {
-  chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 30, maxInjectedMemories: 6, injectOn: "first", shortQueryMinLength: 3, minScore: 0.35 },
+    chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 30, maxInjectedMemories: 6, injectOn: "first", shortQueryMinLength: 3, minScore: 0.35 },
     autoCapture: { enabled: false, debounceMs: 10000, language: "en" },
     compaction: { enabled: true, memoryLimit: 10 },
     keywordDetection: { enabled: true, extraPatterns: [] },
     preemptiveCompaction: { enabled: true, thresholdPercent: 80, modelContextLimit: 200000, autoContinue: true },
     privacy: { enabled: true },
     compactionSummaryCapture: { enabled: true },
+    preferenceLearning: { enabled: false, learnOnCorrections: true, learnOnNegations: true, learnOnMessageUpdated: true, injectOn: "first", scope: "project", minConfidence: 0.7, candidateConfidence: 0.4, maxPreferences: 5, maxCandidates: 3, debounceMs: 10000, maxInputChars: 4000, maxStoredPreferences: 50 },
     codeIndexSync: { enabled: true, debounceMs: 50, minReindexIntervalMs: 300000 },
     captureModel: { provider: "", model: "", apiUrl: "", apiKey: "" },
     memoryScope: { namespace: "", shareAcrossAgents: true, includeAgentMetadata: true, includeRunMetadata: false, userId: "", defaultMetadata: {} },
@@ -56,6 +57,14 @@ function makeConfig(dataDir: string): PluginConfig {
     },
     systemPrompt: { enabled: true },
   }
+}
+
+function writeTrackedFile(baseDir: string, relativePath: string, contents: string): string {
+  const filePath = join(baseDir, relativePath)
+  mkdirSync(join(filePath, ".."), { recursive: true })
+  writeFileSync(filePath, contents)
+  utimesSync(filePath, new Date(), new Date(Date.now() + 1000))
+  return filePath
 }
 
 describe("code-index-sync", () => {
@@ -90,8 +99,102 @@ describe("code-index-sync", () => {
 
   it("tracks relevant source and config paths", () => {
     const helpers = __testOnly()
-    expect(helpers.shouldTrackPathForCodeIndex("src/index.ts")).toBe(true)
-    expect(helpers.shouldTrackPathForCodeIndex("package.json")).toBe(true)
+
+    for (const trackedPath of [
+      "src/index.ts",
+      "package.json",
+      "src/main.swift",
+      "src/main.kt",
+      "src/main.kts",
+      "src/main.java",
+    ]) {
+      expect(helpers.shouldTrackPathForCodeIndex(trackedPath)).toBe(true)
+    }
+
+    expect(helpers.shouldTrackPathForCodeIndex("assets/logo.png")).toBe(false)
+  })
+
+  it("tracks iOS and Apple workspace files", () => {
+    const helpers = __testOnly()
+
+    for (const trackedPath of [
+      "App/AppDelegate.m",
+      "App/Bridge.mm",
+      "App/Info.plist",
+      "App/Base.lproj/Main.storyboard",
+      "App/Base.lproj/LaunchScreen.xib",
+      "Config/Debug.xcconfig",
+      "ios/Runner.xcodeproj/project.pbxproj",
+      "Package.swift",
+      "Package.resolved",
+      "Podfile",
+      "Podfile.lock",
+      "Cartfile",
+      "Cartfile.resolved",
+      "Gemfile",
+      "Gemfile.lock",
+      "fastlane/Fastfile",
+    ]) {
+      expect(helpers.shouldTrackPathForCodeIndex(trackedPath)).toBe(true)
+    }
+  })
+
+  it("tracks Android workspace files", () => {
+    const helpers = __testOnly()
+
+    for (const trackedPath of [
+      "app/src/main/AndroidManifest.xml",
+      "app/src/main/res/layout/activity_main.xml",
+      "build.gradle",
+      "settings.gradle",
+      "gradle.properties",
+      "app/build.gradle.kts",
+      "settings.gradle.kts",
+      "gradlew",
+    ]) {
+      expect(helpers.shouldTrackPathForCodeIndex(trackedPath)).toBe(true)
+    }
+  })
+
+  it("tracks Flutter workspace files", () => {
+    const helpers = __testOnly()
+
+    for (const trackedPath of [
+      "lib/main.dart",
+      "pubspec.yaml",
+      "pubspec.lock",
+      "analysis_options.yaml",
+    ]) {
+      expect(helpers.shouldTrackPathForCodeIndex(trackedPath)).toBe(true)
+    }
+  })
+
+  it("keeps existing tracked behavior and ignores generated mobile directories", () => {
+    const helpers = __testOnly()
+
+    for (const trackedPath of [
+      "src/index.ts",
+      "package.json",
+      "src/main.swift",
+      "src/main.kt",
+      "src/main.kts",
+      "src/main.java",
+    ]) {
+      expect(helpers.shouldTrackPathForCodeIndex(trackedPath)).toBe(true)
+    }
+
+    for (const ignoredPath of [
+      ".gradle/caches/modules.gradle",
+      ".dart_tool/package_config.json",
+      ".idea/workspace.xml",
+      "DerivedData/App/Build/File.swift",
+      "Pods/SomePod/Source/File.m",
+      "Carthage/Checkouts/Lib/File.swift",
+      ".build/checkouts/Lib/File.swift",
+    ]) {
+      expect(helpers.shouldTrackPathForCodeIndex(ignoredPath)).toBe(false)
+    }
+
     expect(helpers.shouldTrackPathForCodeIndex("assets/logo.png")).toBe(false)
   })
 
@@ -99,6 +202,32 @@ describe("code-index-sync", () => {
     const fingerprint = computeWorkspaceFingerprint(workspaceDir)
     expect(typeof fingerprint).toBe("string")
     expect(fingerprint).toHaveLength(40)
+  })
+
+  it("changes fingerprint when a tracked mobile file is added", () => {
+    const baseline = computeWorkspaceFingerprint(workspaceDir)
+    expect(baseline).toBeTruthy()
+
+    writeTrackedFile(workspaceDir, "ios/AppDelegate.swift", "import UIKit\n")
+
+    const updated = computeWorkspaceFingerprint(workspaceDir)
+    expect(updated).not.toBe(baseline)
+  })
+
+  it("does not change fingerprint for files under ignored mobile directories", () => {
+    const baseline = computeWorkspaceFingerprint(workspaceDir)
+    expect(baseline).toBeTruthy()
+
+    writeTrackedFile(workspaceDir, ".gradle/caches/modules.gradle", "apply plugin: 'com.android.application'\n")
+    writeTrackedFile(workspaceDir, ".dart_tool/package_config.json", "{}\n")
+    writeTrackedFile(workspaceDir, ".idea/workspace.xml", "<project />\n")
+    writeTrackedFile(workspaceDir, "DerivedData/App/Build/File.swift", "import Foundation\n")
+    writeTrackedFile(workspaceDir, "Pods/SomePod/Source/File.swift", "import Foundation\n")
+    writeTrackedFile(workspaceDir, "Carthage/Checkouts/Lib/File.swift", "import Foundation\n")
+    writeTrackedFile(workspaceDir, ".build/checkouts/Lib/File.swift", "import Foundation\n")
+
+    const updated = computeWorkspaceFingerprint(workspaceDir)
+    expect(updated).toBe(baseline)
   })
 
   it("reindexes after debounce when workspace fingerprint is new", async () => {
