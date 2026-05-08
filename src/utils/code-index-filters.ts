@@ -1,0 +1,99 @@
+export type CodeIndexFilterArgs = {
+  include_patterns?: string[]
+  exclude_patterns?: string[]
+}
+
+export type CodeIndexFilterConfig = {
+  includePatterns?: string[]
+  excludePatterns?: string[]
+}
+
+function validatePatternValue(pattern: string, fieldName: string, index: number): string | null {
+  const trimmed = pattern.trim()
+
+  if (trimmed.length === 0) {
+    return `Error: ${fieldName}[${index}] must not be empty`
+  }
+  if (trimmed.includes("\\")) {
+    return `Error: invalid glob pattern: ${pattern} (use '/' path separators)`
+  }
+  if (trimmed.startsWith("/")) {
+    return `Error: invalid glob pattern: ${pattern} (patterns must be project-relative, do not start with '/')`
+  }
+  if (/^[A-Za-z]:/.test(trimmed)) {
+    return `Error: invalid glob pattern: ${pattern} (patterns must be project-relative)`
+  }
+  if (trimmed.split("/").includes("..")) {
+    return `Error: invalid glob pattern: ${pattern} (parent traversal is not allowed)`
+  }
+
+  return null
+}
+
+export function validateCodeIndexPatterns(patterns: unknown, fieldName: string): string | null {
+  if (!Array.isArray(patterns)) {
+    return `Error: ${fieldName} must be an array of strings`
+  }
+
+  for (let i = 0; i < patterns.length; i += 1) {
+    const pattern = patterns[i]
+    if (typeof pattern !== "string") {
+      return `Error: ${fieldName}[${i}] must be a string`
+    }
+
+    const error = validatePatternValue(pattern, fieldName, i)
+    if (error) {
+      return error
+    }
+  }
+
+  return null
+}
+
+function resolvePatterns(
+  configValue: string[] | undefined,
+  overrideValue: string[] | undefined,
+  fieldName: string,
+  argName: keyof CodeIndexFilterArgs,
+): { value?: string[]; error?: string } {
+  const value = overrideValue !== undefined ? overrideValue : configValue
+  if (value === undefined) {
+    return {}
+  }
+
+  const error = validateCodeIndexPatterns(value, fieldName)
+  if (error) {
+    return { error }
+  }
+
+  return { value: value as string[] }
+}
+
+export function buildCodeIndexFilterArgs(
+  config: CodeIndexFilterConfig,
+  overrides?: CodeIndexFilterArgs,
+): CodeIndexFilterArgs | string {
+  const include = resolvePatterns(config.includePatterns, overrides?.include_patterns, "includePatterns", "include_patterns")
+  if (include.error) return include.error
+
+  const exclude = resolvePatterns(config.excludePatterns, overrides?.exclude_patterns, "excludePatterns", "exclude_patterns")
+  if (exclude.error) return exclude.error
+
+  const result: CodeIndexFilterArgs = {}
+  if (include.value !== undefined) result.include_patterns = include.value
+  if (exclude.value !== undefined) result.exclude_patterns = exclude.value
+  return result
+}
+
+export function codeIndexFilterSignature(config: CodeIndexFilterConfig): string {
+  const signature: Record<string, string[]> = {}
+
+  if (config.includePatterns !== undefined) {
+    signature.includePatterns = config.includePatterns
+  }
+  if (config.excludePatterns !== undefined) {
+    signature.excludePatterns = config.excludePatterns
+  }
+
+  return JSON.stringify(signature)
+}

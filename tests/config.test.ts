@@ -131,6 +131,8 @@ describe("loadConfig", () => {
     expect(config.mcpServer.tag).toBe("")
     expect(config.privacy.enabled).toBe(true)
     expect(config.codeIndexSync.enabled).toBe(true)
+    expect(config.codeIndexSync.includePatterns).toBeUndefined()
+    expect(config.codeIndexSync.excludePatterns).toBeUndefined()
     expect(config.codeIndexSync.resume).toEqual({
       enabled: true,
       pollIntervalMs: 5000,
@@ -175,6 +177,24 @@ describe("loadConfig", () => {
     expect(config.chatMessage.maxMemories).toBe(10)
     expect(config.chatMessage.enabled).toBe(true)
     expect(config.privacy.enabled).toBe(false)
+  })
+
+  it("merges codeIndexSync includePatterns/excludePatterns from JSONC", () => {
+    vi.mocked(existsSync).mockImplementation((p) =>
+      String(p).endsWith("opencode-mmcp-1file.jsonc"),
+    )
+    vi.mocked(readFileSync).mockReturnValue(
+      `{
+        "codeIndexSync": {
+          "includePatterns": [],
+          "excludePatterns": ["**/generated/**"]
+        }
+      }`,
+    )
+
+    const config = loadConfig("/my/project")
+    expect(config.codeIndexSync.includePatterns).toEqual([])
+    expect(config.codeIndexSync.excludePatterns).toEqual(["**/generated/**"])
   })
 
   it("merges nested mcpServer timing overrides", () => {

@@ -25,6 +25,7 @@ import { stripPrivateContent, isFullyPrivate } from "../utils/privacy.js"
 import { logger } from "../utils/logger.js"
 import { isConnectionFailed, getConnectionStatus } from "./connection-state.js"
 import type { MemoryOperationContext } from "./mcp-client.js"
+import { buildCodeIndexFilterArgs } from "../utils/code-index-filters.js"
 
 const UNAVAILABLE_MESSAGE =
   "Memory server temporarily unavailable — auto-reconnecting. " +
@@ -320,7 +321,7 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
     project_status: tool({
       description:
         "Check project indexing status and manage indexing lifecycle. Start with 'list' to see indexed projects, use 'status' to inspect durable state, use 'index' or 'resume' to start or continue indexing, then use 'stats' to confirm the index is ready. " +
-        "Use 'cancel' to stop an active index, 'cleanup' to clear abandoned jobs, and 'projection' / 'projection_by_locator' for short-lived projection exports.",
+        "Use 'cancel' to stop an active index, 'cleanup' to clear abandoned jobs, and 'projection' / 'projection_by_locator' for short-lived projection exports. For 'index', optional include_patterns/exclude_patterns override filter scope (omit = use plugin/server defaults; [] = disable that side; not allowed on resume).",
       args: {
         action: tool.schema.enum(["list", "status", "index", "resume", "cancel", "cleanup", "stats", "projection", "projection_by_locator"]),
         path: tool.schema.string().optional(),
@@ -331,6 +332,8 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
         resume_token: tool.schema.string().optional(),
         allow_full_restart_fallback: tool.schema.boolean().optional(),
         confirm_failed_restart: tool.schema.boolean().optional(),
+        include_patterns: tool.schema.array(tool.schema.string()).optional(),
+        exclude_patterns: tool.schema.array(tool.schema.string()).optional(),
         relation_scope: tool.schema.enum(["all", "calls", "imports", "type_links", "none"]).optional(),
         sort_mode: tool.schema.string().optional(),
         locator: tool.schema.string().optional(),
@@ -414,6 +417,9 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
             if (!args.path) return "Error: path is required for resume action"
             if (!args.job_id) return "Error: job_id is required for resume action"
             if (!args.resume_token) return "Error: resume_token is required for resume action"
+            if (args.include_patterns !== undefined || args.exclude_patterns !== undefined) {
+              return "Error: include_patterns/exclude_patterns cannot be used when resuming an index job"
+            }
             return proxy("index_project", {
               path: args.path,
               resume: true,
@@ -435,6 +441,19 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
             }
             if (args.confirm_failed_restart !== undefined) {
               callArgs.confirm_failed_restart = args.confirm_failed_restart
+            }
+            const isResumeContinuation = args.resume === true || args.job_id !== undefined || args.resume_token !== undefined
+            if (isResumeContinuation) {
+              if (args.include_patterns !== undefined || args.exclude_patterns !== undefined) {
+                return "Error: include_patterns/exclude_patterns cannot be used when resuming an index job"
+              }
+            } else {
+              const filterResult = buildCodeIndexFilterArgs(config.codeIndexSync, {
+                include_patterns: args.include_patterns,
+                exclude_patterns: args.exclude_patterns,
+              })
+              if (typeof filterResult === "string") return filterResult
+              Object.assign(callArgs, filterResult)
             }
             return proxy("index_project", callArgs)
           }

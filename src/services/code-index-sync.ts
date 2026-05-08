@@ -18,6 +18,7 @@ import { callMemoryTool, getProjectDurableStatus } from "./mcp-client.js"
 import type { ProjectDurableStatusInfo } from "./mcp-client.js"
 import { shouldCoordinateCodeIndexSync } from "./server-process.js"
 import { logger } from "../utils/logger.js"
+import { buildCodeIndexFilterArgs, codeIndexFilterSignature } from "../utils/code-index-filters.js"
 
 type SyncReason = "startup" | "session.idle"
 
@@ -35,6 +36,7 @@ interface V3SyncMetadata extends SyncMetadata {
   lastObservedServerState?: string
   lastObservedReasonCode?: string
   lastObservedAt?: string
+  filterSignature?: string
 }
 
 interface SyncStateFile {
@@ -472,7 +474,8 @@ async function runReindex(config: PluginConfig, workspaceDir: string, reason: Sy
     if (!fingerprint) return
 
     const metadata = readWorkspaceSyncMetadata(config, workspaceDir)
-    if (metadata?.fingerprint === fingerprint) return
+    const currentFilterSig = codeIndexFilterSignature(config.codeIndexSync)
+    if (metadata?.fingerprint === fingerprint && (metadata?.filterSignature ?? "{}") === currentFilterSig) return
 
     // Fetch fresh server status to decide action
     const status = await getProjectDurableStatus(config, workspaceDir)
@@ -490,15 +493,23 @@ async function runReindex(config: PluginConfig, workspaceDir: string, reason: Sy
 
     logger.info("Code index sync decision", { workspaceDir, reason, decision, state: status?.state, reasonCode: status?.reason_code })
 
+    const filterArgsResult = buildCodeIndexFilterArgs(config.codeIndexSync)
+    if (typeof filterArgsResult === "string") {
+      logger.warn("Code index sync skipped due to invalid filter config", { workspaceDir, reason, error: filterArgsResult })
+      return
+    }
+    const filterArgs = filterArgsResult
+
     if (decision === "legacy") {
       // Legacy: force rebuild, write freshness only after success
-      await callMemoryTool(config, "index_project", { path: workspaceDir, force: true })
+      await callMemoryTool(config, "index_project", { path: workspaceDir, force: true, ...filterArgs })
       writeWorkspaceSyncMetadata(config, workspaceDir, {
         workspaceDir,
         fingerprint,
         lastReindexAt: Date.now(),
         ...baseObserved,
         lastObservedReasonCode: status?.reason_code ?? "unsupported",
+        filterSignature: currentFilterSig,
       })
       return
     }
@@ -536,6 +547,8 @@ async function runReindex(config: PluginConfig, workspaceDir: string, reason: Sy
       })
       const finalStatus = await pollUntilComplete(config, workspaceDir)
       if (finalStatus?.state === "completed") {
+        // Resume used the old filter snapshot — preserve the old filterSignature so the
+        // next idle check detects any pending filter-config change and triggers a fresh index.
         writeWorkspaceSyncMetadata(config, workspaceDir, {
           workspaceDir,
           fingerprint,
@@ -544,6 +557,7 @@ async function runReindex(config: PluginConfig, workspaceDir: string, reason: Sy
           lastObservedServerState: finalStatus.state,
           serverActiveGeneration: finalStatus.active_generation,
           serverTargetGeneration: finalStatus.target_generation,
+          filterSignature: metadata?.filterSignature ?? "{}",
         })
       } else {
         // Not completed — record observed state without marking fingerprint done
@@ -560,7 +574,7 @@ async function runReindex(config: PluginConfig, workspaceDir: string, reason: Sy
 
     if (decision === "restart") {
       // Full restart with confirm_failed_restart flag
-      await callMemoryTool(config, "index_project", { path: workspaceDir, force: true, confirm_failed_restart: true })
+      await callMemoryTool(config, "index_project", { path: workspaceDir, force: true, confirm_failed_restart: true, ...filterArgs })
       const finalStatus = await pollUntilComplete(config, workspaceDir)
       if (finalStatus?.state === "completed") {
         writeWorkspaceSyncMetadata(config, workspaceDir, {
@@ -569,6 +583,7 @@ async function runReindex(config: PluginConfig, workspaceDir: string, reason: Sy
           lastReindexAt: Date.now(),
           ...baseObserved,
           lastObservedServerState: finalStatus.state,
+          filterSignature: currentFilterSig,
         })
       } else {
         writeWorkspaceSyncMetadata(config, workspaceDir, {
@@ -585,7 +600,7 @@ async function runReindex(config: PluginConfig, workspaceDir: string, reason: Sy
     if (decision === "start") {
       // Normal index without force
       logger.info("Refreshing code intelligence index", { workspaceDir, reason })
-      await callMemoryTool(config, "index_project", { path: workspaceDir })
+      await callMemoryTool(config, "index_project", { path: workspaceDir, ...filterArgs })
       const finalStatus = await pollUntilComplete(config, workspaceDir)
       if (finalStatus?.state === "completed") {
         writeWorkspaceSyncMetadata(config, workspaceDir, {
@@ -596,6 +611,7 @@ async function runReindex(config: PluginConfig, workspaceDir: string, reason: Sy
           lastObservedServerState: finalStatus.state,
           serverActiveGeneration: finalStatus.active_generation,
           serverTargetGeneration: finalStatus.target_generation,
+          filterSignature: currentFilterSig,
         })
       } else {
         writeWorkspaceSyncMetadata(config, workspaceDir, {
@@ -616,6 +632,7 @@ async function runReindex(config: PluginConfig, workspaceDir: string, reason: Sy
         fingerprint,
         lastReindexAt: Date.now(),
         ...baseObserved,
+        filterSignature: currentFilterSig,
       })
       return
     }
@@ -651,12 +668,15 @@ export async function ensureCodeIndexFresh(
   if (!fingerprint) return
 
   const metadata = readWorkspaceSyncMetadata(config, workspaceDir)
-  if (metadata?.fingerprint === fingerprint) return
+  const currentFilterSig = codeIndexFilterSignature(config.codeIndexSync)
+  const savedFilterSig = metadata?.filterSignature ?? "{}"
+  if (metadata?.fingerprint === fingerprint && savedFilterSig === currentFilterSig) return
 
   const timeSinceLastReindex = metadata
     ? Date.now() - metadata.lastReindexAt
     : Number.POSITIVE_INFINITY
-  if (timeSinceLastReindex < config.codeIndexSync.minReindexIntervalMs) {
+  const filterChanged = savedFilterSig !== currentFilterSig
+  if (!filterChanged && timeSinceLastReindex < config.codeIndexSync.minReindexIntervalMs) {
     logger.debug("Skipping code index sync due to cooldown", {
       workspaceDir,
       reason,
