@@ -6,6 +6,7 @@ import type { PluginConfig } from "../../src/config.js"
 
 vi.mock("../../src/services/mcp-client.js", () => ({
   callMemoryTool: vi.fn().mockResolvedValue('{"status":"ok"}'),
+  getProjectDurableStatus: vi.fn().mockResolvedValue(null),
 }))
 
 vi.mock("../../src/services/server-process.js", () => ({
@@ -21,13 +22,14 @@ vi.mock("../../src/utils/logger.js", () => ({
   },
 }))
 
-const { callMemoryTool } = await import("../../src/services/mcp-client.js")
+const { callMemoryTool, getProjectDurableStatus } = await import("../../src/services/mcp-client.js")
 const { shouldCoordinateCodeIndexSync } = await import("../../src/services/server-process.js")
 const {
   __testOnly,
   computeWorkspaceFingerprint,
   ensureCodeIndexFresh,
   resetCodeIndexSyncState,
+  decideIndexSyncAction,
 } = await import("../../src/services/code-index-sync.js")
 
 function makeConfig(dataDir: string): PluginConfig {
@@ -250,7 +252,7 @@ describe("code-index-sync", () => {
       workspaces: Record<string, { fingerprint: string; lastReindexAt: number }>
     }
     const workspaceKey = __testOnly().getWorkspaceStateKey(workspaceDir)
-    expect(saved.version).toBe(2)
+    expect(saved.version).toBe(3)
     expect(saved.workspaces[workspaceKey]?.fingerprint).toBe(computeWorkspaceFingerprint(workspaceDir))
     expect(saved.workspaces[workspaceKey]?.lastReindexAt).toBeGreaterThan(0)
   })
@@ -296,7 +298,7 @@ describe("code-index-sync", () => {
     expect(callMemoryTool).not.toHaveBeenCalled()
   })
 
-  it("migrates legacy single-workspace metadata into workspace-scoped state", async () => {
+  it("migrates legacy single-workspace metadata into v3 workspace-scoped state", async () => {
     const config = makeConfig(dataDir)
     const statePath = __testOnly().getIndexStatePath(config)
     const fingerprint = computeWorkspaceFingerprint(workspaceDir)
@@ -319,9 +321,97 @@ describe("code-index-sync", () => {
       workspaces: Record<string, { workspaceDir: string; fingerprint: string; lastReindexAt: number }>
     }
     const workspaceKey = __testOnly().getWorkspaceStateKey(workspaceDir)
-    expect(saved.version).toBe(2)
+    expect(saved.version).toBe(3)
     expect(saved.workspaces[workspaceKey]?.workspaceDir).toBe(workspaceDir)
     expect(saved.workspaces[workspaceKey]?.fingerprint).toBe(fingerprint)
+  })
+
+  it("migrates v2 workspace-scoped state to v3 preserving fingerprint and lastReindexAt", async () => {
+    const config = makeConfig(dataDir)
+    const statePath = __testOnly().getIndexStatePath(config)
+    const fingerprint = computeWorkspaceFingerprint(workspaceDir)
+    const workspaceKey = __testOnly().getWorkspaceStateKey(workspaceDir)
+    const lastReindexAt = Date.now() - 1000
+    expect(statePath).toBeTruthy()
+    expect(fingerprint).toBeTruthy()
+
+    writeFileSync(statePath!, JSON.stringify({
+      version: 2,
+      workspaces: {
+        [workspaceKey]: { workspaceDir, fingerprint, lastReindexAt },
+      },
+    }, null, 2))
+
+    await ensureCodeIndexFresh(config, workspaceDir, "session.idle")
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(callMemoryTool).not.toHaveBeenCalled()
+
+    const saved = JSON.parse(readFileSync(statePath!, "utf-8")) as {
+      version: number
+      workspaces: Record<string, { workspaceDir: string; fingerprint: string; lastReindexAt: number }>
+    }
+    expect(saved.version).toBe(3)
+    expect(saved.workspaces[workspaceKey]?.fingerprint).toBe(fingerprint)
+    expect(saved.workspaces[workspaceKey]?.lastReindexAt).toBe(lastReindexAt)
+  })
+
+  it("returns null and does not delete state file on invalid v3 state", async () => {
+    const { logger } = await import("../../src/utils/logger.js")
+    const config = makeConfig(dataDir)
+    const statePath = __testOnly().getIndexStatePath(config)
+    expect(statePath).toBeTruthy()
+
+    const invalidContent = "{ this is not valid json !!!"
+    writeFileSync(statePath!, invalidContent)
+
+    const readSyncStateResult = __testOnly().readSyncState(config)
+    expect(readSyncStateResult).toBeNull()
+    expect(logger.debug).toHaveBeenCalledWith("Failed to read code index sync metadata", expect.objectContaining({ error: expect.any(String) }))
+    expect(existsSync(statePath!)).toBe(true)
+  })
+
+  it("preserves v3 server orchestration fields on read/write", async () => {
+    const config = makeConfig(dataDir)
+    const statePath = __testOnly().getIndexStatePath(config)
+    const fingerprint = computeWorkspaceFingerprint(workspaceDir)
+    const workspaceKey = __testOnly().getWorkspaceStateKey(workspaceDir)
+    expect(statePath).toBeTruthy()
+    expect(fingerprint).toBeTruthy()
+
+    writeFileSync(statePath!, JSON.stringify({
+      version: 3,
+      workspaces: {
+        [workspaceKey]: {
+          workspaceDir,
+          fingerprint,
+          lastReindexAt: Date.now() - 1000,
+          serverProjectId: "proj-123",
+          serverJobId: "job-456",
+          serverActiveGeneration: 5,
+          serverTargetGeneration: 6,
+          lastObservedServerState: "running",
+          lastObservedReasonCode: "can_resume",
+          lastObservedAt: "2024-01-01T00:01:00Z",
+        },
+      },
+    }, null, 2))
+
+    await ensureCodeIndexFresh(config, workspaceDir, "session.idle")
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(callMemoryTool).not.toHaveBeenCalled()
+
+    const saved = JSON.parse(readFileSync(statePath!, "utf-8")) as {
+      version: number
+      workspaces: Record<string, Record<string, unknown>>
+    }
+    expect(saved.version).toBe(3)
+    const entry = saved.workspaces[workspaceKey]
+    expect(entry?.["serverProjectId"]).toBe("proj-123")
+    expect(entry?.["serverJobId"]).toBe("job-456")
+    expect(entry?.["serverActiveGeneration"]).toBe(5)
+    expect(entry?.["lastObservedServerState"]).toBe("running")
   })
 
   it("tracks cooldown separately for different workspaces in the same dataDir", async () => {
@@ -351,5 +441,289 @@ describe("code-index-sync", () => {
     expect(firstLockPath).not.toBe(secondLockPath)
     expect(existsSync(firstLockPath!)).toBe(false)
     expect(existsSync(secondLockPath!)).toBe(false)
+  })
+
+  describe("decideIndexSyncAction", () => {
+    it("returns legacy for null status", () => {
+      const config = makeConfig(dataDir)
+      expect(decideIndexSyncAction(null, config)).toBe("legacy")
+    })
+
+    it("returns legacy for unsupported reason_code", () => {
+      const config = makeConfig(dataDir)
+      const status = { action: "status" as const, reason_code: "unsupported" as const, raw: {} }
+      expect(decideIndexSyncAction(status, config)).toBe("legacy")
+    })
+
+    it("returns wait for active_index_running reason_code", () => {
+      const config = makeConfig(dataDir)
+      const status = { action: "status" as const, reason_code: "active_index_running" as const, raw: {} }
+      expect(decideIndexSyncAction(status, config)).toBe("wait")
+    })
+
+    it("returns wait for queued state", () => {
+      const config = makeConfig(dataDir)
+      const status = { action: "status" as const, state: "queued" as const, raw: {} }
+      expect(decideIndexSyncAction(status, config)).toBe("wait")
+    })
+
+    it("returns complete for completed state", () => {
+      const config = makeConfig(dataDir)
+      const status = { action: "status" as const, state: "completed" as const, raw: {} }
+      expect(decideIndexSyncAction(status, config)).toBe("complete")
+    })
+
+    it("returns resume when can_resume=true with job_id and resume_token and resume enabled", () => {
+      const config = makeConfig(dataDir)
+      const status = {
+        action: "status" as const,
+        can_resume: true,
+        job_id: "job-1",
+        resume_token: "tok-1",
+        raw: {},
+      }
+      expect(decideIndexSyncAction(status, config)).toBe("resume")
+    })
+
+    it("returns blocked when can_resume=true but missing resume_token", () => {
+      const config = makeConfig(dataDir)
+      const status = {
+        action: "status" as const,
+        can_resume: true,
+        job_id: "job-1",
+        raw: {},
+      }
+      expect(decideIndexSyncAction(status, config)).toBe("blocked")
+    })
+
+    it("returns blocked for workspace_changed_since_checkpoint with default config", () => {
+      const config = makeConfig(dataDir)
+      const status = {
+        action: "status" as const,
+        can_resume: false,
+        reason_code: "workspace_changed_since_checkpoint" as const,
+        raw: {},
+      }
+      expect(decideIndexSyncAction(status, config)).toBe("blocked")
+    })
+
+    it("returns restart for workspace_changed_since_checkpoint when allowFullRestartFallback=true", () => {
+      const config = makeConfig(dataDir)
+      config.codeIndexSync.resume = { allowFullRestartFallback: true }
+      const status = {
+        action: "status" as const,
+        can_resume: false,
+        reason_code: "workspace_changed_since_checkpoint" as const,
+        raw: {},
+      }
+      expect(decideIndexSyncAction(status, config)).toBe("restart")
+    })
+
+    it("returns wait for running state", () => {
+      const config = makeConfig(dataDir)
+      const status = { action: "status" as const, state: "running" as const, raw: {} }
+      expect(decideIndexSyncAction(status, config)).toBe("wait")
+    })
+
+    it("returns blocked when can_resume=true but missing job_id", () => {
+      const config = makeConfig(dataDir)
+      const status = {
+        action: "status" as const,
+        can_resume: true,
+        resume_token: "tok-1",
+        raw: {},
+      }
+      expect(decideIndexSyncAction(status, config)).toBe("blocked")
+    })
+
+    it("returns blocked for index_storage_corrupt with allowFullRestartFallback=true but allowDestructiveRecovery=false", () => {
+      const config = makeConfig(dataDir)
+      config.codeIndexSync.resume = { allowFullRestartFallback: true, allowDestructiveRecovery: false }
+      const status = {
+        action: "status" as const,
+        can_resume: false,
+        reason_code: "index_storage_corrupt" as const,
+        raw: {},
+      }
+      expect(decideIndexSyncAction(status, config)).toBe("blocked")
+    })
+
+    it("returns restart for index_storage_corrupt when both allowFullRestartFallback and allowDestructiveRecovery are true", () => {
+      const config = makeConfig(dataDir)
+      config.codeIndexSync.resume = { allowFullRestartFallback: true, allowDestructiveRecovery: true }
+      const status = {
+        action: "status" as const,
+        can_resume: false,
+        reason_code: "index_storage_corrupt" as const,
+        raw: {},
+      }
+      expect(decideIndexSyncAction(status, config)).toBe("restart")
+    })
+
+    it("returns start for status with no active job", () => {
+      const config = makeConfig(dataDir)
+      const status = { action: "status" as const, state: "failed" as const, raw: {} }
+      expect(decideIndexSyncAction(status, config)).toBe("start")
+    })
+
+    it("returns start for status with no state or reason_code (stale/missing)", () => {
+      const config = makeConfig(dataDir)
+      const status = { action: "status" as const, raw: {} }
+      expect(decideIndexSyncAction(status, config)).toBe("start")
+    })
+  })
+
+  it("resumes indexing when server reports can_resume with job_id and resume_token, writes v3 freshness on completion", async () => {
+    const config = makeConfig(dataDir)
+    config.codeIndexSync.resume = { enabled: true, pollIntervalMs: 10, maxPollMs: 1000 }
+
+    vi.mocked(getProjectDurableStatus)
+      .mockResolvedValueOnce({
+        action: "status",
+        can_resume: true,
+        job_id: "job-1",
+        resume_token: "tok-1",
+        active_generation: 2,
+        target_generation: 3,
+        raw: {},
+      })
+      .mockResolvedValueOnce({
+        action: "status",
+        state: "completed",
+        active_generation: 3,
+        target_generation: 3,
+        raw: {},
+      })
+
+    await ensureCodeIndexFresh(config, workspaceDir, "startup")
+    await vi.advanceTimersByTimeAsync(50)
+    await vi.runAllTimersAsync()
+
+    expect(callMemoryTool).toHaveBeenCalledWith(config, "index_project", {
+      path: workspaceDir,
+      resume: true,
+      job_id: "job-1",
+      resume_token: "tok-1",
+      allow_full_restart_fallback: false,
+    })
+
+    const statePath = __testOnly().getIndexStatePath(config)
+    expect(statePath).toBeTruthy()
+    const saved = JSON.parse(readFileSync(statePath!, "utf-8")) as {
+      version: number
+      workspaces: Record<string, Record<string, unknown>>
+    }
+    const workspaceKey = __testOnly().getWorkspaceStateKey(workspaceDir)
+    expect(saved.version).toBe(3)
+    expect(saved.workspaces[workspaceKey]?.["fingerprint"]).toBe(computeWorkspaceFingerprint(workspaceDir))
+    expect(saved.workspaces[workspaceKey]?.["lastReindexAt"]).toBeGreaterThan(0)
+    expect(saved.workspaces[workspaceKey]?.["lastObservedServerState"]).toBe("completed")
+  })
+
+  it("does not call force:true and records blocked state for workspace_changed_since_checkpoint with default config", async () => {
+    const config = makeConfig(dataDir)
+
+    vi.mocked(getProjectDurableStatus).mockResolvedValueOnce({
+      action: "status",
+      can_resume: false,
+      reason_code: "workspace_changed_since_checkpoint",
+      raw: {},
+    })
+
+    await ensureCodeIndexFresh(config, workspaceDir, "startup")
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(callMemoryTool).not.toHaveBeenCalled()
+
+    const statePath = __testOnly().getIndexStatePath(config)
+    expect(statePath).toBeTruthy()
+    const saved = JSON.parse(readFileSync(statePath!, "utf-8")) as {
+      version: number
+      workspaces: Record<string, Record<string, unknown>>
+    }
+    const workspaceKey = __testOnly().getWorkspaceStateKey(workspaceDir)
+    expect(saved.version).toBe(3)
+    expect(saved.workspaces[workspaceKey]?.["fingerprint"]).toBe("")
+    expect(saved.workspaces[workspaceKey]?.["lastObservedReasonCode"]).toBe("workspace_changed_since_checkpoint")
+  })
+
+  it("calls index_project with force and confirm_failed_restart when allowFullRestartFallback=true and workspace changed", async () => {
+    const config = makeConfig(dataDir)
+    config.codeIndexSync.resume = { enabled: true, pollIntervalMs: 10, maxPollMs: 1000, allowFullRestartFallback: true }
+
+    vi.mocked(getProjectDurableStatus)
+      .mockResolvedValueOnce({
+        action: "status",
+        can_resume: false,
+        reason_code: "workspace_changed_since_checkpoint",
+        raw: {},
+      })
+      .mockResolvedValueOnce({
+        action: "status",
+        state: "completed",
+        raw: {},
+      })
+
+    await ensureCodeIndexFresh(config, workspaceDir, "startup")
+    await vi.advanceTimersByTimeAsync(50)
+    await vi.runAllTimersAsync()
+
+    expect(callMemoryTool).toHaveBeenCalledWith(config, "index_project", {
+      path: workspaceDir,
+      force: true,
+      confirm_failed_restart: true,
+    })
+  })
+
+  it("calls index_project without force for start decision (no active job)", async () => {
+    const config = makeConfig(dataDir)
+    config.codeIndexSync.resume = { enabled: true, pollIntervalMs: 10, maxPollMs: 1000 }
+
+    vi.mocked(getProjectDurableStatus)
+      .mockResolvedValueOnce({
+        action: "status",
+        state: "failed",
+        raw: {},
+      })
+      .mockResolvedValueOnce({
+        action: "status",
+        state: "completed",
+        raw: {},
+      })
+
+    await ensureCodeIndexFresh(config, workspaceDir, "startup")
+    await vi.advanceTimersByTimeAsync(50)
+    await vi.runAllTimersAsync()
+
+    expect(callMemoryTool).toHaveBeenCalledWith(config, "index_project", {
+      path: workspaceDir,
+    })
+  })
+
+  it("writes v3 freshness on completed state decision", async () => {
+    const config = makeConfig(dataDir)
+    config.codeIndexSync.resume = { enabled: true, pollIntervalMs: 10, maxPollMs: 1000 }
+
+    vi.mocked(getProjectDurableStatus).mockResolvedValueOnce({
+      action: "status",
+      state: "completed",
+      raw: {},
+    })
+
+    await ensureCodeIndexFresh(config, workspaceDir, "startup")
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(callMemoryTool).not.toHaveBeenCalled()
+
+    const statePath = __testOnly().getIndexStatePath(config)
+    expect(statePath).toBeTruthy()
+    const saved = JSON.parse(readFileSync(statePath!, "utf-8")) as {
+      version: number
+      workspaces: Record<string, Record<string, unknown>>
+    }
+    const workspaceKey = __testOnly().getWorkspaceStateKey(workspaceDir)
+    expect(saved.version).toBe(3)
+    expect(saved.workspaces[workspaceKey]?.["lastReindexAt"]).toBeGreaterThan(0)
+    expect(saved.workspaces[workspaceKey]?.["lastObservedServerState"]).toBe("completed")
   })
 })

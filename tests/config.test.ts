@@ -56,6 +56,10 @@ function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
     codeIndexSync: {
       ...DEFAULT_CONFIG.codeIndexSync,
       ...overrides?.codeIndexSync,
+      resume: {
+        ...DEFAULT_CONFIG.codeIndexSync.resume,
+        ...overrides?.codeIndexSync?.resume,
+      },
     },
     preferenceLearning: {
       ...DEFAULT_CONFIG.preferenceLearning,
@@ -127,6 +131,13 @@ describe("loadConfig", () => {
     expect(config.mcpServer.tag).toBe("")
     expect(config.privacy.enabled).toBe(true)
     expect(config.codeIndexSync.enabled).toBe(true)
+    expect(config.codeIndexSync.resume).toEqual({
+      enabled: true,
+      pollIntervalMs: 5000,
+      maxPollMs: 300000,
+      allowFullRestartFallback: false,
+      allowDestructiveRecovery: false,
+    })
     expect(config.preferenceLearning).toEqual({
       enabled: false,
       learnOnCorrections: true,
@@ -413,6 +424,24 @@ describe("loadConfig", () => {
     expect(config.chatMessage.maxKnowledgeGraphItems).toBe(10)
     expect(config.chatMessage.knowledgeGraphRelatedDepth).toBe(1)
     expect(config.chatMessage.knowledgeGraphEntityMatch).toBe(true)
+  })
+
+  it("preserves resume defaults when merging partial codeIndexSync overrides", () => {
+    vi.mocked(existsSync).mockImplementation((p) =>
+      String(p).endsWith("opencode-mmcp-1file.jsonc"),
+    )
+    vi.mocked(readFileSync).mockReturnValue(
+      `{ "codeIndexSync": { "resume": { "allowFullRestartFallback": true } } }`,
+    )
+
+    const config = loadConfig("/dir")
+    expect(config.codeIndexSync.resume).toEqual({
+      enabled: true,
+      pollIntervalMs: 5000,
+      maxPollMs: 300000,
+      allowFullRestartFallback: true,
+      allowDestructiveRecovery: false,
+    })
   })
 })
 

@@ -14,7 +14,8 @@ import { createHash, randomBytes } from "node:crypto"
 import { dirname, join, relative } from "node:path"
 import type { PluginConfig } from "../config.js"
 import { resolveDataDir } from "../config.js"
-import { callMemoryTool } from "./mcp-client.js"
+import { callMemoryTool, getProjectDurableStatus } from "./mcp-client.js"
+import type { ProjectDurableStatusInfo } from "./mcp-client.js"
 import { shouldCoordinateCodeIndexSync } from "./server-process.js"
 import { logger } from "../utils/logger.js"
 
@@ -26,9 +27,19 @@ interface SyncMetadata {
   lastReindexAt: number
 }
 
+interface V3SyncMetadata extends SyncMetadata {
+  serverProjectId?: string
+  serverJobId?: string
+  serverActiveGeneration?: number
+  serverTargetGeneration?: number
+  lastObservedServerState?: string
+  lastObservedReasonCode?: string
+  lastObservedAt?: string
+}
+
 interface SyncStateFile {
-  version: 2
-  workspaces: Record<string, SyncMetadata>
+  version: 3
+  workspaces: Record<string, V3SyncMetadata>
 }
 
 interface LockMetadata {
@@ -176,11 +187,12 @@ function readSyncState(config: PluginConfig): SyncStateFile | null {
   try {
     const raw = JSON.parse(readFileSync(statePath, "utf-8")) as unknown
 
+    // Legacy unversioned: single workspace object at root
     if (isSyncMetadata(raw)) {
       const migratedState: SyncStateFile = {
-        version: 2,
+        version: 3,
         workspaces: {
-          [getWorkspaceStateKey(raw.workspaceDir)]: raw,
+          [getWorkspaceStateKey((raw as SyncMetadata).workspaceDir)]: raw as SyncMetadata,
         },
       }
       writeSyncState(config, migratedState)
@@ -188,20 +200,35 @@ function readSyncState(config: PluginConfig): SyncStateFile | null {
     }
 
     if (!raw || typeof raw !== "object") return null
-    const candidate = raw as Partial<SyncStateFile>
-    const rawWorkspaces = candidate.workspaces
-    if (candidate.version !== 2 || !rawWorkspaces || typeof rawWorkspaces !== "object") return null
+    const candidate = raw as Record<string, unknown>
+    const rawWorkspaces = candidate["workspaces"]
+    if (!rawWorkspaces || typeof rawWorkspaces !== "object") return null
 
-    const workspaces: Record<string, SyncMetadata> = {}
-    for (const [key, value] of Object.entries(rawWorkspaces)) {
-      if (!isSyncMetadata(value)) continue
-      workspaces[key] = value
+    const version = candidate["version"]
+
+    // v2: has version: 2 or workspaces key without version 3
+    if (version === 2 || (version !== 3 && rawWorkspaces)) {
+      const workspaces: Record<string, V3SyncMetadata> = {}
+      for (const [key, value] of Object.entries(rawWorkspaces as Record<string, unknown>)) {
+        if (!isSyncMetadata(value)) continue
+        workspaces[key] = value as V3SyncMetadata
+      }
+      const migratedState: SyncStateFile = { version: 3, workspaces }
+      writeSyncState(config, migratedState)
+      return migratedState
     }
 
-    return {
-      version: 2,
-      workspaces,
+    // v3: parse directly
+    if (version === 3) {
+      const workspaces: Record<string, V3SyncMetadata> = {}
+      for (const [key, value] of Object.entries(rawWorkspaces as Record<string, unknown>)) {
+        if (!isSyncMetadata(value)) continue
+        workspaces[key] = value as V3SyncMetadata
+      }
+      return { version: 3, workspaces }
     }
+
+    return null
   } catch (err) {
     logger.debug("Failed to read code index sync metadata", { error: String(err) })
     return null
@@ -218,14 +245,14 @@ function writeSyncState(config: PluginConfig, state: SyncStateFile): void {
   renameSync(tmpPath, statePath)
 }
 
-function readWorkspaceSyncMetadata(config: PluginConfig, workspaceDir: string): SyncMetadata | null {
+function readWorkspaceSyncMetadata(config: PluginConfig, workspaceDir: string): V3SyncMetadata | null {
   const state = readSyncState(config)
   if (!state) return null
   return state.workspaces[getWorkspaceStateKey(workspaceDir)] ?? null
 }
 
-function writeWorkspaceSyncMetadata(config: PluginConfig, workspaceDir: string, metadata: SyncMetadata): void {
-  const state = readSyncState(config) ?? { version: 2 as const, workspaces: {} }
+function writeWorkspaceSyncMetadata(config: PluginConfig, workspaceDir: string, metadata: V3SyncMetadata): void {
+  const state = readSyncState(config) ?? { version: 3 as const, workspaces: {} }
   state.workspaces[getWorkspaceStateKey(workspaceDir)] = metadata
   writeSyncState(config, state)
 }
@@ -342,6 +369,88 @@ function releaseLock(lockPath: string): void {
   } catch {}
 }
 
+export type IndexSyncDecision = "legacy" | "wait" | "resume" | "blocked" | "restart" | "start" | "complete"
+
+export function decideIndexSyncAction(
+  status: ProjectDurableStatusInfo | null,
+  config: PluginConfig,
+): IndexSyncDecision {
+  // Null / unsupported server → legacy path
+  if (!status) return "legacy"
+
+  const reasonCode = status.reason_code
+  const state = status.state
+  const resumeConfig = config.codeIndexSync.resume
+
+  // Unsupported reason code → legacy
+  if (reasonCode === "unsupported") return "legacy"
+
+  // Active running job or queued/running state without resumable interruption
+  if (
+    reasonCode === "active_index_running" ||
+    state === "queued" ||
+    state === "running"
+  ) {
+    return "wait"
+  }
+
+  // Completed and acceptable → write freshness
+  if (state === "completed") return "complete"
+
+  // Resumable job
+  if (status.can_resume === true) {
+    const resumeEnabled = resumeConfig?.enabled !== false
+    if (resumeEnabled && status.job_id && status.resume_token) {
+      return "resume"
+    }
+    // can_resume but missing job_id or resume_token → blocked
+    return "blocked"
+  }
+
+  // Non-resumable retryable reasons
+  if (
+    reasonCode === "lost_one_shot_indexing_task_after_restart" ||
+    reasonCode === "checkpoint_generation_missing"
+  ) {
+    return resumeConfig?.allowFullRestartFallback ? "restart" : "blocked"
+  }
+
+  // Workspace changed since checkpoint
+  if (reasonCode === "workspace_changed_since_checkpoint") {
+    return resumeConfig?.allowFullRestartFallback ? "restart" : "blocked"
+  }
+
+  // Corrupt storage — requires both flags
+  if (reasonCode === "index_storage_corrupt") {
+    return resumeConfig?.allowFullRestartFallback && resumeConfig?.allowDestructiveRecovery
+      ? "restart"
+      : "blocked"
+  }
+
+  // No active job / missing / stale → start normal index
+  return "start"
+}
+
+async function pollUntilComplete(
+  config: PluginConfig,
+  workspaceDir: string,
+): Promise<ProjectDurableStatusInfo | null> {
+  const resumeConfig = config.codeIndexSync.resume
+  const maxPollMs = resumeConfig?.maxPollMs ?? 300000
+  const pollIntervalMs = resumeConfig?.pollIntervalMs ?? 5000
+  const deadline = Date.now() + maxPollMs
+
+  while (Date.now() < deadline) {
+    await new Promise<void>((resolve) => setTimeout(resolve, pollIntervalMs))
+    const status = await getProjectDurableStatus(config, workspaceDir)
+    if (!status) return null
+    if (status.state === "completed" || status.state === "failed" || status.state === "cancelled") {
+      return status
+    }
+  }
+  return null
+}
+
 async function runReindex(config: PluginConfig, workspaceDir: string, reason: SyncReason): Promise<void> {
   const workspaceKey = getWorkspaceKey(config, workspaceDir)
   if (inFlightRuns.has(workspaceKey)) return
@@ -365,13 +474,151 @@ async function runReindex(config: PluginConfig, workspaceDir: string, reason: Sy
     const metadata = readWorkspaceSyncMetadata(config, workspaceDir)
     if (metadata?.fingerprint === fingerprint) return
 
-    logger.info("Refreshing code intelligence index", { workspaceDir, reason })
-    await callMemoryTool(config, "index_project", { path: workspaceDir, force: true })
-    writeWorkspaceSyncMetadata(config, workspaceDir, {
-      workspaceDir,
-      fingerprint,
-      lastReindexAt: Date.now(),
-    })
+    // Fetch fresh server status to decide action
+    const status = await getProjectDurableStatus(config, workspaceDir)
+    const decision = decideIndexSyncAction(status, config)
+
+    const observedAt = new Date().toISOString()
+    const baseObserved: Partial<V3SyncMetadata> = {
+      lastObservedServerState: status?.state,
+      lastObservedReasonCode: status?.reason_code ?? (status === null ? "unsupported" : undefined),
+      lastObservedAt: observedAt,
+      serverJobId: status?.job_id,
+      serverActiveGeneration: status?.active_generation,
+      serverTargetGeneration: status?.target_generation,
+    }
+
+    logger.info("Code index sync decision", { workspaceDir, reason, decision, state: status?.state, reasonCode: status?.reason_code })
+
+    if (decision === "legacy") {
+      // Legacy: force rebuild, write freshness only after success
+      await callMemoryTool(config, "index_project", { path: workspaceDir, force: true })
+      writeWorkspaceSyncMetadata(config, workspaceDir, {
+        workspaceDir,
+        fingerprint,
+        lastReindexAt: Date.now(),
+        ...baseObserved,
+        lastObservedReasonCode: status?.reason_code ?? "unsupported",
+      })
+      return
+    }
+
+    if (decision === "wait") {
+      // Active job running — record observed state, leave fingerprint incomplete
+      writeWorkspaceSyncMetadata(config, workspaceDir, {
+        workspaceDir,
+        fingerprint: metadata?.fingerprint ?? "",
+        lastReindexAt: metadata?.lastReindexAt ?? 0,
+        ...baseObserved,
+      })
+      return
+    }
+
+    if (decision === "blocked") {
+      // Cannot proceed — record blocked state, do not write fingerprint as complete
+      writeWorkspaceSyncMetadata(config, workspaceDir, {
+        workspaceDir,
+        fingerprint: metadata?.fingerprint ?? "",
+        lastReindexAt: metadata?.lastReindexAt ?? 0,
+        ...baseObserved,
+      })
+      return
+    }
+
+    if (decision === "resume") {
+      // Resume with fresh job_id and resume_token from status
+      await callMemoryTool(config, "index_project", {
+        path: workspaceDir,
+        resume: true,
+        job_id: status!.job_id,
+        resume_token: status!.resume_token,
+        allow_full_restart_fallback: false,
+      })
+      const finalStatus = await pollUntilComplete(config, workspaceDir)
+      if (finalStatus?.state === "completed") {
+        writeWorkspaceSyncMetadata(config, workspaceDir, {
+          workspaceDir,
+          fingerprint,
+          lastReindexAt: Date.now(),
+          ...baseObserved,
+          lastObservedServerState: finalStatus.state,
+          serverActiveGeneration: finalStatus.active_generation,
+          serverTargetGeneration: finalStatus.target_generation,
+        })
+      } else {
+        // Not completed — record observed state without marking fingerprint done
+        writeWorkspaceSyncMetadata(config, workspaceDir, {
+          workspaceDir,
+          fingerprint: metadata?.fingerprint ?? "",
+          lastReindexAt: metadata?.lastReindexAt ?? 0,
+          ...baseObserved,
+          lastObservedServerState: finalStatus?.state ?? status?.state,
+        })
+      }
+      return
+    }
+
+    if (decision === "restart") {
+      // Full restart with confirm_failed_restart flag
+      await callMemoryTool(config, "index_project", { path: workspaceDir, force: true, confirm_failed_restart: true })
+      const finalStatus = await pollUntilComplete(config, workspaceDir)
+      if (finalStatus?.state === "completed") {
+        writeWorkspaceSyncMetadata(config, workspaceDir, {
+          workspaceDir,
+          fingerprint,
+          lastReindexAt: Date.now(),
+          ...baseObserved,
+          lastObservedServerState: finalStatus.state,
+        })
+      } else {
+        writeWorkspaceSyncMetadata(config, workspaceDir, {
+          workspaceDir,
+          fingerprint: metadata?.fingerprint ?? "",
+          lastReindexAt: metadata?.lastReindexAt ?? 0,
+          ...baseObserved,
+          lastObservedServerState: finalStatus?.state ?? status?.state,
+        })
+      }
+      return
+    }
+
+    if (decision === "start") {
+      // Normal index without force
+      logger.info("Refreshing code intelligence index", { workspaceDir, reason })
+      await callMemoryTool(config, "index_project", { path: workspaceDir })
+      const finalStatus = await pollUntilComplete(config, workspaceDir)
+      if (finalStatus?.state === "completed") {
+        writeWorkspaceSyncMetadata(config, workspaceDir, {
+          workspaceDir,
+          fingerprint,
+          lastReindexAt: Date.now(),
+          ...baseObserved,
+          lastObservedServerState: finalStatus.state,
+          serverActiveGeneration: finalStatus.active_generation,
+          serverTargetGeneration: finalStatus.target_generation,
+        })
+      } else {
+        writeWorkspaceSyncMetadata(config, workspaceDir, {
+          workspaceDir,
+          fingerprint: metadata?.fingerprint ?? "",
+          lastReindexAt: metadata?.lastReindexAt ?? 0,
+          ...baseObserved,
+          lastObservedServerState: finalStatus?.state ?? status?.state,
+        })
+      }
+      return
+    }
+
+    if (decision === "complete") {
+      // Server already completed — write freshness
+      writeWorkspaceSyncMetadata(config, workspaceDir, {
+        workspaceDir,
+        fingerprint,
+        lastReindexAt: Date.now(),
+        ...baseObserved,
+      })
+      return
+    }
   } catch (err) {
     logger.warn("Code index sync failed", {
       workspaceDir,
@@ -442,11 +689,13 @@ export function __testOnly(): {
   getIndexLockPath: typeof getIndexLockPath
   getWorkspaceStateKey: typeof getWorkspaceStateKey
   shouldTrackPathForCodeIndex: typeof shouldTrackPathForCodeIndex
+  readSyncState: typeof readSyncState
 } {
   return {
     getIndexStatePath,
     getIndexLockPath,
     getWorkspaceStateKey,
     shouldTrackPathForCodeIndex,
+    readSyncState,
   }
 }

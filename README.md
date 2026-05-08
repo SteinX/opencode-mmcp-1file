@@ -25,7 +25,7 @@ The plugin now distinguishes between a **physical storage shard** and a **logica
   - `memory_save` — Smart storage with auto-categorization (DECISION, TASK, PATTERN, BUGFIX, etc.) and privacy filtering.
   - `memory_manage` — Memory lifecycle: get, update, delete, or invalidate by ID.
   - `code_search` — Unified code intelligence: intent-based search, symbol lookup, and call graph traversal (callers/callees/related).
-  - `project_status` — Project indexing and projections: list indexed projects, index new ones, view code statistics, build short-lived projections, or read them back by ephemeral locator.
+  - `project_status` — Project indexing and projections: list indexed projects, index new ones, view code statistics, build short-lived projections, or read them back by ephemeral locator. Also supports durable indexing controls: `status` (query current indexing state), `resume` (resume an interrupted job with `job_id`+`resume_token`), `cancel` (cancel active job), and `cleanup` (remove abandoned/failed jobs).
   - `mcp_server_control` — Manage shared HTTP MCP server lifecycle with `status`, `stop`, and `restart` actions. HTTP transport only.
   - `knowledge_graph` — Map and query architectural relationships between codebase components. Use when analyzing system architecture, tracing module dependencies, or recording structural relationships. Actions: create_entity, create_relation, get_related, detect_communities.
   - `get_status` — Memory system status and startup progress.
@@ -134,7 +134,14 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
   "codeIndexSync": {
     "enabled": true,
     "debounceMs": 10000,            // Wait after detecting staleness before re-indexing
-    "minReindexIntervalMs": 300000  // Cooldown between successful force re-indexes
+    "minReindexIntervalMs": 300000, // Cooldown between successful re-indexes
+    "resume": {
+      "enabled": true,                    // Enable checkpoint resume for interrupted index jobs
+      "pollIntervalMs": 5000,             // How often to poll server status during resume (ms)
+      "maxPollMs": 300000,                // Maximum time to wait for resume completion (ms, 5 min)
+      "allowFullRestartFallback": false,  // Allow full rebuild when resume is not possible (default: false for safety)
+      "allowDestructiveRecovery": false   // Allow destructive recovery for corrupt storage (default: false)
+    }
   },
 
   // Preference learning from conversational signals
@@ -207,7 +214,7 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
 | **preemptiveCompaction** | Early compaction trigger based on token estimates |
 | **privacy** | Redaction of `<private>` tagged content |
 | **compactionSummaryCapture** | Saves compaction summaries as memories |
-| **codeIndexSync** | Detects stale workspace indexes and refreshes code intelligence in the background |
+| **codeIndexSync** | Detects stale workspace indexes; queries server status first; resumes interrupted jobs when possible; falls back to full rebuild only when policy permits (`allowFullRestartFallback`). Nested `resume` policy controls polling, timeouts, and fallback behavior. |
 | **preferenceLearning** | Controls preference extraction, confidence thresholds, scope, and injection cadence for learned user preferences |
 | **captureModel** | LLM for auto-capture summarization — uses direct HTTP when apiKey is set, otherwise OpenCode session API |
 | **memoryScope** | Logical scope, agent-sharing defaults, and default metadata layered inside the current shard |
