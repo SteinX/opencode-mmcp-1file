@@ -65,7 +65,7 @@ Plugin hooks (index.ts)
 | `commands/manage-mcp-server.md` | `/manage-mcp-server` slash command for shared HTTP MCP server control | N/A (Markdown prompt) |
 | `src/services/system-prompt.ts` | Memory Protocol system prompt builder | `buildMemorySystemPrompt()` |
 | `src/services/auto-capture.ts` | Session-idle memory extraction | `performAutoCapture()` |
-| `src/services/code-index-sync.ts` | Workspace fingerprinting + deferred re-index | `ensureCodeIndexFresh()`, `computeWorkspaceFingerprint()` |
+| `src/services/code-index-sync.ts` | Workspace fingerprinting + server-guided durable index resume/wait/start state machine | `ensureCodeIndexFresh()`, `computeWorkspaceFingerprint()`, `decideIndexSyncAction()` |
 | `src/services/context-inject.ts` | Chat message memory injection | `shouldInjectMemories()`, `fetchAndFormatMemories()` |
 | `src/services/preemptive-compaction.ts` | Token-based early compaction | `checkAndTriggerPreemptiveCompaction()` |
 | `src/services/compaction.ts` | Post-compaction recovery guidance + data | `buildCompactionRecoveryContext()` |

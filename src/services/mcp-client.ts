@@ -44,6 +44,24 @@ export type ProjectInfoReasonCode =
 
 export type ProjectLocatorLookupState = "created" | "resolved" | "missing" | (string & {})
 
+export type ProjectIndexingState =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "interrupted"
+  | (string & {})
+
+export type DurableIndexingReasonCode =
+  | "active_index_running"
+  | "can_resume"
+  | "lost_one_shot_indexing_task_after_restart"
+  | "checkpoint_generation_missing"
+  | "workspace_changed_since_checkpoint"
+  | "index_storage_corrupt"
+  | (string & {})
+
 interface ProjectInfoSummaryPartial {
   reasonCode?: ProjectInfoReasonCode
   reason?: string
@@ -56,6 +74,17 @@ interface ProjectInfoSummaryEnvelope {
 }
 
 interface ProjectInfoContractEnvelope {
+  raw: Record<string, unknown>
+}
+
+interface ProjectDurableProgress {
+  current?: number
+  total?: number
+  percent?: number
+  completed?: number
+  remaining?: number
+  stage?: string
+  step?: string
   raw: Record<string, unknown>
 }
 
@@ -105,6 +134,20 @@ export interface ProjectProjectionInfo extends ParsedProjectInfoBase {
   locator?: ProjectInfoLocator
 }
 
+export interface ProjectDurableStatusInfo extends ParsedProjectInfoBase {
+  action: "status"
+  state?: ProjectIndexingState
+  job_id?: string
+  operation_id?: string
+  can_resume?: boolean
+  resume_token?: string
+  active_generation?: number
+  target_generation?: number
+  reason_code?: DurableIndexingReasonCode
+  progress?: ProjectDurableProgress
+  payload?: Record<string, unknown>
+}
+
 export interface KGEntity {
   id: string
   name: string
@@ -144,6 +187,10 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined
 }
 
+function asBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined
+}
+
 function parseJsonRecord(raw: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(raw)
@@ -181,6 +228,52 @@ function parseProjectInfoBase(raw: Record<string, unknown>): ParsedProjectInfoBa
     summary,
     raw,
   }
+}
+
+function parseProjectDurableIdentityFields(raw: Record<string, unknown>): {
+  job_id?: string
+  operation_id?: string
+  can_resume?: boolean
+  resume_token?: string
+} {
+  return cleanRecord({
+    job_id: asString(raw.job_id),
+    operation_id: asString(raw.operation_id),
+    can_resume: asBoolean(raw.can_resume),
+    resume_token: asString(raw.resume_token),
+  })
+}
+
+function parseProjectDurableGenerationFields(raw: Record<string, unknown>): {
+  active_generation?: number
+  target_generation?: number
+} {
+  return cleanRecord({
+    active_generation: asNumber(raw.active_generation),
+    target_generation: asNumber(raw.target_generation),
+  })
+}
+
+function parseProjectDurableProgress(progress: unknown): ProjectDurableProgress | undefined {
+  if (typeof progress === "number" && Number.isFinite(progress)) {
+    return {
+      percent: progress,
+      raw: { percent: progress },
+    }
+  }
+
+  if (!isRecord(progress)) return undefined
+
+  return cleanRecord({
+    current: asNumber(progress.current),
+    total: asNumber(progress.total),
+    percent: asNumber(progress.percent),
+    completed: asNumber(progress.completed),
+    remaining: asNumber(progress.remaining),
+    stage: asString(progress.stage),
+    step: asString(progress.step),
+    raw: progress,
+  })
 }
 
 function parseLocatorToken(locator: Record<string, unknown>): string | undefined {
@@ -245,6 +338,21 @@ function parseProjectProjection(
     ...parseProjectInfoBase(raw),
     locator: parseProjectLocator(raw.locator),
   }
+}
+
+function parseProjectDurableStatus(raw: Record<string, unknown>): ProjectDurableStatusInfo {
+  const payload = isRecord(raw.payload) ? raw.payload : undefined
+
+  return cleanRecord({
+    action: "status" as const,
+    ...parseProjectInfoBase(raw),
+    state: asString(raw.state) as ProjectIndexingState | undefined,
+    ...parseProjectDurableIdentityFields(raw),
+    ...parseProjectDurableGenerationFields(raw),
+    reason_code: asString(raw.reason_code) as DurableIndexingReasonCode | undefined,
+    progress: parseProjectDurableProgress(raw.progress),
+    payload,
+  })
 }
 
 function parseKGEntity(value: unknown): KGEntity | null {
@@ -368,6 +476,15 @@ export async function getProjectProjectionByLocatorInfo(
 ): Promise<ProjectProjectionInfo | null> {
   const raw = await callProjectInfo(config, { action: "projection_by_locator", locator: args.locator })
   return raw ? parseProjectProjection("projection_by_locator", raw) : null
+}
+
+export async function getProjectDurableStatus(
+  config: PluginConfig,
+  path?: string,
+  projectId?: string,
+): Promise<ProjectDurableStatusInfo | null> {
+  const raw = await callProjectInfo(config, cleanRecord({ action: "status", path, project_id: projectId }))
+  return raw ? parseProjectDurableStatus(raw) : null
 }
 
 export async function detectKnowledgeGraphCommunities(config: PluginConfig): Promise<KGCommunity[]> {

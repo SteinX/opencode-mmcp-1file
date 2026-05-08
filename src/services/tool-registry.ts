@@ -319,13 +319,18 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
      */
     project_status: tool({
       description:
-        "Check project indexing status and verify readiness. Start with 'list' to see indexed projects, use 'index' if a project is missing or stale, then use 'stats' to confirm the index is ready. " +
-        "Use 'projection' to build a short-lived projection export and 'projection_by_locator' to read it back when you already have the ephemeral locator.",
+        "Check project indexing status and manage indexing lifecycle. Start with 'list' to see indexed projects, use 'status' to inspect durable state, use 'index' or 'resume' to start or continue indexing, then use 'stats' to confirm the index is ready. " +
+        "Use 'cancel' to stop an active index, 'cleanup' to clear abandoned jobs, and 'projection' / 'projection_by_locator' for short-lived projection exports.",
       args: {
-        action: tool.schema.enum(["list", "index", "stats", "projection", "projection_by_locator"]),
+        action: tool.schema.enum(["list", "status", "index", "resume", "cancel", "cleanup", "stats", "projection", "projection_by_locator"]),
         path: tool.schema.string().optional(),
         project_id: tool.schema.string().optional(),
         force: tool.schema.boolean().optional(),
+        resume: tool.schema.boolean().optional(),
+        job_id: tool.schema.string().optional(),
+        resume_token: tool.schema.string().optional(),
+        allow_full_restart_fallback: tool.schema.boolean().optional(),
+        confirm_failed_restart: tool.schema.boolean().optional(),
         relation_scope: tool.schema.enum(["all", "calls", "imports", "type_links", "none"]).optional(),
         sort_mode: tool.schema.string().optional(),
         locator: tool.schema.string().optional(),
@@ -335,11 +340,34 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
           case "list":
             return proxy("project_info", { action: "list" })
 
+          case "status": {
+            const callArgs: Record<string, unknown> = { action: "status" }
+            if (args.project_id !== undefined) callArgs.project_id = args.project_id
+            if (args.path !== undefined) callArgs.path = args.path
+            return proxy("project_info", callArgs)
+          }
+
           case "stats":
             return proxy("project_info", {
               action: "stats",
               project_id: args.project_id,
+              path: args.path,
             })
+
+          case "cancel": {
+            const callArgs: Record<string, unknown> = { action: "cancel_index" }
+            if (args.project_id !== undefined) callArgs.project_id = args.project_id
+            if (args.path !== undefined) callArgs.path = args.path
+            if (args.job_id !== undefined) callArgs.job_id = args.job_id
+            return proxy("project_info", callArgs)
+          }
+
+          case "cleanup": {
+            const callArgs: Record<string, unknown> = { action: "cleanup_abandoned_index_jobs" }
+            if (args.project_id !== undefined) callArgs.project_id = args.project_id
+            if (args.path !== undefined) callArgs.path = args.path
+            return proxy("project_info", callArgs)
+          }
 
           case "projection": {
             if (!args.project_id) return "Error: project_id is required for projection action"
@@ -382,10 +410,32 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
             return JSON.stringify(result.raw)
           }
 
+          case "resume": {
+            if (!args.path) return "Error: path is required for resume action"
+            if (!args.job_id) return "Error: job_id is required for resume action"
+            if (!args.resume_token) return "Error: resume_token is required for resume action"
+            return proxy("index_project", {
+              path: args.path,
+              resume: true,
+              job_id: args.job_id,
+              resume_token: args.resume_token,
+              allow_full_restart_fallback: args.allow_full_restart_fallback,
+            })
+          }
+
           case "index": {
             if (!args.path) return "Error: path is required for index action"
             const callArgs: Record<string, unknown> = { path: args.path }
             if (args.force !== undefined) callArgs.force = args.force
+            if (args.resume !== undefined) callArgs.resume = args.resume
+            if (args.job_id !== undefined) callArgs.job_id = args.job_id
+            if (args.resume_token !== undefined) callArgs.resume_token = args.resume_token
+            if (args.allow_full_restart_fallback !== undefined) {
+              callArgs.allow_full_restart_fallback = args.allow_full_restart_fallback
+            }
+            if (args.confirm_failed_restart !== undefined) {
+              callArgs.confirm_failed_restart = args.confirm_failed_restart
+            }
             return proxy("index_project", callArgs)
           }
 

@@ -446,8 +446,8 @@ describe("project_status tool", () => {
   it("describes the readiness path from list to index to stats", () => {
     const tools = buildToolRegistry(makeConfig())
     expect(tools.project_status.description).toContain("Start with 'list' to see indexed projects")
-    expect(tools.project_status.description).toContain("use 'index' if a project is missing or stale")
-    expect(tools.project_status.description).toContain("then use 'stats' to confirm the index is ready")
+    expect(tools.project_status.description).toContain("use 'status' to inspect durable state")
+    expect(tools.project_status.description).toContain("use 'index' or 'resume' to start or continue indexing")
   })
 
   it("calls project_info for list action", async () => {
@@ -468,6 +468,89 @@ describe("project_status tool", () => {
       "project_info",
       expect.objectContaining({ action: "stats", project_id: "proj-1" }),
     )
+  })
+
+  it("calls project_info for status action", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.project_status.execute({ action: "status", project_id: "proj-1", path: "/project" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "project_info",
+      expect.objectContaining({ action: "status", project_id: "proj-1", path: "/project" }),
+    )
+  })
+
+  it("calls project_info for cancel action", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.project_status.execute({ action: "cancel", project_id: "proj-1", path: "/project", job_id: "job-9" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "project_info",
+      expect.objectContaining({ action: "cancel_index", project_id: "proj-1", path: "/project", job_id: "job-9" }),
+    )
+  })
+
+  it("calls project_info for cleanup action", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.project_status.execute({ action: "cleanup", project_id: "proj-1", path: "/project" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "project_info",
+      expect.objectContaining({ action: "cleanup_abandoned_index_jobs", project_id: "proj-1", path: "/project" }),
+    )
+  })
+
+  it("calls index_project with resume=true for resume action with job_id and resume_token", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.project_status.execute({
+      action: "resume",
+      path: "/project",
+      job_id: "job-42",
+      resume_token: "tok-99",
+    }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "index_project",
+      expect.objectContaining({
+        path: "/project",
+        resume: true,
+        job_id: "job-42",
+        resume_token: "tok-99",
+      }),
+    )
+  })
+
+  it("returns error string for resume action missing job_id", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.project_status.execute({
+      action: "resume",
+      path: "/project",
+      resume_token: "tok-99",
+    }, mockContext)
+    expect(result).toContain("job_id is required")
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+
+  it("returns error string for resume action missing path", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.project_status.execute({
+      action: "resume",
+      job_id: "job-42",
+      resume_token: "tok-99",
+    }, mockContext)
+    expect(result).toContain("path is required")
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+
+  it("returns error string for resume action missing resume_token", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.project_status.execute({
+      action: "resume",
+      path: "/project",
+      job_id: "job-42",
+    }, mockContext)
+    expect(result).toContain("resume_token is required")
+    expect(callMemoryTool).not.toHaveBeenCalled()
   })
 
   it("requests projection via project_status with default relation_scope and sort_mode", async () => {
@@ -614,6 +697,61 @@ describe("project_status tool", () => {
       "index_project",
       expect.objectContaining({ path: "/project", force: true }),
     )
+  })
+
+  it("passes additive resume flags for index", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.project_status.execute({
+      action: "index",
+      path: "/project",
+      resume: true,
+      job_id: "job-1",
+      resume_token: "token-1",
+      allow_full_restart_fallback: true,
+      confirm_failed_restart: true,
+    }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "index_project",
+      expect.objectContaining({
+        path: "/project",
+        resume: true,
+        job_id: "job-1",
+        resume_token: "token-1",
+        allow_full_restart_fallback: true,
+        confirm_failed_restart: true,
+      }),
+    )
+  })
+
+  it("calls index_project for resume action", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.project_status.execute({
+      action: "resume",
+      path: "/project",
+      job_id: "job-1",
+      resume_token: "token-1",
+      allow_full_restart_fallback: true,
+    }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "index_project",
+      expect.objectContaining({
+        path: "/project",
+        resume: true,
+        job_id: "job-1",
+        resume_token: "token-1",
+        allow_full_restart_fallback: true,
+      }),
+    )
+  })
+
+  it("requires path, job_id, and resume_token for resume action", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await expect(tools.project_status.execute({ action: "resume" }, mockContext)).resolves.toContain("path is required")
+    await expect(tools.project_status.execute({ action: "resume", path: "/project" }, mockContext)).resolves.toContain("job_id is required")
+    await expect(tools.project_status.execute({ action: "resume", path: "/project", job_id: "job-1" }, mockContext)).resolves.toContain("resume_token is required")
+    expect(callMemoryTool).not.toHaveBeenCalled()
   })
 
 })

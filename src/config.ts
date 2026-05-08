@@ -59,6 +59,13 @@ export interface PluginConfig {
     enabled: boolean
     debounceMs: number
     minReindexIntervalMs: number
+    resume?: {
+      enabled?: boolean
+      pollIntervalMs?: number
+      maxPollMs?: number
+      allowFullRestartFallback?: boolean
+      allowDestructiveRecovery?: boolean
+    }
   }
   preferenceLearning: {
     enabled: boolean
@@ -170,6 +177,13 @@ export const DEFAULT_CONFIG: PluginConfig = {
     enabled: true,
     debounceMs: 10_000,
     minReindexIntervalMs: 300_000,
+    resume: {
+      enabled: true,
+      pollIntervalMs: 5_000,
+      maxPollMs: 300_000,
+      allowFullRestartFallback: false,
+      allowDestructiveRecovery: false,
+    },
   },
   preferenceLearning: {
     enabled: false,
@@ -258,7 +272,14 @@ function mergeConfig(defaults: PluginConfig, overrides: Partial<any>): PluginCon
     preemptiveCompaction: { ...defaults.preemptiveCompaction, ...overrides.preemptiveCompaction },
     privacy: { ...defaults.privacy, ...overrides.privacy },
     compactionSummaryCapture: { ...defaults.compactionSummaryCapture, ...overrides.compactionSummaryCapture },
-    codeIndexSync: { ...defaults.codeIndexSync, ...overrides.codeIndexSync },
+    codeIndexSync: {
+      ...defaults.codeIndexSync,
+      ...overrides.codeIndexSync,
+      resume: {
+        ...defaults.codeIndexSync.resume,
+        ...overrides.codeIndexSync?.resume,
+      },
+    },
     preferenceLearning: { ...defaults.preferenceLearning, ...overrides.preferenceLearning },
     captureModel: { ...defaults.captureModel, ...overrides.captureModel },
     memoryScope: { ...defaults.memoryScope, ...overrides.memoryScope },

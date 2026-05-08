@@ -68,7 +68,14 @@
   "codeIndexSync": {
     "enabled": true,
     "debounceMs": 10000,            // Wait after detecting staleness before re-indexing
-    "minReindexIntervalMs": 300000  // Cooldown between successful force re-indexes
+    "minReindexIntervalMs": 300000, // Cooldown between successful re-indexes
+    "resume": {
+      "enabled": true,                    // Enable checkpoint resume for interrupted index jobs
+      "pollIntervalMs": 5000,             // How often to poll server status during resume (ms)
+      "maxPollMs": 300000,                // Maximum time to wait for resume completion (ms, 5 min)
+      "allowFullRestartFallback": false,  // Allow full rebuild when resume is not possible (default: false for safety)
+      "allowDestructiveRecovery": false   // Allow destructive recovery for corrupt storage (default: false)
+    }
   },
 
   // Preference learning from conversational signals
