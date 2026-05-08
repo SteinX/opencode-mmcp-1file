@@ -726,4 +726,79 @@ describe("code-index-sync", () => {
     expect(saved.workspaces[workspaceKey]?.["lastReindexAt"]).toBeGreaterThan(0)
     expect(saved.workspaces[workspaceKey]?.["lastObservedServerState"]).toBe("completed")
   })
+
+  it("includes configured filters in legacy index call", async () => {
+    const config = makeConfig(dataDir)
+    config.codeIndexSync.includePatterns = ["src/**/*"]
+    config.codeIndexSync.excludePatterns = ["**/*.log"]
+
+    await ensureCodeIndexFresh(config, workspaceDir, "startup")
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      config,
+      "index_project",
+      expect.objectContaining({
+        path: workspaceDir,
+        force: true,
+        include_patterns: ["src/**/*"],
+        exclude_patterns: ["**/*.log"],
+      }),
+    )
+  })
+
+  it("does not include filters in resume calls", async () => {
+    vi.mocked(getProjectDurableStatus).mockResolvedValueOnce({
+      state: "indexing",
+      reason_code: "in_progress",
+      job_id: "job-1",
+      resume_token: "token-1",
+      active_generation: 1,
+      target_generation: 2,
+    } as any)
+
+    const config = makeConfig(dataDir)
+    config.codeIndexSync.includePatterns = ["src/**/*"]
+    config.codeIndexSync.resume = { enabled: true, pollIntervalMs: 10, maxPollMs: 100 }
+
+    await ensureCodeIndexFresh(config, workspaceDir, "startup")
+    await vi.advanceTimersByTimeAsync(50)
+
+    const calls = vi.mocked(callMemoryTool).mock.calls
+    const resumeCall = calls.find(c => c[2]?.resume === true)
+    if (resumeCall) {
+      expect(resumeCall[2]).not.toHaveProperty("include_patterns")
+      expect(resumeCall[2]).not.toHaveProperty("exclude_patterns")
+    }
+  })
+
+  it("reindexes when filter config changes even if fingerprint is unchanged", async () => {
+    const config = makeConfig(dataDir)
+
+    await ensureCodeIndexFresh(config, workspaceDir, "startup")
+    await vi.advanceTimersByTimeAsync(50)
+    vi.mocked(callMemoryTool).mockClear()
+
+    config.codeIndexSync.includePatterns = ["src/**/*"]
+
+    await ensureCodeIndexFresh(config, workspaceDir, "session.idle")
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(callMemoryTool).toHaveBeenCalled()
+  })
+
+  it("skips index and logs warning when filter config is invalid", async () => {
+    const { logger } = await import("../../src/utils/logger.js")
+    const config = makeConfig(dataDir)
+    config.codeIndexSync.includePatterns = ["/invalid/absolute"]
+
+    await ensureCodeIndexFresh(config, workspaceDir, "startup")
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(callMemoryTool).not.toHaveBeenCalled()
+    expect(logger.warn).toHaveBeenCalledWith(
+      "Code index sync skipped due to invalid filter config",
+      expect.objectContaining({ error: expect.stringContaining("Error:") }),
+    )
+  })
 })

@@ -59,6 +59,8 @@ export interface PluginConfig {
     enabled: boolean
     debounceMs: number
     minReindexIntervalMs: number
+    includePatterns?: string[]
+    excludePatterns?: string[]
     resume?: {
       enabled?: boolean
       pollIntervalMs?: number

@@ -74,7 +74,15 @@ const { stripPrivateContent } = await import("../../src/utils/privacy.js")
 const { applyConfig } = await import("../../src/config.js")
 const { isConnectionFailed, getConnectionStatus } = await import("../../src/services/connection-state.js")
 
-function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
+function makeConfig(
+  overrides?: Partial<Omit<PluginConfig, "codeIndexSync">> & { codeIndexSync?: Partial<PluginConfig["codeIndexSync"]> },
+): PluginConfig {
+  const codeIndexSync = {
+    enabled: true,
+    debounceMs: 10000,
+    minReindexIntervalMs: 300000,
+    ...overrides?.codeIndexSync,
+  }
   return {
     chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 10, maxInjectedMemories: 6, injectOn: "first", shortQueryMinLength: 3, minScore: 0.35 },
     autoCapture: { enabled: true, debounceMs: 10000, language: "en" },
@@ -83,7 +91,7 @@ function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
     preemptiveCompaction: { enabled: true, thresholdPercent: 80, modelContextLimit: 200000, autoContinue: true },
     privacy: { enabled: true },
     compactionSummaryCapture: { enabled: true },
-    codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
+    codeIndexSync,
     captureModel: { provider: "openai", model: "gpt-4o-mini", apiUrl: "", apiKey: "" },
     memoryScope: { namespace: "", shareAcrossAgents: true, includeAgentMetadata: true, includeRunMetadata: false, userId: "", defaultMetadata: {} },
     mcpServer: { command: [], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1", reconnectIntervalMs: 30000, heartbeatIntervalMs: 20000 },
@@ -699,6 +707,75 @@ describe("project_status tool", () => {
     )
   })
 
+  it("forwards config defaults when index filters are omitted", async () => {
+    const tools = buildToolRegistry(makeConfig({
+      codeIndexSync: {
+        enabled: true,
+        debounceMs: 10000,
+        minReindexIntervalMs: 300000,
+        includePatterns: ["src/**/*"],
+        excludePatterns: ["**/*.log"],
+      },
+    }))
+    await tools.project_status.execute({ action: "index", path: "/project" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "index_project",
+      expect.objectContaining({
+        path: "/project",
+        include_patterns: ["src/**/*"],
+        exclude_patterns: ["**/*.log"],
+      }),
+    )
+  })
+
+  it("lets call-time index filters override config defaults", async () => {
+    const tools = buildToolRegistry(makeConfig({
+      codeIndexSync: {
+        enabled: true,
+        debounceMs: 10000,
+        minReindexIntervalMs: 300000,
+        includePatterns: ["src/**/*"],
+        excludePatterns: ["**/*.log"],
+      },
+    }))
+    await tools.project_status.execute({ action: "index", path: "/project", include_patterns: ["tests/**/*"], exclude_patterns: [] }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "index_project",
+      expect.objectContaining({
+        include_patterns: ["tests/**/*"],
+        exclude_patterns: [],
+      }),
+    )
+  })
+
+  it("forwards empty include patterns", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.project_status.execute({ action: "index", path: "/project", include_patterns: [] }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "index_project",
+      expect.objectContaining({ include_patterns: [] }),
+    )
+  })
+
+  it("omits filter keys when index filters are not provided and config has none", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.project_status.execute({ action: "index", path: "/project" }, mockContext)
+    expect(callMemoryTool).toHaveBeenCalledTimes(1)
+    const thirdArg = (callMemoryTool as any).mock.calls[0][2]
+    expect(thirdArg).not.toHaveProperty("include_patterns")
+    expect(thirdArg).not.toHaveProperty("exclude_patterns")
+  })
+
+  it("returns an error for invalid index filters without calling MCP", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.project_status.execute({ action: "index", path: "/project", include_patterns: ["/absolute/path"] }, mockContext)
+    expect(result).toContain("Error:")
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+
   it("passes additive resume flags for index", async () => {
     const tools = buildToolRegistry(makeConfig())
     await tools.project_status.execute({
@@ -722,6 +799,20 @@ describe("project_status tool", () => {
         confirm_failed_restart: true,
       }),
     )
+  })
+
+  it("rejects filters for resume action without calling MCP", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.project_status.execute({ action: "resume", path: "/p", job_id: "j", resume_token: "t", include_patterns: ["src/**/*"] }, mockContext)
+    expect(result).toContain("Error:")
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+
+  it("rejects filters for resume-continuation index without calling MCP", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.project_status.execute({ action: "index", path: "/p", job_id: "j", resume_token: "t", include_patterns: ["src/**/*"] }, mockContext)
+    expect(result).toContain("Error:")
+    expect(callMemoryTool).not.toHaveBeenCalled()
   })
 
   it("calls index_project for resume action", async () => {

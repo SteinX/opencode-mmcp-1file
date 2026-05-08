@@ -141,7 +141,12 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
       "maxPollMs": 300000,                // Maximum time to wait for resume completion (ms, 5 min)
       "allowFullRestartFallback": false,  // Allow full rebuild when resume is not possible (default: false for safety)
       "allowDestructiveRecovery": false   // Allow destructive recovery for corrupt storage (default: false)
-    }
+    },
+    // Optional code-index scope filters. Omit both to use MCP server defaults (env vars CODE_INDEX_INCLUDE_PATTERNS / CODE_INDEX_EXCLUDE_PATTERNS).
+    // Empty array [] is meaningful: it disables that side of filtering entirely.
+    // Values are project-relative glob patterns using / separators, must not start with /.
+    // "includePatterns": ["src/**/*", "tests/**/*"],  // Include only these paths; omit to use server default
+    // "excludePatterns": ["**/generated/**", "**/*.min.js"]  // Exclude these paths; omit to use server default
   },
 
   // Preference learning from conversational signals
@@ -214,7 +219,7 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
 | **preemptiveCompaction** | Early compaction trigger based on token estimates |
 | **privacy** | Redaction of `<private>` tagged content |
 | **compactionSummaryCapture** | Saves compaction summaries as memories |
-| **codeIndexSync** | Detects stale workspace indexes; queries server status first; resumes interrupted jobs when possible; falls back to full rebuild only when policy permits (`allowFullRestartFallback`). Nested `resume` policy controls polling, timeouts, and fallback behavior. |
+| **codeIndexSync** | Detects stale workspace indexes; queries server status first; resumes interrupted jobs when possible; falls back to full rebuild only when policy permits (`allowFullRestartFallback`). Nested `resume` policy controls polling, timeouts, and fallback behavior. Optional `includePatterns` / `excludePatterns` filter defaults narrow which files the server indexes; omit to use server env-var defaults. |
 | **preferenceLearning** | Controls preference extraction, confidence thresholds, scope, and injection cadence for learned user preferences |
 | **captureModel** | LLM for auto-capture summarization — uses direct HTTP when apiKey is set, otherwise OpenCode session API |
 | **memoryScope** | Logical scope, agent-sharing defaults, and default metadata layered inside the current shard |
@@ -222,6 +227,33 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
 | **systemPrompt** | Agent guidance via Memory Protocol in system prompt |
 
 By default, `USER:` memories are prioritized ahead of `DECISION:`, `PATTERN:`, and `CONTEXT:` in Project Knowledge. This keeps explicit user-requested memories more visible during session bootstrap and compaction recovery.
+
+### Code Index Filters
+
+The plugin can narrow the files the Memory MCP server indexes to a specific subset of your workspace.
+
+**Config defaults** (`codeIndexSync` section, camelCase):
+
+```jsonc
+"codeIndexSync": {
+  "includePatterns": ["src/**/*", "tests/**/*"],  // project-relative globs, / separator, no leading /
+  "excludePatterns": ["**/generated/**"]
+}
+```
+
+**Manual override** at call time (`project_status` tool, snake_case):
+
+```
+project_status(action: "index", include_patterns: ["src/**/*"], exclude_patterns: ["**/dist/**"])
+```
+
+**Semantics:**
+- Omitting a filter key (not set in config) → uses MCP server env-var default (`CODE_INDEX_INCLUDE_PATTERNS` / `CODE_INDEX_EXCLUDE_PATTERNS`)
+- Empty array (`[]`) → disables that filter side entirely (overrides any server default)
+- `excludePatterns` wins over `includePatterns` when both match the same file
+- Filters are **not** accepted on resume operations (`action: "resume"` or resume-style index calls)
+- Server hard invariants (skip dirs, extension whitelist, `.gitignore`) are always applied regardless of these filters
+- A change to configured filter defaults triggers a fresh re-index on the next idle check
 
 ### Physical Shard vs Logical Scope
 
