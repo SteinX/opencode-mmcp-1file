@@ -289,6 +289,29 @@ describe("mcp-client", () => {
     expect(mockClient.close).toHaveBeenCalled()
   })
 
+  it("coalesces concurrent stdio reconnect attempts", async () => {
+    let resolveConnect: (() => void) | undefined
+    const firstClient = createMockClient()
+    const secondClient = createMockClient()
+    firstClient.connect.mockImplementation(() => new Promise<void>((resolve) => {
+      resolveConnect = resolve
+    }))
+    const { mod, mockStdioTransport } = await setupModuleWithClientFactory([firstClient, secondClient])
+    const config = makeConfig("stdio")
+
+    const firstReconnect = mod.tryReconnect(config)
+    const secondReconnect = mod.tryReconnect(config)
+
+    await Promise.resolve()
+    expect(mockStdioTransport).toHaveBeenCalledTimes(1)
+    expect(firstClient.connect).toHaveBeenCalledTimes(1)
+    expect(secondClient.connect).not.toHaveBeenCalled()
+
+    resolveConnect?.()
+    await expect(Promise.all([firstReconnect, secondReconnect])).resolves.toEqual([true, true])
+    expect(mockConnectionState.markConnectionHealthy).toHaveBeenCalledTimes(1)
+  })
+
   it("resetMemoryClientForServerControl closes connection and allows recreating the client without server lifecycle calls", async () => {
     vi.resetModules()
     const firstClient = createMockClient()

@@ -555,6 +555,7 @@ type ScopedToolArgs = Record<string, unknown> & {
 
 let mcpClient: Client | null = null
 let connectionPromise: Promise<Client> | null = null
+let resetConnectionPromise: Promise<Client> | null = null
 let connectionFailureHandler: (() => void) | null = null
 let lastHealthCheckAt = 0
 let healthCheckPromise: Promise<boolean> | null = null
@@ -700,13 +701,23 @@ async function failActiveConnection(): Promise<void> {
 }
 
 async function resetClientConnection(config: PluginConfig): Promise<Client> {
-  await disposeClient()
+  if (resetConnectionPromise) return resetConnectionPromise
 
-  const client = await connectToServer(config)
-  mcpClient = client
-  startHeartbeat(config)
-  markConnectionHealthy()
-  return client
+  resetConnectionPromise = (async () => {
+    await disposeClient()
+
+    const client = await connectToServer(config)
+    mcpClient = client
+    startHeartbeat(config)
+    markConnectionHealthy()
+    return client
+  })()
+
+  try {
+    return await resetConnectionPromise
+  } finally {
+    resetConnectionPromise = null
+  }
 }
 
 async function withConnectionRetry<T>(

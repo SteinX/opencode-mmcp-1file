@@ -193,6 +193,27 @@ describe("connection-state", () => {
       expect(getConnectionStatus().retrying).toBe(true)
     })
 
+    it("skips overlapping retries while a previous attempt is still running", async () => {
+      let resolveRetry: ((value: boolean) => void) | undefined
+      const retryFn = vi.fn(() => new Promise<boolean>((resolve) => {
+        resolveRetry = resolve
+      }))
+      startRetryLoop(retryFn, 5_000)
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(retryFn).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(retryFn).toHaveBeenCalledTimes(1)
+      expect(logger.debug).toHaveBeenCalledWith("Skipping MCP reconnection attempt because previous attempt is still running")
+
+      resolveRetry?.(false)
+      await vi.runOnlyPendingTimersAsync()
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(retryFn).toHaveBeenCalledTimes(2)
+    })
+
     it("stops previous loop when called again", async () => {
       const retryFn1 = vi.fn().mockResolvedValue(false)
       const retryFn2 = vi.fn().mockResolvedValue(false)

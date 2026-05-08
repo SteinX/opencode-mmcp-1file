@@ -16,6 +16,7 @@ let connectionFailed = false
 let failureCount = 0
 let lastFailureTime: number | null = null
 let retryTimer: ReturnType<typeof setInterval> | null = null
+let retryInFlight = false
 let onReconnect: (() => void) | null = null
 
 export function isConnectionFailed(): boolean {
@@ -70,6 +71,12 @@ export function startRetryLoop(
   onReconnect = reconnectCallback ?? null
 
   retryTimer = setInterval(async () => {
+    if (retryInFlight) {
+      logger.debug("Skipping MCP reconnection attempt because previous attempt is still running")
+      return
+    }
+
+    retryInFlight = true
     logger.debug("Attempting MCP reconnection...")
     try {
       const success = await retryFn()
@@ -79,6 +86,8 @@ export function startRetryLoop(
       }
     } catch {
       logger.debug("MCP reconnection attempt failed")
+    } finally {
+      retryInFlight = false
     }
   }, intervalMs)
 
@@ -93,6 +102,7 @@ export function stopRetryLoop(): void {
     clearInterval(retryTimer)
     retryTimer = null
   }
+  retryInFlight = false
   onReconnect = null
 }
 
