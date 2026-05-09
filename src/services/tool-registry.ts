@@ -1,5 +1,5 @@
 /**
- * Unified tool registry — consolidates 17 memory tools into 12 ergonomic tools.
+ * Unified tool registry — consolidates 17 memory tools into 14 ergonomic tools.
  * Each tool automatically routes to the appropriate underlying MCP operation.
  */
 
@@ -91,6 +91,19 @@ function projectionRequestDefaults(args: {
     relationScope: args.relation_scope ?? "all",
     sortMode: args.sort_mode ?? "canonical",
   }
+}
+
+async function getFreshProjectProjection(config: PluginConfig, args: {
+  projectId: string
+  relationScope: ProjectionRelationScope
+  sortMode: string
+}): Promise<string> {
+  const result = await getProjectProjectionInfo(config, {
+    projectId: args.projectId,
+    relationScope: args.relationScope,
+    sortMode: args.sortMode,
+  })
+  return result?.raw != null ? JSON.stringify(result.raw) : "Error: projection request failed"
 }
 
 export function buildToolRegistry(config: PluginConfig, directory?: string): ToolMap {
@@ -361,6 +374,62 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
       },
     }),
 
+    project_ensure_index: tool({
+      description:
+        "Ensure a project is indexed for readiness checks. Use this for the common 'make sure indexing exists or is current' workflow; it inspects durable status first, resumes only when the server provides resumable identity, and otherwise starts a clean fresh index without exposing filter or resume identity fields to agents.",
+      args: {
+        path: tool.schema.string(),
+      },
+      execute: async (args) => {
+        const status = await getProjectDurableStatus(config, args.path)
+        if (!status) {
+          return proxy("index_project", { path: args.path })
+        }
+
+        if (
+          status.reason_code === "active_index_running"
+          || status.state === "queued"
+          || status.state === "running"
+        ) {
+          return JSON.stringify({
+            status: "already_running",
+            state: status.state,
+            reason_code: status.reason_code,
+            progress: status.progress,
+          })
+        }
+
+        if (status.state === "completed") {
+          return JSON.stringify({
+            status: "already_ready",
+            state: status.state,
+            reason_code: status.reason_code,
+          })
+        }
+
+        if (status.can_resume === true) {
+          if (!status.job_id || !status.resume_token) {
+            return JSON.stringify({
+              status: "blocked",
+              reason: "missing_resume_identity",
+              state: status.state,
+              reason_code: status.reason_code,
+            })
+          }
+
+          return proxy("index_project", {
+            path: args.path,
+            resume: true,
+            job_id: status.job_id,
+            resume_token: status.resume_token,
+            allow_full_restart_fallback: false,
+          })
+        }
+
+        return proxy("index_project", { path: args.path })
+      },
+    }),
+
     project_recover_index: tool({
       description:
         "Recover an interrupted project index for a path. The plugin checks durable status, resumes only when the server provides job_id and resume_token, and never exposes resume/filter parameters to agents.",
@@ -425,11 +494,46 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
       },
     }),
 
+    project_projection: tool({
+      description:
+        "Simple project projection/readback entry point. Use this for ordinary projection workflows instead of project_status. " +
+        "Provide project_id, optionally add locator to read back an existing projection, and optionally set relation_scope or sort_mode when you need non-default traversal or ordering.",
+      args: {
+        project_id: tool.schema.string(),
+        locator: tool.schema.string().optional(),
+        relation_scope: tool.schema.enum(["all", "calls", "imports", "type_links", "none"]).optional(),
+        sort_mode: tool.schema.string().optional(),
+      },
+      execute: async (args) => {
+        if (!args.project_id) return "Error: project_id is required for projection"
+        const { relationScope, sortMode } = projectionRequestDefaults(args)
+
+        if (!args.locator) {
+          return getFreshProjectProjection(config, {
+            projectId: args.project_id,
+            relationScope,
+            sortMode,
+          })
+        }
+
+        const result = await getProjectProjectionByLocatorInfo(config, { locator: args.locator })
+        if (!result || isMissingProjectLocator(result.locator)) {
+          return getFreshProjectProjection(config, {
+            projectId: args.project_id,
+            relationScope,
+            sortMode,
+          })
+        }
+
+        return result.raw != null ? JSON.stringify(result.raw) : "Error: projection readback failed"
+      },
+    }),
+
     project_status: tool({
       description:
-        "Check project indexing status and manage indexing lifecycle. Start with 'list' to see indexed projects, use 'status' to inspect durable state, use 'index' or 'resume' to start or continue indexing, then use 'stats' to confirm the index is ready. " +
+        "Check project indexing status and manage indexing lifecycle. Start with 'list' to see indexed projects, use 'status' to inspect durable state, use 'ensure_index' for normal readiness workflows, then use 'stats' to confirm the index is ready. " +
         "For ordinary index triggers, prefer project_index; for interrupted indexes, prefer project_recover_index to avoid optional-parameter pollution. " +
-        "Use 'cancel' to stop an active index, 'cleanup' to clear abandoned jobs, and 'projection' / 'projection_by_locator' for short-lived projection exports. For 'index', optional include_patterns/exclude_patterns override filter scope (omit = use plugin/server defaults; [] = disable that side; not allowed on resume).",
+        "Use project_projection for ordinary projection/readback workflows; keep 'projection' / 'projection_by_locator' here only for compatibility. Use 'cancel' to stop an active index, 'cleanup' to clear abandoned jobs, and 'projection' / 'projection_by_locator' for short-lived projection exports. For 'index', optional include_patterns/exclude_patterns override filter scope (omit = use plugin/server defaults; [] = disable that side; not allowed on resume).",
       args: {
         action: tool.schema.enum(["list", "status", "index", "resume", "cancel", "cleanup", "stats", "projection", "projection_by_locator"]),
         path: tool.schema.string().optional(),
@@ -483,12 +587,11 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
           case "projection": {
             if (!args.project_id) return "Error: project_id is required for projection action"
             const { relationScope, sortMode } = projectionRequestDefaults(args)
-            const result = await getProjectProjectionInfo(config, {
+            return getFreshProjectProjection(config, {
               projectId: args.project_id,
               relationScope,
               sortMode,
             })
-            return result ? JSON.stringify(result.raw) : "Error: projection request failed"
           }
 
           case "projection_by_locator": {
@@ -497,12 +600,11 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
               if (!args.project_id) {
                 return "Error: project_id is required when locator readback is missing or invalid"
               }
-              const fresh = await getProjectProjectionInfo(config, {
+              return getFreshProjectProjection(config, {
                 projectId: args.project_id,
                 relationScope,
                 sortMode,
               })
-              return fresh ? JSON.stringify(fresh.raw) : "Error: projection request failed"
             }
 
             if (!args.locator) {

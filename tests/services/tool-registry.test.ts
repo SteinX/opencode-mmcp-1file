@@ -128,7 +128,7 @@ describe("buildToolRegistry", () => {
     vi.clearAllMocks()
   })
 
-  it("returns 12 unified tools", () => {
+  it("returns 14 unified tools", () => {
     const tools = buildToolRegistry(makeConfig())
     const toolNames = Object.keys(tools)
     expect(toolNames).toEqual([
@@ -138,7 +138,9 @@ describe("buildToolRegistry", () => {
       "memory_manage",
       "code_search",
       "project_index",
+      "project_ensure_index",
       "project_recover_index",
+      "project_projection",
       "project_status",
       "knowledge_graph",
       "get_status",
@@ -497,7 +499,8 @@ describe("project_status tool", () => {
     const tools = buildToolRegistry(makeConfig())
     expect(tools.project_status.description).toContain("Start with 'list' to see indexed projects")
     expect(tools.project_status.description).toContain("use 'status' to inspect durable state")
-    expect(tools.project_status.description).toContain("use 'index' or 'resume' to start or continue indexing")
+    expect(tools.project_status.description).toContain("use 'ensure_index' for normal readiness workflows")
+    expect(tools.project_status.description).toContain("Use project_projection for ordinary projection/readback workflows")
   })
 
   it("calls project_info for list action", async () => {
@@ -607,8 +610,8 @@ describe("project_status tool", () => {
     const tools = buildToolRegistry(makeConfig())
     vi.mocked(getProjectProjectionInfo).mockResolvedValueOnce({
       action: "projection",
-      raw: { action: "projection", locator: { lookup: { state: "created" } } },
-    } as any)
+      raw: { action: "projection", locator: { lookup: { state: "created", raw: {} }, raw: {} } },
+    })
 
     const result = await tools.project_status.execute({ action: "projection", project_id: "proj-1" }, mockContext)
 
@@ -617,7 +620,7 @@ describe("project_status tool", () => {
       relationScope: "all",
       sortMode: "canonical",
     })
-    expect(result).toBe(JSON.stringify({ action: "projection", locator: { lookup: { state: "created" } } }))
+    expect(result).toBe(JSON.stringify({ action: "projection", locator: { lookup: { state: "created", raw: {} }, raw: {} } }))
     expect(callMemoryTool).not.toHaveBeenCalled()
   })
 
@@ -641,9 +644,9 @@ describe("project_status tool", () => {
     const tools = buildToolRegistry(makeConfig())
     vi.mocked(getProjectProjectionByLocatorInfo).mockResolvedValueOnce({
       action: "projection_by_locator",
-      locator: { lookup: { state: "resolved" } },
+      locator: { lookup: { state: "resolved", raw: {} }, raw: {} },
       raw: { action: "projection_by_locator", ok: true },
-    } as any)
+    })
     vi.mocked(isMissingProjectLocator).mockReturnValueOnce(false)
 
     const result = await tools.project_status.execute({
@@ -661,14 +664,14 @@ describe("project_status tool", () => {
     const tools = buildToolRegistry(makeConfig())
     vi.mocked(getProjectProjectionByLocatorInfo).mockResolvedValueOnce({
       action: "projection_by_locator",
-      locator: { lookup: { state: "missing", reasonCode: "invalid_locator" } },
+      locator: { lookup: { state: "missing", reasonCode: "invalid_locator", raw: {} }, raw: {} },
       raw: { action: "projection_by_locator", ok: false },
-    } as any)
+    })
     vi.mocked(isMissingProjectLocator).mockReturnValueOnce(true)
     vi.mocked(getProjectProjectionInfo).mockResolvedValueOnce({
       action: "projection",
-      raw: { action: "projection", locator: { lookup: { state: "created" } } },
-    } as any)
+      raw: { action: "projection", locator: { lookup: { state: "created", raw: {} }, raw: {} } },
+    })
 
     const result = await tools.project_status.execute({
       action: "projection_by_locator",
@@ -683,7 +686,7 @@ describe("project_status tool", () => {
       relationScope: "calls",
       sortMode: "canonical",
     })
-    expect(result).toBe(JSON.stringify({ action: "projection", locator: { lookup: { state: "created" } } }))
+    expect(result).toBe(JSON.stringify({ action: "projection", locator: { lookup: { state: "created", raw: {} }, raw: {} } }))
   })
 
   it("falls back to fresh projection when locator readback returns null", async () => {
@@ -692,7 +695,7 @@ describe("project_status tool", () => {
     vi.mocked(getProjectProjectionInfo).mockResolvedValueOnce({
       action: "projection",
       raw: { action: "projection", ok: true },
-    } as any)
+    })
 
     const result = await tools.project_status.execute({
       action: "projection_by_locator",
@@ -806,7 +809,7 @@ describe("project_status tool", () => {
     const tools = buildToolRegistry(makeConfig())
     await tools.project_status.execute({ action: "index", path: "/project" }, mockContext)
     expect(callMemoryTool).toHaveBeenCalledTimes(1)
-    const thirdArg = (callMemoryTool as any).mock.calls[0][2]
+    const thirdArg = vi.mocked(callMemoryTool).mock.calls[0]?.[2] as Record<string, unknown>
     expect(thirdArg).not.toHaveProperty("include_patterns")
     expect(thirdArg).not.toHaveProperty("exclude_patterns")
   })
@@ -887,6 +890,222 @@ describe("project_status tool", () => {
     expect(callMemoryTool).not.toHaveBeenCalled()
   })
 
+})
+
+describe("project_projection tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("requests a fresh projection with defaults when locator is omitted", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    vi.mocked(getProjectProjectionInfo).mockResolvedValueOnce({
+      action: "projection",
+      raw: { action: "projection", ok: true },
+    })
+
+    const result = await tools.project_projection.execute({ project_id: "proj-1" }, mockContext)
+
+    expect(getProjectProjectionInfo).toHaveBeenCalledWith(expect.anything(), {
+      projectId: "proj-1",
+      relationScope: "all",
+      sortMode: "canonical",
+    })
+    expect(result).toBe(JSON.stringify({ action: "projection", ok: true }))
+  })
+
+  it("uses locator readback when locator resolves", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    vi.mocked(getProjectProjectionByLocatorInfo).mockResolvedValueOnce({
+      action: "projection_by_locator",
+      locator: { lookup: { state: "resolved", raw: {} }, raw: {} },
+      raw: { action: "projection_by_locator", ok: true },
+    })
+    vi.mocked(isMissingProjectLocator).mockReturnValueOnce(false)
+
+    const result = await tools.project_projection.execute({ project_id: "proj-1", locator: "loc-1" }, mockContext)
+
+    expect(getProjectProjectionByLocatorInfo).toHaveBeenCalledWith(expect.anything(), { locator: "loc-1" })
+    expect(getProjectProjectionInfo).not.toHaveBeenCalled()
+    expect(result).toBe(JSON.stringify({ action: "projection_by_locator", ok: true }))
+  })
+
+  it("falls back to fresh projection when locator readback returns null", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    vi.mocked(getProjectProjectionByLocatorInfo).mockResolvedValueOnce(null)
+    vi.mocked(getProjectProjectionInfo).mockResolvedValueOnce({
+      action: "projection",
+      raw: { action: "projection", ok: true },
+    })
+
+    const result = await tools.project_projection.execute({ project_id: "proj-1", locator: "loc-1" }, mockContext)
+
+    expect(getProjectProjectionInfo).toHaveBeenCalledWith(expect.anything(), {
+      projectId: "proj-1",
+      relationScope: "all",
+      sortMode: "canonical",
+    })
+    expect(result).toBe(JSON.stringify({ action: "projection", ok: true }))
+  })
+
+  it("falls back to fresh projection when locator is missing", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    vi.mocked(getProjectProjectionByLocatorInfo).mockResolvedValueOnce({
+      action: "projection_by_locator",
+      locator: { lookup: { state: "missing", reasonCode: "invalid_locator", raw: {} }, raw: {} },
+      raw: { action: "projection_by_locator", ok: false },
+    })
+    vi.mocked(isMissingProjectLocator).mockReturnValueOnce(true)
+    vi.mocked(getProjectProjectionInfo).mockResolvedValueOnce({
+      action: "projection",
+      raw: { action: "projection", ok: true },
+    })
+
+    const result = await tools.project_projection.execute({ project_id: "proj-1", locator: "loc-1" }, mockContext)
+
+    expect(getProjectProjectionInfo).toHaveBeenCalledWith(expect.anything(), {
+      projectId: "proj-1",
+      relationScope: "all",
+      sortMode: "canonical",
+    })
+    expect(result).toBe(JSON.stringify({ action: "projection", ok: true }))
+  })
+
+  it("returns an error when a fresh projection fails", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    vi.mocked(getProjectProjectionInfo).mockResolvedValueOnce(null)
+
+    const result = await tools.project_projection.execute({ project_id: "proj-1" }, mockContext)
+
+    expect(result).toBe("Error: projection request failed")
+  })
+})
+
+describe("project_ensure_index tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("describes readiness-only behavior", () => {
+    const tools = buildToolRegistry(makeConfig())
+    expect(tools.project_ensure_index.description).toContain("Ensure a project is indexed for readiness checks")
+    expect(tools.project_ensure_index.description).toContain("without exposing filter or resume identity fields")
+  })
+
+  it("starts a fresh index when durable status is unavailable", async () => {
+    vi.mocked(getProjectDurableStatus).mockResolvedValueOnce(null)
+    const tools = buildToolRegistry(makeConfig())
+
+    const result = await tools.project_ensure_index.execute({ path: "/project" }, mockContext)
+
+    expect(getProjectDurableStatus).toHaveBeenCalledWith(expect.anything(), "/project")
+    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "index_project", { path: "/project" })
+    const payload = vi.mocked(callMemoryTool).mock.calls[0]?.[2] as Record<string, unknown>
+    expect(payload).not.toHaveProperty("include_patterns")
+    expect(payload).not.toHaveProperty("exclude_patterns")
+    expect(payload).not.toHaveProperty("job_id")
+    expect(payload).not.toHaveProperty("resume_token")
+    expect(result).toBe("ok")
+  })
+
+  it("returns already_running without calling index_project", async () => {
+    vi.mocked(getProjectDurableStatus).mockResolvedValueOnce({
+      state: "running",
+      reason_code: "active_index_running",
+      progress: { percent: 42 },
+      raw: {},
+    } as any)
+    const tools = buildToolRegistry(makeConfig())
+
+    const result = await tools.project_ensure_index.execute({ path: "/project" }, mockContext)
+
+    expect(result).toBe(JSON.stringify({
+      status: "already_running",
+      state: "running",
+      reason_code: "active_index_running",
+      progress: { percent: 42 },
+    }))
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+
+  it("returns already_ready when durable status is completed", async () => {
+    vi.mocked(getProjectDurableStatus).mockResolvedValueOnce({
+      state: "completed",
+      reason_code: "can_resume",
+      raw: {},
+    } as any)
+    const tools = buildToolRegistry(makeConfig())
+
+    const result = await tools.project_ensure_index.execute({ path: "/project" }, mockContext)
+
+    expect(result).toBe(JSON.stringify({
+      status: "already_ready",
+      state: "completed",
+      reason_code: "can_resume",
+    }))
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+
+  it("returns blocked when resume identity is missing", async () => {
+    vi.mocked(getProjectDurableStatus).mockResolvedValueOnce({
+      state: "interrupted",
+      can_resume: true,
+      reason_code: "can_resume",
+      raw: {},
+    } as any)
+    const tools = buildToolRegistry(makeConfig())
+
+    const result = await tools.project_ensure_index.execute({ path: "/project" }, mockContext)
+
+    expect(result).toBe(JSON.stringify({
+      status: "blocked",
+      reason: "missing_resume_identity",
+      state: "interrupted",
+      reason_code: "can_resume",
+    }))
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+
+  it("resumes with a clean payload when resume identity exists", async () => {
+    vi.mocked(getProjectDurableStatus).mockResolvedValueOnce({
+      state: "interrupted",
+      can_resume: true,
+      job_id: "job-7",
+      resume_token: "token-7",
+      reason_code: "can_resume",
+      raw: {},
+    } as any)
+    const tools = buildToolRegistry(makeConfig())
+
+    const result = await tools.project_ensure_index.execute({ path: "/project" }, mockContext)
+
+    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "index_project", {
+      path: "/project",
+      resume: true,
+      job_id: "job-7",
+      resume_token: "token-7",
+      allow_full_restart_fallback: false,
+    })
+    const payload = vi.mocked(callMemoryTool).mock.calls[0]?.[2] as Record<string, unknown>
+    expect(payload).not.toHaveProperty("include_patterns")
+    expect(payload).not.toHaveProperty("exclude_patterns")
+    expect(result).toBe("ok")
+  })
+
+  it("starts a fresh index when durable status is not resumable", async () => {
+    vi.mocked(getProjectDurableStatus).mockResolvedValueOnce({
+      state: "failed",
+      can_resume: false,
+      reason_code: "workspace_changed_since_checkpoint",
+      raw: {},
+    } as any)
+    const tools = buildToolRegistry(makeConfig())
+
+    const result = await tools.project_ensure_index.execute({ path: "/project" }, mockContext)
+
+    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "index_project", { path: "/project" })
+    expect(result).toBe("ok")
+  })
 })
 
 describe("knowledge_graph tool", () => {
