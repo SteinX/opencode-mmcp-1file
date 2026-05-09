@@ -27,7 +27,7 @@ Plugin hooks (index.ts)
   └── tool:memory        → fallback memory tool (search/store/list)
         ↓
   Services layer (src/services/)
-    ├── tool-registry.ts  → register 9 unified tools (consolidating 17 MCP operations)
+    ├── tool-registry.ts  → register 12 unified tools (consolidating 17 MCP operations)
     ├── mcp-client.ts     → stdio/HTTP transport to MCP server
     ├── server-process.ts → HTTP server lifecycle (spawn, health check, refcount)
     └── ...other services
@@ -50,8 +50,8 @@ Plugin hooks (index.ts)
 - **Config**: JSONC format (`opencode-mmcp-1file.jsonc`), loaded via `loadConfig()` with 13 sections (chatMessage, autoCapture, compaction, keywordDetection, preemptiveCompaction, privacy, compactionSummaryCapture, codeIndexSync, preferenceLearning, captureModel, memoryScope, mcpServer, systemPrompt). `mcpServer` also carries HTTP reconnect/heartbeat timing.
 - **Transport**: Stdio (default) or HTTP. Stdio spawns one server per plugin process via `StdioClientTransport`. HTTP mode uses `StreamableHTTPClientTransport` with a shared server managed by `server-process.ts` (spawn, health check, file-based refcount).
 - **Testing**: When adding or modifying functionality, the corresponding unit tests in `tests/` **must** be created or updated in the same change. Follow existing test patterns (vitest, `vi.mock()` for dependencies). Run `npm run test` to verify before considering work complete.
-- **Sync rule**: Any change to config schema (`src/config.ts` `PluginConfig`), default values (`DEFAULT_CONFIG`), or config-driven behavior **must** be reflected in all three places in the same commit: (1) code implementation, (2) `README.md` Configuration section (both the JSONC example block and the config sections table), (3) example config file `opencode-mmcp-1file.example.jsonc`. If a section is added/removed/renamed, update the section count in this file's Conventions → Config bullet as well.
-- **Example config rule**: `opencode-mmcp-1file.example.jsonc` must always reflect the **complete, current feature set** — every config section, every field, with accurate default values and descriptive comments. When any feature is added, removed, or changed, the example config must be updated in the same commit. Treat it as the single source of truth for users; a stale or incomplete example config is a bug.
+- **Sync rule**: Any change to config schema (`src/config.ts` `PluginConfig`), default values (`DEFAULT_CONFIG`), or config-driven behavior **must** be reflected in all four places in the same commit: (1) code implementation, (2) `README.md` Configuration section (both the JSONC example block and the config sections table), (3) example config file `opencode-mmcp-1file.example.jsonc`, (4) `/setup-mcp-memory` guidance in `commands/setup-mcp-memory.md` when the option is user-configurable. If a section is added/removed/renamed, update the section count in this file's Conventions → Config bullet as well.
+- **Example config rule**: `opencode-mmcp-1file.example.jsonc` must always reflect the **complete, current feature set** — every config section, every field, with accurate default values and descriptive comments. When any feature is added, removed, or changed, the example config must be updated in the same commit. Treat it as the single source of truth for users; a stale or incomplete example config is a bug. When example config comments introduce user-tunable fields, mirror that guidance in `/setup-mcp-memory` unless the field is intentionally hidden from guided setup.
 
 ## Key Files
 
@@ -61,7 +61,7 @@ Plugin hooks (index.ts)
 | `src/config.ts` | Config schema + loader + hot-reload | `PluginConfig`, `loadConfig()`, `resolveDataDir()`, `applyConfig()` |
 | `src/services/server-process.ts` | HTTP server lifecycle: spawn, health check, refcount lock file | `getServerUrl()`, `isServerRunning()`, `ensureServerRunning()`, `stopServer()` |
 | `src/services/mcp-client.ts` | MCP connection singleton (stdio or HTTP) | `recall()`, `searchMemory()`, `storeMemory()`, `listMemories()`, `discoverTools()`, `disconnectMemoryClient()` |
-| `src/services/tool-registry.ts` | Register 9 unified tools (consolidating 17 MCP operations, including `mcp_server_control`) | `buildToolRegistry()` |
+| `src/services/tool-registry.ts` | Register 12 unified tools (consolidating 17 MCP operations, including `mcp_server_control`) | `buildToolRegistry()` |
 | `commands/manage-mcp-server.md` | `/manage-mcp-server` slash command for shared HTTP MCP server control | N/A (Markdown prompt) |
 | `src/services/system-prompt.ts` | Memory Protocol system prompt builder | `buildMemorySystemPrompt()` |
 | `src/services/auto-capture.ts` | Session-idle memory extraction | `performAutoCapture()` |

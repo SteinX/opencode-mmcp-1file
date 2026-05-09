@@ -9,6 +9,7 @@ vi.mock("../../src/services/mcp-client.js", () => ({
   getProjectProjectionInfo: vi.fn().mockResolvedValue({ action: "projection", raw: { ok: true } }),
   getProjectProjectionByLocatorInfo: vi.fn().mockResolvedValue({ action: "projection_by_locator", raw: { ok: true } }),
   isMissingProjectLocator: vi.fn().mockReturnValue(false),
+  getProjectDurableStatus: vi.fn().mockResolvedValue(null),
 }))
 
 vi.mock("../../src/services/server-process.js", () => ({
@@ -55,9 +56,19 @@ vi.mock("../../src/services/connection-state.js", () => ({
   }),
 }))
 
+vi.mock("../../src/services/memory-migration.js", () => ({
+  migrateMemory: vi.fn().mockResolvedValue({
+    status: "dry_run_passed",
+    exportedCount: 1,
+    importedCount: 0,
+    dryRun: true,
+  }),
+}))
+
 const {
   callMemoryTool,
   getMemoryClient,
+  getProjectDurableStatus,
   resetMemoryClientForServerControl,
   getProjectProjectionInfo,
   getProjectProjectionByLocatorInfo,
@@ -73,6 +84,7 @@ const {
 const { stripPrivateContent } = await import("../../src/utils/privacy.js")
 const { applyConfig } = await import("../../src/config.js")
 const { isConnectionFailed, getConnectionStatus } = await import("../../src/services/connection-state.js")
+const { migrateMemory } = await import("../../src/services/memory-migration.js")
 
 function makeConfig(
   overrides?: Partial<Omit<PluginConfig, "codeIndexSync">> & { codeIndexSync?: Partial<PluginConfig["codeIndexSync"]> },
@@ -116,14 +128,17 @@ describe("buildToolRegistry", () => {
     vi.clearAllMocks()
   })
 
-  it("returns 9 unified tools", () => {
+  it("returns 12 unified tools", () => {
     const tools = buildToolRegistry(makeConfig())
     const toolNames = Object.keys(tools)
     expect(toolNames).toEqual([
       "memory_query",
+      "memory_migrate",
       "memory_save",
       "memory_manage",
       "code_search",
+      "project_index",
+      "project_recover_index",
       "project_status",
       "knowledge_graph",
       "get_status",
@@ -137,6 +152,33 @@ describe("buildToolRegistry", () => {
     for (const t of Object.values(tools)) {
       expect(typeof t.execute).toBe("function")
     }
+  })
+})
+
+describe("memory_migrate tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("delegates to migrateMemory and returns a JSON report", async () => {
+    const config = makeConfig()
+    const tools = buildToolRegistry(config)
+    const result = await tools.memory_migrate.execute({
+      source_tag: "old-project",
+      source_project_id: "proj-123",
+      dry_run: true,
+    }, mockContext)
+
+    expect(migrateMemory).toHaveBeenCalledWith(config, {
+      source_tag: "old-project",
+      source_project_id: "proj-123",
+      dry_run: true,
+    })
+    expect(JSON.parse(result)).toMatchObject({
+      status: "dry_run_passed",
+      exportedCount: 1,
+      dryRun: true,
+    })
   })
 })
 
@@ -880,6 +922,148 @@ describe("knowledge_graph tool", () => {
         description: "A test component",
       }),
     )
+  })
+})
+
+describe("project_index tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("proxies a clean payload for path-only indexing", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.project_index.execute({ path: "/project" }, mockContext)
+
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "index_project",
+      expect.objectContaining({ path: "/project" }),
+    )
+    const payload = vi.mocked(callMemoryTool).mock.calls[0]?.[2] as Record<string, unknown>
+    expect(payload).not.toHaveProperty("resume")
+    expect(payload).not.toHaveProperty("include_patterns")
+    expect(payload).not.toHaveProperty("exclude_patterns")
+    expect(payload).not.toHaveProperty("job_id")
+    expect(payload).not.toHaveProperty("resume_token")
+  })
+
+  it("adds force only when requested", async () => {
+    const tools = buildToolRegistry(makeConfig())
+    await tools.project_index.execute({ path: "/project", force: true }, mockContext)
+
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "index_project",
+      expect.objectContaining({ path: "/project", force: true }),
+    )
+    const payload = vi.mocked(callMemoryTool).mock.calls[0]?.[2] as Record<string, unknown>
+    expect(payload).not.toHaveProperty("resume")
+    expect(payload).not.toHaveProperty("include_patterns")
+    expect(payload).not.toHaveProperty("exclude_patterns")
+    expect(payload).not.toHaveProperty("job_id")
+    expect(payload).not.toHaveProperty("resume_token")
+  })
+})
+
+describe("project_recover_index tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("resumes with a clean payload when durable status can resume", async () => {
+    vi.mocked(getProjectDurableStatus).mockResolvedValueOnce({
+      action: "status",
+      can_resume: true,
+      job_id: "job-1",
+      resume_token: "token-1",
+      raw: {},
+    })
+    const tools = buildToolRegistry(makeConfig())
+    await tools.project_recover_index.execute({ path: "/project" }, mockContext)
+
+    expect(getProjectDurableStatus).toHaveBeenCalledWith(expect.anything(), "/project")
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "index_project",
+      {
+        path: "/project",
+        resume: true,
+        job_id: "job-1",
+        resume_token: "token-1",
+        allow_full_restart_fallback: false,
+      },
+    )
+    const payload = vi.mocked(callMemoryTool).mock.calls[0]?.[2] as Record<string, unknown>
+    expect(payload).not.toHaveProperty("include_patterns")
+    expect(payload).not.toHaveProperty("exclude_patterns")
+  })
+
+  it("returns already_running without calling MCP when index is active", async () => {
+    vi.mocked(getProjectDurableStatus).mockResolvedValueOnce({
+      action: "status",
+      state: "running",
+      reason_code: "active_index_running",
+      raw: {},
+    })
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.project_recover_index.execute({ path: "/project" }, mockContext)
+
+    expect(JSON.parse(result as string)).toMatchObject({ status: "already_running" })
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+
+  it("returns already_completed without calling MCP when index is complete", async () => {
+    vi.mocked(getProjectDurableStatus).mockResolvedValueOnce({
+      action: "status",
+      state: "completed",
+      raw: {},
+    })
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.project_recover_index.execute({ path: "/project" }, mockContext)
+
+    expect(JSON.parse(result as string)).toMatchObject({ status: "already_completed" })
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+
+  it("returns blocked when resume identity is incomplete", async () => {
+    vi.mocked(getProjectDurableStatus).mockResolvedValueOnce({
+      action: "status",
+      can_resume: true,
+      job_id: "job-1",
+      raw: {},
+    })
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.project_recover_index.execute({ path: "/project" }, mockContext)
+
+    expect(JSON.parse(result as string)).toMatchObject({ status: "blocked", reason: "missing_resume_identity" })
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+
+  it("returns not_resumable for non-resumable status", async () => {
+    vi.mocked(getProjectDurableStatus).mockResolvedValueOnce({
+      action: "status",
+      can_resume: false,
+      reason_code: "workspace_changed_since_checkpoint",
+      raw: {},
+    })
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.project_recover_index.execute({ path: "/project" }, mockContext)
+
+    expect(JSON.parse(result as string)).toMatchObject({
+      status: "not_resumable",
+      reason_code: "workspace_changed_since_checkpoint",
+      can_resume: false,
+    })
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+
+  it("returns unsupported when durable status is unavailable", async () => {
+    vi.mocked(getProjectDurableStatus).mockResolvedValueOnce(null)
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.project_recover_index.execute({ path: "/project" }, mockContext)
+
+    expect(JSON.parse(result as string)).toMatchObject({ status: "unsupported" })
+    expect(callMemoryTool).not.toHaveBeenCalled()
   })
 })
 

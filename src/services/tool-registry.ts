@@ -1,5 +1,5 @@
 /**
- * Unified tool registry — consolidates 17 memory tools into 9 ergonomic tools.
+ * Unified tool registry — consolidates 17 memory tools into 12 ergonomic tools.
  * Each tool automatically routes to the appropriate underlying MCP operation.
  */
 
@@ -9,6 +9,7 @@ import { applyConfig } from "../config.js"
 import {
   callMemoryTool,
   getMemoryClient,
+  getProjectDurableStatus,
   getProjectProjectionByLocatorInfo,
   getProjectProjectionInfo,
   isMissingProjectLocator,
@@ -26,6 +27,7 @@ import { logger } from "../utils/logger.js"
 import { isConnectionFailed, getConnectionStatus } from "./connection-state.js"
 import type { MemoryOperationContext } from "./mcp-client.js"
 import { buildCodeIndexFilterArgs } from "../utils/code-index-filters.js"
+import { migrateMemory } from "./memory-migration.js"
 
 const UNAVAILABLE_MESSAGE =
   "Memory server temporarily unavailable — auto-reconnecting. " +
@@ -163,6 +165,33 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
         }
 
         return proxy("recall", { query: args.query, limit, ...scopeArgs })
+      },
+    }),
+
+    /**
+     * Safe cross-shard memory migration — wraps export_memory/import_memory with dry-run-first guardrails.
+     */
+    memory_migrate: tool({
+      description:
+        "Migrate memories between memory-mcp physical shards using export/import with a dry-run-first safety flow. " +
+        "Provide exactly one source selector (source_tag or source_data_dir) and an explicit source_project_id. " +
+        "Omit target_tag/target_data_dir to migrate into the current workspace shard. Actual migration requires dry_run=false and confirm=true.",
+      args: {
+        source_tag: tool.schema.string().optional(),
+        source_data_dir: tool.schema.string().optional(),
+        target_tag: tool.schema.string().optional(),
+        target_data_dir: tool.schema.string().optional(),
+        source_project_id: tool.schema.string(),
+        target_project_id: tool.schema.string().optional(),
+        source_namespace: tool.schema.string().optional(),
+        target_namespace: tool.schema.string().optional(),
+        include_invalidated: tool.schema.boolean().optional(),
+        dry_run: tool.schema.boolean().optional(),
+        confirm: tool.schema.boolean().optional(),
+      },
+      execute: async (args) => {
+        const report = await migrateMemory(config, args)
+        return JSON.stringify(report)
       },
     }),
 
@@ -318,9 +347,88 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
     /**
      * Project operations — replaces project_info, index_project
      */
+    project_index: tool({
+      description:
+        "Start a fresh project index for a path. Use this for ordinary index triggers so agents avoid optional-parameter pollution; for status, resume, cancel, cleanup, stats, or projections use project_status instead.",
+      args: {
+        path: tool.schema.string(),
+        force: tool.schema.boolean().optional(),
+      },
+      execute: async (args) => {
+        const callArgs: Record<string, unknown> = { path: args.path }
+        if (args.force) callArgs.force = true
+        return proxy("index_project", callArgs)
+      },
+    }),
+
+    project_recover_index: tool({
+      description:
+        "Recover an interrupted project index for a path. The plugin checks durable status, resumes only when the server provides job_id and resume_token, and never exposes resume/filter parameters to agents.",
+      args: {
+        path: tool.schema.string(),
+      },
+      execute: async (args) => {
+        const status = await getProjectDurableStatus(config, args.path)
+        if (!status) {
+          return JSON.stringify({
+            status: "unsupported",
+            message: "Durable project status is unavailable; use project_index for a fresh index.",
+          })
+        }
+
+        if (
+          status.reason_code === "active_index_running"
+          || status.state === "queued"
+          || status.state === "running"
+        ) {
+          return JSON.stringify({
+            status: "already_running",
+            state: status.state,
+            reason_code: status.reason_code,
+            progress: status.progress,
+          })
+        }
+
+        if (status.state === "completed") {
+          return JSON.stringify({
+            status: "already_completed",
+            state: status.state,
+            reason_code: status.reason_code,
+          })
+        }
+
+        if (status.can_resume === true) {
+          if (!status.job_id || !status.resume_token) {
+            return JSON.stringify({
+              status: "blocked",
+              reason: "missing_resume_identity",
+              state: status.state,
+              reason_code: status.reason_code,
+            })
+          }
+
+          return proxy("index_project", {
+            path: args.path,
+            resume: true,
+            job_id: status.job_id,
+            resume_token: status.resume_token,
+            allow_full_restart_fallback: false,
+          })
+        }
+
+        return JSON.stringify({
+          status: "not_resumable",
+          state: status.state,
+          reason_code: status.reason_code,
+          can_resume: status.can_resume ?? false,
+        })
+      },
+    }),
+
     project_status: tool({
       description:
         "Check project indexing status and manage indexing lifecycle. Start with 'list' to see indexed projects, use 'status' to inspect durable state, use 'index' or 'resume' to start or continue indexing, then use 'stats' to confirm the index is ready. " +
+        "For ordinary index triggers, prefer project_index; for interrupted indexes, prefer project_recover_index to avoid optional-parameter pollution. " +
         "Use 'cancel' to stop an active index, 'cleanup' to clear abandoned jobs, and 'projection' / 'projection_by_locator' for short-lived projection exports. For 'index', optional include_patterns/exclude_patterns override filter scope (omit = use plugin/server defaults; [] = disable that side; not allowed on resume).",
       args: {
         action: tool.schema.enum(["list", "status", "index", "resume", "cancel", "cleanup", "stats", "projection", "projection_by_locator"]),
