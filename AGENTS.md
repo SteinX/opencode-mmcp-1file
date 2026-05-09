@@ -27,7 +27,7 @@ Plugin hooks (index.ts)
   └── tool:memory        → fallback memory tool (search/store/list)
         ↓
   Services layer (src/services/)
-    ├── tool-registry.ts  → register 12 unified tools (consolidating 17 MCP operations)
+    ├── tool-registry.ts  → register 14 unified tools (consolidating 17 MCP operations)
     ├── mcp-client.ts     → stdio/HTTP transport to MCP server
     ├── server-process.ts → HTTP server lifecycle (spawn, health check, refcount)
     └── ...other services
@@ -61,7 +61,7 @@ Plugin hooks (index.ts)
 | `src/config.ts` | Config schema + loader + hot-reload | `PluginConfig`, `loadConfig()`, `resolveDataDir()`, `applyConfig()` |
 | `src/services/server-process.ts` | HTTP server lifecycle: spawn, health check, refcount lock file | `getServerUrl()`, `isServerRunning()`, `ensureServerRunning()`, `stopServer()` |
 | `src/services/mcp-client.ts` | MCP connection singleton (stdio or HTTP) | `recall()`, `searchMemory()`, `storeMemory()`, `listMemories()`, `discoverTools()`, `disconnectMemoryClient()` |
-| `src/services/tool-registry.ts` | Register 12 unified tools (consolidating 17 MCP operations, including `mcp_server_control`) | `buildToolRegistry()` |
+| `src/services/tool-registry.ts` | Register 14 unified tools (consolidating 17 MCP operations, including `mcp_server_control`) | `buildToolRegistry()` |
 | `commands/manage-mcp-server.md` | `/manage-mcp-server` slash command for shared HTTP MCP server control | N/A (Markdown prompt) |
 | `src/services/system-prompt.ts` | Memory Protocol system prompt builder | `buildMemorySystemPrompt()` |
 | `src/services/auto-capture.ts` | Session-idle memory extraction | `performAutoCapture()` |

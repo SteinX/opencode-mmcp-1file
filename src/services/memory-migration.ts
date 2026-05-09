@@ -43,6 +43,11 @@ export interface ResolvedTarget {
   message?: string
 }
 
+export interface MigrationNextCall {
+  tool: "memory_migrate"
+  args: MemoryMigrationArgs & { dry_run: false; confirm: true }
+}
+
 export interface MigrationReport {
   status: MigrationStatus
   exportedCount: number
@@ -65,6 +70,7 @@ export interface MigrationReport {
   targetRuntimeWasRunning?: boolean
   targetRuntimeStarted?: boolean
   targetProjectMode?: ProjectMode
+  nextCall?: MigrationNextCall
 }
 
 interface MigrationClient {
@@ -166,7 +172,9 @@ export async function migrateMemory(config: PluginConfig, args: MemoryMigrationA
     }
 
     if (args.dry_run !== false || args.confirm !== true) {
-      return dryRunReport
+      return dryRunReport.status === "dry_run_passed"
+        ? { ...dryRunReport, nextCall: buildMigrationNextCall(args) }
+        : dryRunReport
     }
 
     const actualResult = await callJsonTool(targetClient, "import_memory", buildImportArgs(args, exportedJsonl, false))
@@ -309,6 +317,17 @@ function buildImportArgs(args: MemoryMigrationArgs, jsonl: string, dryRun: boole
   })
 }
 
+function buildMigrationNextCall(args: MemoryMigrationArgs): MigrationNextCall {
+  return {
+    tool: "memory_migrate",
+    args: {
+      ...args,
+      dry_run: false,
+      confirm: true,
+    },
+  }
+}
+
 async function callJsonTool(client: Client, name: string, args: Record<string, unknown>): Promise<ParsedToolResult> {
   const result = await client.callTool({ name, arguments: args })
   const rawText = extractTextResult(result)
@@ -336,6 +355,7 @@ function reportFromResults(args: {
   importResult: ParsedToolResult
   dryRun: boolean
   targetProjectMode?: ProjectMode
+  nextCall?: MigrationNextCall
 }): MigrationReport {
   const status = args.status === "migrated" && isImportFailed(args.importResult.parsed) ? "failed" : args.status
   return createReport({
@@ -386,6 +406,7 @@ function createReport(overrides: Partial<MigrationReport> & { status: MigrationS
     targetRuntimeWasRunning: overrides.targetRuntimeWasRunning,
     targetRuntimeStarted: overrides.targetRuntimeStarted,
     targetProjectMode: overrides.targetProjectMode,
+    nextCall: overrides.nextCall,
   }
 }
 

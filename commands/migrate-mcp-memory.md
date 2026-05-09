@@ -80,20 +80,17 @@ Summarize the result for the user:
 - `idMappings`: list of old→new ID pairs
 - `errors`: any validation errors
 - `resolvedSource`, `resolvedTarget`: resolved data directory paths
+- `nextCall`: when `status` is `dry_run_passed`, use this exact payload after explicit user confirmation
 
 **Actual import is BLOCKED if dry-run returns errors or `failedCount > 0`.**
 
 ## Actual Migration
 
-Only proceed after dry-run passes AND the user explicitly confirms. Requires both `dry_run: false` AND `confirm: true`:
+Only proceed after dry-run passes AND the user explicitly confirms. Prefer the dry-run report's `nextCall` object instead of reconstructing arguments manually. It will include both `dry_run: false` and `confirm: true`:
 
 ```text
-memory_migrate({
-  source_tag: "project-a",
-  source_project_id: "proj-123",
-  dry_run: false,
-  confirm: true
-})
+// Use report.nextCall.args after explicit confirmation
+memory_migrate(report.nextCall.args)
 ```
 
 ## Examples
@@ -112,10 +109,10 @@ Migrates from `old-project` shard into the current workspace's configured shard,
 memory_migrate({
   source_tag: "old-project",
   source_project_id: "proj-old",
-  target_project_id: "proj-new",
-  dry_run: false,
-  confirm: true
+  target_project_id: "proj-new"
 })
+// After dry-run passes and the user confirms:
+memory_migrate(report.nextCall.args)
 ```
 Migrates into the current workspace shard and reassigns memories to `proj-new`.
 
@@ -124,14 +121,18 @@ Migrates into the current workspace shard and reassigns memories to `proj-new`.
 memory_migrate({ source_tag: "old-project", target_tag: "new-project", source_project_id: "proj-old", target_project_id: "proj-new" })
 ```
 
-**DataDir-to-tag migration (actual):**
+**DataDir-to-tag migration:**
 ```text
-memory_migrate({ source_data_dir: "/custom/path/memory", target_tag: "new-project", source_project_id: "proj-123", target_project_id: "proj-456", dry_run: false, confirm: true })
+memory_migrate({ source_data_dir: "/custom/path/memory", target_tag: "new-project", source_project_id: "proj-123", target_project_id: "proj-456" })
+// After dry-run passes and the user confirms:
+memory_migrate(report.nextCall.args)
 ```
 
 **Archive migration (include invalidated records):**
 ```text
-memory_migrate({ source_tag: "project-a", source_project_id: "proj-123", include_invalidated: true, dry_run: false, confirm: true })
+memory_migrate({ source_tag: "project-a", source_project_id: "proj-123", include_invalidated: true })
+// After dry-run passes and the user confirms:
+memory_migrate(report.nextCall.args)
 ```
 
 ## Prohibitions

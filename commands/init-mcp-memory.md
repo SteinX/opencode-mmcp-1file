@@ -22,7 +22,7 @@ Your goal is to create a **small, high-value, reusable project knowledge base** 
 
 3. **Index only if needed**
    - Check indexing readiness first
-   - Only call `project_status(action: "index")` if the project is missing an index or the index is clearly stale
+   - Only call `project_ensure_index(path)` if the project is missing an index or the index is clearly stale
    - Do not repeatedly re-index; background freshness may already be handled by the plugin
    - In HTTP transport mode, remember that background freshness is coordinated by the shared server's primary holder; follower clients may observe readiness without being the process that triggered the refresh
    - When multiple workspaces share one `tag` / `dataDir`, treat readiness as workspace-specific rather than assuming one global sync state for the whole shard
@@ -71,7 +71,7 @@ project_status(action: "list")
 If needed, index the project root with:
 
 ```text
-project_status(action: "index", path: "<project root path>")
+project_ensure_index(path: "<project root path>")
 ```
 
 Then verify with:

@@ -220,6 +220,17 @@ describe("migrateMemory", () => {
 
       expect(report.status).toBe("dry_run_passed")
       expect(report.dryRun).toBe(true)
+      expect(report.nextCall).toEqual({
+        tool: "memory_migrate",
+        args: {
+          source_tag: "source-shard",
+          target_tag: "target-shard",
+          source_project_id: "proj-src",
+          target_project_id: "proj-tgt",
+          dry_run: false,
+          confirm: true,
+        },
+      })
       expect(clientInstances).toHaveLength(2)
 
       const [sourceClient, targetClient] = clientInstances
@@ -249,6 +260,7 @@ describe("migrateMemory", () => {
 
       expect(report.status).toBe("migrated")
       expect(report.dryRun).toBe(false)
+      expect(report.nextCall).toBeUndefined()
       expect(report.importedCount).toBe(5)
       expect(report.idMappings).toEqual([{ old_id: "a", new_id: "b" }])
 
@@ -283,6 +295,7 @@ describe("migrateMemory", () => {
       })
 
       expect(report.status).toBe("dry_run_failed")
+      expect(report.nextCall).toBeUndefined()
       expect(clientInstances[1].callTool).toHaveBeenCalledTimes(1)
       expect(clientInstances[1].callTool.mock.calls[0][0].arguments.dry_run).toBe(true)
     })

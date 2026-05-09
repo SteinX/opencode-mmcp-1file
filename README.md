@@ -9,7 +9,7 @@ Persistent memory for OpenCode agents via [memory-mcp-1file](https://github.com/
 
 ## What it does
 
-This OpenCode plugin gives agents persistent memory across sessions. It connects to a `memory-mcp-1file` MCP server via stdio and registers **12 unified tools** as plugin tools — consolidating memory search, storage, lifecycle management, code intelligence, project indexing, and shared HTTP server control into an ergonomic interface with automatic routing. The plugin also provides automatic context injection, idle-time capture, background code-index refresh, compaction recovery, smart trigger nudges, agent guidance via system prompt, a `/init-mcp-memory` bootstrap command for deep project onboarding, a `/setup-mcp-memory` guided configuration wizard, and a `/manage-mcp-server` command for controlled HTTP lifecycle actions.
+This OpenCode plugin gives agents persistent memory across sessions. It connects to a `memory-mcp-1file` MCP server via stdio and registers **14 unified tools** as plugin tools — consolidating memory search, storage, lifecycle management, code intelligence, project indexing, and shared HTTP server control into an ergonomic interface with automatic routing. The plugin also provides automatic context injection, idle-time capture, background code-index refresh, compaction recovery, smart trigger nudges, agent guidance via system prompt, a `/init-mcp-memory` bootstrap command for deep project onboarding, a `/setup-mcp-memory` guided configuration wizard, and a `/manage-mcp-server` command for controlled HTTP lifecycle actions.
 
 The plugin now distinguishes between a **physical storage shard** and a **logical retrieval scope**:
 - `mcpServer.tag` / `dataDir` decide which on-disk memory store you are using.
@@ -20,15 +20,17 @@ The plugin now distinguishes between a **physical storage shard** and a **logica
 
 ### Agent-facing (via plugin tool registration)
 
-- **Unified Memory Tools (12 tools)** — The plugin consolidates 17 underlying MCP operations into 12 ergonomic tools:
+- **Unified Memory Tools (14 tools)** — The plugin consolidates 17 underlying MCP operations into 14 ergonomic tools:
   - `memory_query` — Unified search with auto/semantic/keyword/recent modes. Routes to the best search strategy automatically.
   - `memory_save` — Smart storage with auto-categorization (DECISION, TASK, PATTERN, BUGFIX, etc.) and privacy filtering.
   - `memory_manage` — Memory lifecycle: get, update, delete, or invalidate by ID.
   - `memory_migrate` — Copy project memories between physical shards or project IDs with dry-run support.
   - `code_search` — Unified code intelligence: intent-based search, symbol lookup, and call graph traversal (callers/callees/related).
   - `project_index` — Minimal project indexing entry point for ordinary agent-triggered indexing. Takes only `path` and optional `force`; use this instead of `project_status` for simple fresh index starts.
+  - `project_ensure_index` — Default readiness entry point for agent workflows. Takes only `path`, checks durable status first, resumes safely when possible, returns already-running/already-ready states without extra calls, and otherwise starts a clean fresh index.
   - `project_recover_index` — Minimal interrupted-index recovery entry point. Takes only `path`, checks durable status, and resumes only when the server provides resume identity.
-  - `project_status` — Project indexing and projections: list indexed projects, index new ones, view code statistics, build short-lived projections, or read them back by ephemeral locator. Also supports durable indexing controls: `status` (query current indexing state), `resume` (resume an interrupted job with `job_id`+`resume_token`), `cancel` (cancel active job), and `cleanup` (remove abandoned/failed jobs).
+  - `project_projection` — Simple project projection/readback entry point. Use this for ordinary projection workflows; it takes `project_id`, optional `locator`, and optional `relation_scope` / `sort_mode`, then returns raw JSON from the server or falls back to a fresh projection when locator readback is unavailable.
+  - `project_status` — Project indexing and projections: list indexed projects, index new ones, view code statistics, build short-lived projections, or read them back by ephemeral locator. Also supports durable indexing controls: `status` (query current indexing state), `resume` (resume an interrupted job with `job_id`+`resume_token`), `cancel` (cancel active job), and `cleanup` (remove abandoned/failed jobs). Use `project_projection` for ordinary projection/readback workflows.
   - `mcp_server_control` — Manage shared HTTP MCP server lifecycle with `status`, `stop`, and `restart` actions. HTTP transport only.
   - `knowledge_graph` — Map and query architectural relationships between codebase components. Use when analyzing system architecture, tracing module dependencies, or recording structural relationships. Actions: create_entity, create_relation, get_related, detect_communities.
   - `get_status` — Memory system status and startup progress.
@@ -315,10 +317,10 @@ Plugin hooks (index.ts)
   ├── event:session.idle → auto-capture + code-index freshness check
   ├── event:compacted    → inject recovery context
   ├── event:message.updated → preemptive compaction + summary capture
-  └── tool              → 12 unified plugin tools
+  └── tool              → 14 unified plugin tools
         ↓
   Services layer (src/services/)
-    ├── tool-registry.ts  → register 12 unified tools (consolidating 17 MCP operations)
+    ├── tool-registry.ts  → register 14 unified tools (consolidating 17 MCP operations)
     ├── mcp-client.ts     → stdio/HTTP transport + centralized contract adapters
     ├── system-prompt.ts  → Memory Protocol prompt builder
     ├── auto-capture.ts   → LLM summarization + store
@@ -334,11 +336,13 @@ Plugin hooks (index.ts)
 
 ## How It Works
 
-The plugin spawns a [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server via stdio and registers 12 unified tools that consolidate 17 underlying MCP operations into an ergonomic interface. The agent calls these tools directly; each call is automatically routed to the appropriate MCP operation.
+The plugin spawns a [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server via stdio and registers 14 unified tools that consolidate 17 underlying MCP operations into an ergonomic interface. The agent calls these tools directly; each call is automatically routed to the appropriate MCP operation.
 
-`project_status` remains part of that same 12-tool surface. In addition to `list`, `index`, and `stats`, it now supports projection workflows with `action: "projection"` and `action: "projection_by_locator"`. Projection requests default to `relation_scope: "all"` and `sort_mode: "canonical"`, and any locator returned by the server is treated as an opaque, same-process, non-persistable handle.
+`project_projection` is the simple projection/readback entry point. It takes only `project_id` plus optional `locator`, `relation_scope`, and `sort_mode`, returning raw JSON from the server and falling back to a fresh projection when locator readback is unavailable. `project_status` remains part of that same 14-tool surface for indexing lifecycle control and compatibility projection actions. In addition to `list`, `index`, and `stats`, it still supports projection workflows with `action: "projection"` and `action: "projection_by_locator"`. Projection requests default to `relation_scope: "all"` and `sort_mode: "canonical"`, and any locator returned by the server is treated as an opaque, same-process, non-persistable handle.
 
-`mcp_server_control` is also part of the same 12-tool surface and supports `action: "status" | "stop" | "restart"` for controlled shared HTTP MCP server lifecycle operations.
+`project_ensure_index` is the default readiness path for agents. It takes only `path`, checks durable status first, returns already-running or already-ready responses without extra work, resumes only when the server provides resume identity, and otherwise starts a clean fresh index.
+
+`mcp_server_control` is also part of the same 14-tool surface and supports `action: "status" | "stop" | "restart"` for controlled shared HTTP MCP server lifecycle operations.
 
 Memory context is also handled through **synthetic parts** — invisible in the OpenCode TUI but received by the LLM as part of the conversation. The agent has full access to past project context without cluttering the user's view.
 
