@@ -430,7 +430,7 @@ const plugin: Plugin = async (input) => {
           "\n\nPrefer the unified `memory_manage` tool when information becomes outdated. Provide replacement_id to link to the updated entry.",
         // Code Intelligence hints
         index_project:
-          "\n\nPrefer `project_status(action: \"index\")` from the unified tool registry. This raw MCP tool is mainly for initial indexing, manual recovery, or stale-index repair.",
+          "\n\nPrefer the unified `project_index` tool. This raw MCP tool is mainly for initial indexing, manual recovery, or stale-index repair.",
         recall_code:
           "\n\nPrefer `code_search(search_type: \"intent\")` for intent-based semantic code search. Requires the project to be indexed.",
         search_symbols:

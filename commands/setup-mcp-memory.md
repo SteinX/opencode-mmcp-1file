@@ -61,7 +61,15 @@ Ask the user these questions (adapt based on their answers — skip what's alrea
 
 7. **Privacy**: "Keep privacy filtering enabled? (strips `<private>...</private>` tagged content before storing)" — default: yes
 
-8. **Advanced scope behavior** (ask only if the user explicitly wants tighter control):
+8. **Code index scope**: "Do you want to limit code indexing to specific paths? For monorepos or generated-heavy projects, configure `codeIndexSync.includePatterns` / `excludePatterns`; otherwise omit them and use server defaults."
+   - Ask only when the project is large, generated-heavy, a monorepo, or the user asks about indexing scope/performance
+   - Patterns are project-relative globs using `/` separators and must not start with `/`
+   - Example include: `["src/**/*", "tests/**/*"]`
+   - Example exclude: `["**/generated/**", "**/*.min.js", "**/dist/**"]`
+   - Explain that long-term defaults belong in config; agents should use `project_index({ path })` and `project_recover_index({ path })` rather than passing filters every time
+   - Empty array `[]` is meaningful because it disables that filter side; do not generate empty arrays unless the user explicitly asks to disable server defaults
+
+9. **Advanced scope behavior** (ask only if the user explicitly wants tighter control):
    - "Should collaborating agents share memory by default?" → `memoryScope.shareAcrossAgents` (recommended: `true`)
    - "Do you want agent/run provenance recorded in metadata?" → `includeAgentMetadata` / `includeRunMetadata`
    - Explain that for agentic coding the recommended default is shared agent memory, with agent/run captured as provenance instead of retrieval isolation
@@ -125,6 +133,24 @@ Based on the user's answers, generate a `opencode-mmcp-1file.jsonc` file. Use th
     "enabled": true
   },
 
+  // Plugin-managed code intelligence refresh and optional index scope filters
+  "codeIndexSync": {
+    "enabled": true,
+    "debounceMs": 10000,
+    "minReindexIntervalMs": 300000,
+    "resume": {
+      "enabled": true,
+      "pollIntervalMs": 5000,
+      "maxPollMs": 300000,
+      "allowFullRestartFallback": false,
+      "allowDestructiveRecovery": false
+    },
+    // Optional: include only these project-relative paths; omit to use server defaults
+    // "includePatterns": ["src/**/*", "tests/**/*"],
+    // Optional: exclude generated or build artifacts; omit to use server defaults
+    // "excludePatterns": ["**/generated/**", "**/*.min.js", "**/dist/**"]
+  },
+
   // LLM for auto-capture summarization
   // apiKey set → direct HTTP; apiKey empty → OpenCode session API (zero-config)
   "captureModel": {
@@ -166,6 +192,8 @@ Based on the user's answers, generate a `opencode-mmcp-1file.jsonc` file. Use th
 - Default recommendation for agentic coding: `shareAcrossAgents: true`, `includeAgentMetadata: true`, `includeRunMetadata: false`
 - Include comments explaining non-obvious settings
 - Only include sections that differ from defaults
+- Include `codeIndexSync` only when the user customizes index refresh/resume behavior or wants project-specific `includePatterns` / `excludePatterns`; otherwise omit it and rely on defaults
+- For index filters, prefer config defaults over per-call agent arguments; do not generate empty `includePatterns` / `excludePatterns` unless the user explicitly wants to disable server defaults
 - Exception: always include `mcpServer` section (it's the core config)
 
 ## Step 4: Write and Apply

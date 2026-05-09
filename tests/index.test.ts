@@ -1970,7 +1970,7 @@ describe("installCommand (called during plugin init)", () => {
     expect(mkdirSync).toHaveBeenCalled()
     expect(copyFileSync).toHaveBeenCalledTimes(3)
     
-    const copiedFiles = vi.mocked(copyFileSync).mock.calls.map(call => call[0])
+    const copiedFiles = vi.mocked(copyFileSync).mock.calls.map(call => String(call[0]))
     expect(copiedFiles.some(f => f.endsWith("manage-mcp-server.md"))).toBe(true)
   })
 
