@@ -84,6 +84,7 @@
   },
 
   // Preference learning from conversational signals
+  // Legacy compatibility alias — use learningMemory instead
   "preferenceLearning": {
     "enabled": false,
     "learnOnCorrections": true,      // Learn when users correct prior assistant output
@@ -98,6 +99,29 @@
     "debounceMs": 10000,             // Debounce learning updates to avoid rapid duplicate writes
     "maxInputChars": 4000,           // Truncate oversized inputs before preference extraction
     "maxStoredPreferences": 50       // Upper bound for stored preference records per scope
+  },
+
+  // Learning memory — typed preference/lesson/rule capture (default: disabled)
+  "learningMemory": {
+    // Master switch — set to true to enable any learning memory features
+    "enabled": false,
+    // Preference learning — capture user preferences from chat signals
+    "preferences": { "enabled": false },
+    // Lesson learning — extract lessons/patterns/pitfalls from sessions
+    "lessons": { "enabled": false },
+    // Rule learning — promote confirmed preferences to hard rules
+    "rules": { "enabled": false },
+    // Injection settings — how learning memories appear in context
+    "injection": {
+      "mode": "auto",              // "auto" | "manual"
+      "maxPinned": 3,              // max hard rules pinned in context
+      "maxRetrieved": 10,          // max retrieved learning memories
+      "includeEvidence": false     // include source evidence snippets
+    },
+    // Fallback — read legacy USER — Preference: memories when server unsupported
+    "fallback": {
+      "legacyPreferences": true
+    }
   },
 
   // LLM for auto-capture summarization

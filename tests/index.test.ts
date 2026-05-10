@@ -118,6 +118,16 @@ vi.mock("../src/services/preference-learning.js", () => ({
   }),
 }))
 
+vi.mock("../src/services/learning-memory-orchestrator.js", () => ({
+  learnFromChatMessage: vi.fn().mockResolvedValue(undefined),
+  learnFromMessageUpdated: vi.fn().mockResolvedValue(undefined),
+  retrieveRecordsForInjection: vi.fn().mockResolvedValue(null),
+}))
+
+vi.mock("../src/services/learning-memory-format.js", () => ({
+  formatLearningMemoryInjection: vi.fn().mockReturnValue(null),
+}))
+
 // ─── Import mocked modules for assertions ──────────────────────────
 
 const { loadConfig, resolveDataDir } = await import("../src/config.js")
@@ -163,6 +173,12 @@ const {
   storePreferenceCandidates,
 } = await import("../src/services/preference-learning.js")
 const { existsSync, mkdirSync, copyFileSync } = await import("node:fs")
+const {
+  learnFromChatMessage,
+  learnFromMessageUpdated,
+  retrieveRecordsForInjection,
+} = await import("../src/services/learning-memory-orchestrator.js")
+const { formatLearningMemoryInjection } = await import("../src/services/learning-memory-format.js")
 
 // ─── Import the plugin under test ──────────────────────────────────
 
@@ -798,10 +814,11 @@ describe("chat.message hook", () => {
       source: "chat.message",
     })
     const candidates = [{
+      kind: "user_preference" as const,
       content: "Use concise answers",
       confidence: 0.9,
-      signalType: "explicit_preference" as const,
-      status: "confirmed" as const,
+      importance: 0.8,
+      source: "preference-learning",
     }]
     vi.mocked(extractPreferenceCandidates).mockResolvedValue(candidates)
 
@@ -819,7 +836,13 @@ describe("chat.message hook", () => {
       { source: "chat.message", eventType: undefined },
     )
     expect(extractPreferenceCandidates).toHaveBeenCalledWith(config, "I prefer concise answers", expect.any(Object))
-    expect(storePreferenceCandidates).toHaveBeenCalledWith(config, candidates, {
+    expect(storePreferenceCandidates).toHaveBeenCalledWith(config, [{
+      content: "Use concise answers",
+      confidence: 0.9,
+      signalType: "explicit_preference",
+      status: "confirmed",
+      evidence: undefined,
+    }], {
       metadata: { source: "chat.message" },
     })
   })
@@ -946,6 +969,123 @@ describe("chat.message hook", () => {
     expect(passedPatterns).toHaveLength(2)
     expect(passedPatterns![0]).toBeInstanceOf(RegExp)
     expect(passedPatterns![1]).toBeInstanceOf(RegExp)
+  })
+
+  it("uses typed injection path when learningMemory.enabled=true", async () => {
+    const { hooks } = await initPlugin({
+      learningMemory: { enabled: true },
+    })
+    vi.mocked(shouldInjectMemories).mockReturnValueOnce(false)
+    vi.mocked(shouldInjectLearnedPreferences).mockReturnValueOnce(true)
+    vi.mocked(retrieveRecordsForInjection).mockResolvedValueOnce({
+      status: "ok",
+      records: [],
+      learning_summary: { injectable_by_default: true, raw: {} },
+    })
+    vi.mocked(formatLearningMemoryInjection).mockReturnValueOnce("[MEMORY] Learned Memory\n\n## Hard Rules\nDo not use var.")
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "help me code" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s-typed" }, output)
+
+    expect(retrieveRecordsForInjection).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ source: "chat.message", sessionId: "s-typed", query: "help me code" }),
+    )
+    expect(formatLearningMemoryInjection).toHaveBeenCalledWith(
+      expect.objectContaining({ records: [], learning_summary: expect.objectContaining({ injectable_by_default: true }) }),
+      expect.objectContaining({ includeCandidates: false }),
+    )
+    expect(output.parts[0]).toMatchObject({
+      type: "text",
+      text: "[MEMORY] Learned Memory\n\n## Hard Rules\nDo not use var.",
+      synthetic: true,
+    })
+    expect(markLearnedPreferencesInjected).toHaveBeenCalledWith("s-typed")
+    expect(fetchAndFormatLearnedPreferences).not.toHaveBeenCalled()
+  })
+
+  it("skips candidates by default in typed injection path", async () => {
+    const { hooks } = await initPlugin({
+      learningMemory: { enabled: true },
+    })
+    vi.mocked(shouldInjectMemories).mockReturnValueOnce(false)
+    vi.mocked(shouldInjectLearnedPreferences).mockReturnValueOnce(true)
+    vi.mocked(retrieveRecordsForInjection).mockResolvedValueOnce({
+      status: "ok",
+      records: [],
+      learning_summary: { injectable_by_default: true, raw: {} },
+    })
+    vi.mocked(formatLearningMemoryInjection).mockReturnValueOnce(null)
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "help" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s-candidates" }, output)
+
+    expect(formatLearningMemoryInjection).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ includeCandidates: false }),
+    )
+    expect(markLearnedPreferencesInjected).not.toHaveBeenCalled()
+    expect(output.parts).toHaveLength(1)
+  })
+
+  it("skips typed injection when reason_code is a degraded code", async () => {
+    const badCodes = ["unsupported", "degraded", "stale", "generation_mismatch"]
+    for (const code of badCodes) {
+      vi.clearAllMocks()
+      const { hooks } = await initPlugin({
+        learningMemory: { enabled: true },
+      })
+      vi.mocked(shouldInjectMemories).mockReturnValueOnce(false)
+      vi.mocked(shouldInjectLearnedPreferences).mockReturnValueOnce(true)
+      vi.mocked(retrieveRecordsForInjection).mockResolvedValueOnce({
+        status: "partial",
+        reason_code: code as any,
+        records: [],
+        learning_summary: { injectable_by_default: true, raw: {} },
+      })
+
+      const output = {
+        message: { id: "msg1" },
+        parts: [{ type: "text", text: "help" }],
+      }
+
+      await hooks["chat.message"]({ sessionID: `s-bad-${code}` }, output)
+
+      expect(formatLearningMemoryInjection).not.toHaveBeenCalled()
+      expect(output.parts).toHaveLength(1)
+    }
+  })
+
+  it("uses legacy injection path when learningMemory.enabled=false", async () => {
+    const { hooks } = await initPlugin({
+      preferenceLearning: { ...makeConfig().preferenceLearning, enabled: true },
+    })
+    vi.mocked(shouldInjectMemories).mockReturnValueOnce(false)
+    vi.mocked(shouldInjectLearnedPreferences).mockReturnValueOnce(true)
+    vi.mocked(fetchAndFormatLearnedPreferences).mockResolvedValueOnce("[MEMORY] Learned User Preferences\n\n- Use concise answers")
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "help me" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s-legacy" }, output)
+
+    expect(fetchAndFormatLearnedPreferences).toHaveBeenCalled()
+    expect(retrieveRecordsForInjection).not.toHaveBeenCalled()
+    expect(output.parts[0]).toMatchObject({
+      type: "text",
+      text: "[MEMORY] Learned User Preferences\n\n- Use concise answers",
+      synthetic: true,
+    })
   })
 })
 
@@ -1948,6 +2088,118 @@ describe("tool.execute.before", () => {
     await hooks["tool.execute.before"]({ tool: "memory-mcp-1file_store_memory" }, output)
 
     expect(stripPrivateContent).not.toHaveBeenCalled()
+  })
+})
+
+// ─── Learning memory end-to-end integration ─────────────────────────
+
+describe("learning memory end-to-end flow", () => {
+  it("learn path: learnFromChatMessage is called when learningMemory.enabled=true and user text is present", async () => {
+    const { hooks } = await initPlugin({
+      learningMemory: { enabled: true },
+    })
+
+    const output = {
+      message: { id: "msg-learn" },
+      parts: [{ type: "text", text: "I prefer concise answers" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s-learn" }, output)
+
+    expect(learnFromChatMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ learningMemory: expect.objectContaining({ enabled: true }) }),
+      "I prefer concise answers",
+      expect.objectContaining({ source: "chat.message" }),
+    )
+  })
+
+  it("inject path: retrieveRecordsForInjection result is formatted and injected as synthetic part", async () => {
+    const { hooks } = await initPlugin({
+      learningMemory: { enabled: true },
+    })
+    vi.mocked(shouldInjectMemories).mockReturnValueOnce(false)
+    vi.mocked(shouldInjectLearnedPreferences).mockReturnValueOnce(true)
+    vi.mocked(retrieveRecordsForInjection).mockResolvedValueOnce({
+      status: "ok",
+      records: [
+        {
+          id: "rec-1",
+          kind: "user_preference",
+          content: "Use concise answers",
+          status: "confirmed",
+          confidence: 0.9,
+        },
+      ],
+      learning_summary: { injectable_by_default: true, raw: {} },
+    })
+    vi.mocked(formatLearningMemoryInjection).mockReturnValueOnce(
+      "[MEMORY] Learned User Preferences\n\n- Use concise answers",
+    )
+
+    const output = {
+      message: { id: "msg-inject" },
+      parts: [{ type: "text", text: "how should I write code?" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s-inject" }, output)
+
+    expect(retrieveRecordsForInjection).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ source: "chat.message", sessionId: "s-inject", query: "how should I write code?" }),
+    )
+    expect(formatLearningMemoryInjection).toHaveBeenCalled()
+    expect(output.parts[0]).toMatchObject({
+      type: "text",
+      text: "[MEMORY] Learned User Preferences\n\n- Use concise answers",
+      synthetic: true,
+    })
+    expect(markLearnedPreferencesInjected).toHaveBeenCalledWith("s-inject")
+  })
+
+  it("disabled no-op: learningMemory.enabled=false → learnFromChatMessage not called, retrieveRecordsForInjection not called", async () => {
+    const { hooks } = await initPlugin({
+      learningMemory: { enabled: false },
+      preferenceLearning: { ...makeConfig().preferenceLearning, enabled: false },
+    })
+    vi.mocked(shouldInjectMemories).mockReturnValueOnce(false)
+    vi.mocked(shouldInjectLearnedPreferences).mockReturnValueOnce(false)
+
+    const output = {
+      message: { id: "msg-disabled" },
+      parts: [{ type: "text", text: "I prefer verbose explanations" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s-disabled" }, output)
+
+    expect(learnFromChatMessage).not.toHaveBeenCalled()
+    expect(retrieveRecordsForInjection).not.toHaveBeenCalled()
+    expect(formatLearningMemoryInjection).not.toHaveBeenCalled()
+    expect(output.parts).toHaveLength(1)
+  })
+
+  it("server unsupported fallback: reason_code=unsupported → no injection, legacy path used if preferenceLearning enabled", async () => {
+    const { hooks } = await initPlugin({
+      learningMemory: { enabled: true },
+      preferenceLearning: { ...makeConfig().preferenceLearning, enabled: true },
+    })
+    vi.mocked(shouldInjectMemories).mockReturnValueOnce(false)
+    vi.mocked(shouldInjectLearnedPreferences).mockReturnValueOnce(true)
+    vi.mocked(retrieveRecordsForInjection).mockResolvedValueOnce({
+      status: "partial",
+      reason_code: "unsupported",
+      records: [],
+      learning_summary: { injectable_by_default: false, raw: {} },
+    })
+
+    const output = {
+      message: { id: "msg-unsupported" },
+      parts: [{ type: "text", text: "help me debug" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s-unsupported" }, output)
+
+    expect(formatLearningMemoryInjection).not.toHaveBeenCalled()
+    expect(output.parts).toHaveLength(1)
   })
 })
 

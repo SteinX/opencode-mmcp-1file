@@ -606,3 +606,97 @@ describe("applyConfig", () => {
     expect(target.preferenceLearning.scope).toBe("project")
   })
 })
+
+describe("learningMemory config section", () => {
+  beforeEach(() => {
+    vi.mocked(existsSync).mockReturnValue(false)
+  })
+
+  it("has all learning disabled by default", () => {
+    const config = loadConfig("/dir")
+    expect(config.learningMemory?.enabled).toBe(false)
+    expect(config.learningMemory?.preferences?.enabled).toBe(false)
+    expect(config.learningMemory?.lessons?.enabled).toBe(false)
+    expect(config.learningMemory?.rules?.enabled).toBe(false)
+  })
+
+  it("has correct injection defaults", () => {
+    const config = loadConfig("/dir")
+    expect(config.learningMemory?.injection?.mode).toBe("auto")
+    expect(config.learningMemory?.injection?.maxPinned).toBe(3)
+    expect(config.learningMemory?.injection?.maxRetrieved).toBe(10)
+    expect(config.learningMemory?.injection?.includeEvidence).toBe(false)
+  })
+
+  it("has legacyPreferences fallback enabled by default", () => {
+    const config = loadConfig("/dir")
+    expect(config.learningMemory?.fallback?.legacyPreferences).toBe(true)
+  })
+
+  it("merges partial learningMemory overrides correctly", () => {
+    vi.mocked(existsSync).mockImplementation((p) =>
+      String(p).endsWith("opencode-mmcp-1file.jsonc"),
+    )
+    vi.mocked(readFileSync).mockReturnValue(
+      `{
+        "learningMemory": {
+          "enabled": true,
+          "preferences": { "enabled": true },
+          "injection": { "maxPinned": 5 }
+        }
+      }`,
+    )
+
+    const config = loadConfig("/dir")
+    expect(config.learningMemory?.enabled).toBe(true)
+    expect(config.learningMemory?.preferences?.enabled).toBe(true)
+    expect(config.learningMemory?.lessons?.enabled).toBe(false)
+    expect(config.learningMemory?.rules?.enabled).toBe(false)
+    expect(config.learningMemory?.injection?.maxPinned).toBe(5)
+    expect(config.learningMemory?.injection?.maxRetrieved).toBe(10)
+    expect(config.learningMemory?.injection?.mode).toBe("auto")
+    expect(config.learningMemory?.injection?.includeEvidence).toBe(false)
+    expect(config.learningMemory?.fallback?.legacyPreferences).toBe(true)
+  })
+
+  it("legacy preferenceLearning still parses alongside learningMemory", () => {
+    vi.mocked(existsSync).mockImplementation((p) =>
+      String(p).endsWith("opencode-mmcp-1file.jsonc"),
+    )
+    vi.mocked(readFileSync).mockReturnValue(
+      `{
+        "preferenceLearning": {
+          "enabled": true,
+          "scope": "global"
+        },
+        "learningMemory": {
+          "enabled": false
+        }
+      }`,
+    )
+
+    const config = loadConfig("/dir")
+    expect(config.preferenceLearning.enabled).toBe(true)
+    expect(config.preferenceLearning.scope).toBe("global")
+    expect(config.learningMemory?.enabled).toBe(false)
+    expect(config.learningMemory?.fallback?.legacyPreferences).toBe(true)
+  })
+
+  it("supports manual injection mode override", () => {
+    vi.mocked(existsSync).mockImplementation((p) =>
+      String(p).endsWith("opencode-mmcp-1file.jsonc"),
+    )
+    vi.mocked(readFileSync).mockReturnValue(
+      `{
+        "learningMemory": {
+          "injection": { "mode": "manual", "includeEvidence": true }
+        }
+      }`,
+    )
+
+    const config = loadConfig("/dir")
+    expect(config.learningMemory?.injection?.mode).toBe("manual")
+    expect(config.learningMemory?.injection?.includeEvidence).toBe(true)
+    expect(config.learningMemory?.injection?.maxPinned).toBe(3)
+  })
+})
