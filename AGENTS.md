@@ -47,7 +47,7 @@ Plugin hooks (index.ts)
 - **Error handling**: try/catch with `logger.error()`, return `false`/`null` on failure — never throw to callers
 - **Privacy**: Content passes through `privacy.ts` filters before memory storage. Also intercepted via `tool.execute.before` hook for agent's direct MCP calls.
 - **SDK types**: `as any` casts used where OpenCode SDK type declarations are incomplete — this is intentional, not sloppy
-- **Config**: JSONC format (`opencode-mmcp-1file.jsonc`), loaded via `loadConfig()` with 13 sections (chatMessage, autoCapture, compaction, keywordDetection, preemptiveCompaction, privacy, compactionSummaryCapture, codeIndexSync, preferenceLearning, captureModel, memoryScope, mcpServer, systemPrompt). `mcpServer` also carries HTTP reconnect/heartbeat timing.
+- **Config**: JSONC format (`opencode-mmcp-1file.jsonc`), loaded via `loadConfig()` with 14 sections (chatMessage, autoCapture, compaction, keywordDetection, preemptiveCompaction, privacy, compactionSummaryCapture, codeIndexSync, preferenceLearning, learningMemory, captureModel, memoryScope, mcpServer, systemPrompt). `preferenceLearning` is a legacy/compatibility alias for `learningMemory`. `mcpServer` also carries HTTP reconnect/heartbeat timing.
 - **Transport**: Stdio (default) or HTTP. Stdio spawns one server per plugin process via `StdioClientTransport`. HTTP mode uses `StreamableHTTPClientTransport` with a shared server managed by `server-process.ts` (spawn, health check, file-based refcount).
 - **Testing**: When adding or modifying functionality, the corresponding unit tests in `tests/` **must** be created or updated in the same change. Follow existing test patterns (vitest, `vi.mock()` for dependencies). Run `npm run test` to verify before considering work complete.
 - **Sync rule**: Any change to config schema (`src/config.ts` `PluginConfig`), default values (`DEFAULT_CONFIG`), or config-driven behavior **must** be reflected in all four places in the same commit: (1) code implementation, (2) `README.md` Configuration section (both the JSONC example block and the config sections table), (3) example config file `opencode-mmcp-1file.example.jsonc`, (4) `/setup-mcp-memory` guidance in `commands/setup-mcp-memory.md` when the option is user-configurable. If a section is added/removed/renamed, update the section count in this file's Conventions → Config bullet as well.
@@ -63,6 +63,13 @@ Plugin hooks (index.ts)
 | `src/services/mcp-client.ts` | MCP connection singleton (stdio or HTTP) | `recall()`, `searchMemory()`, `storeMemory()`, `listMemories()`, `discoverTools()`, `disconnectMemoryClient()` |
 | `src/services/tool-registry.ts` | Register 14 unified tools (consolidating 17 MCP operations, including `mcp_server_control`) | `buildToolRegistry()` |
 | `commands/manage-mcp-server.md` | `/manage-mcp-server` slash command for shared HTTP MCP server control | N/A (Markdown prompt) |
+| `src/services/learning-memory-client.ts` | Learning memory MCP client — typed read/write/list for preference/lesson/rule records | `getLearningMemories()`, `storeLearningMemory()`, `updateLearningMemory()` |
+| `src/services/learning-memory-orchestrator.ts` | Orchestrates learning memory injection into context (pinned rules + retrieved records) | `injectLearningMemories()` |
+| `src/services/learning-memory-format.ts` | Formats learning memory records for context injection | `formatLearningMemoriesForInjection()` |
+| `src/services/learning-memory-legacy.ts` | Reads legacy `USER — Preference:` memories as fallback when server lacks schema_version support | `getLegacyPreferences()` |
+| `src/services/lesson-learning.ts` | Extracts lessons/patterns/pitfalls from session signals | `extractLessons()` |
+| `commands/manage-learning-memory.md` | `/manage-learning-memory` slash command for learning memory lifecycle management | N/A (Markdown prompt) |
+| `commands/migrate-learning-memory.md` | `/migrate-learning-memory` slash command for migrating legacy preferences to typed learning records | N/A (Markdown prompt) |
 | `src/services/system-prompt.ts` | Memory Protocol system prompt builder | `buildMemorySystemPrompt()` |
 | `src/services/auto-capture.ts` | Session-idle memory extraction | `performAutoCapture()` |
 | `src/services/code-index-sync.ts` | Workspace fingerprinting + server-guided durable index resume/wait/start state machine | `ensureCodeIndexFresh()`, `computeWorkspaceFingerprint()`, `decideIndexSyncAction()` |

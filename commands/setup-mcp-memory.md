@@ -229,3 +229,48 @@ After setup, suggest:
 3. Generate minimal config (only non-default values + mcpServer)
 4. Write file, reload, verify
 5. Suggest next steps
+
+## Learning Memory (Optional)
+
+Learning memory is **disabled by default**. It enables the plugin to capture typed preferences, lessons, and rules from conversational signals and inject them back into future sessions.
+
+### Choices
+
+Ask the user which (if any) learning memory features they want:
+
+1. **Disabled (default)** — no learning memory; skip this section entirely
+2. **Project preference learning** — capture user preferences scoped to this project
+3. **Global preference learning** — capture preferences shared across all projects
+4. **Project lessons learning** — extract lessons, patterns, and pitfalls from sessions
+
+### Server API requirement
+
+Learning memory tools require `memory-mcp-1file` server v1+ with `metadata.learning` support. If the server does not support this API, the plugin will log a warning and skip learning operations.
+
+### Legacy fallback
+
+When the server does not support the learning API, the plugin can fall back to reading legacy `USER — Preference:` memories if `learningMemory.fallback.legacyPreferences = true` (the default). This ensures continuity for users migrating from the older preference learning system.
+
+### Config alias
+
+`preferenceLearning` is the legacy/compatibility config alias for the older preference learning system. New configurations should use `learningMemory` instead. Both are supported, but `learningMemory` takes precedence when both are present.
+
+### Example config snippet
+
+```jsonc
+"learningMemory": {
+  "enabled": true,
+  "preferences": { "enabled": true },
+  "lessons": { "enabled": false },
+  "rules": { "enabled": false },
+  "injection": {
+    "mode": "auto",
+    "maxPinned": 3,
+    "maxRetrieved": 10,
+    "includeEvidence": false
+  },
+  "fallback": {
+    "legacyPreferences": true
+  }
+}
+```

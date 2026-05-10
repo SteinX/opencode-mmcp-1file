@@ -65,6 +65,18 @@ vi.mock("../../src/services/memory-migration.js", () => ({
   }),
 }))
 
+vi.mock("../../src/services/learning-memory-client.js", () => ({
+  listLearningMemories: vi.fn().mockResolvedValue({ status: "ok", records: [] }),
+  getLearningMemory: vi.fn().mockResolvedValue({ status: "ok", record: { id: "abc", content: "test" } }),
+  promoteLearningMemory: vi.fn().mockResolvedValue({ status: "ok" }),
+  rejectLearningMemory: vi.fn().mockResolvedValue({ status: "ok" }),
+  archiveLearningMemory: vi.fn().mockResolvedValue({ status: "ok" }),
+  supersedeLearningMemory: vi.fn().mockResolvedValue({ status: "ok" }),
+  updateLearningMemory: vi.fn().mockResolvedValue({ status: "ok" }),
+  migrateLegacyLearningMemories: vi.fn().mockResolvedValue({ status: "ok", dry_run: true, counts: {} }),
+  deleteLearningMemory: vi.fn().mockResolvedValue({ status: "ok" }),
+}))
+
 const {
   callMemoryTool,
   getMemoryClient,
@@ -85,6 +97,17 @@ const { stripPrivateContent } = await import("../../src/utils/privacy.js")
 const { applyConfig } = await import("../../src/config.js")
 const { isConnectionFailed, getConnectionStatus } = await import("../../src/services/connection-state.js")
 const { migrateMemory } = await import("../../src/services/memory-migration.js")
+const {
+  listLearningMemories,
+  getLearningMemory,
+  promoteLearningMemory,
+  rejectLearningMemory,
+  archiveLearningMemory,
+  supersedeLearningMemory,
+  updateLearningMemory,
+  migrateLegacyLearningMemories,
+  deleteLearningMemory,
+} = await import("../../src/services/learning-memory-client.js")
 
 function makeConfig(
   overrides?: Partial<Omit<PluginConfig, "codeIndexSync">> & { codeIndexSync?: Partial<PluginConfig["codeIndexSync"]> },
@@ -128,7 +151,7 @@ describe("buildToolRegistry", () => {
     vi.clearAllMocks()
   })
 
-  it("returns 14 unified tools", () => {
+  it("returns 28 unified tools", () => {
     const tools = buildToolRegistry(makeConfig())
     const toolNames = Object.keys(tools)
     expect(toolNames).toEqual([
@@ -145,6 +168,20 @@ describe("buildToolRegistry", () => {
       "knowledge_graph",
       "get_status",
       "reload_config",
+      "memory_learning_list",
+      "memory_learning_retrieve",
+      "memory_learning_confirm",
+      "memory_learning_promote",
+      "memory_learning_reject",
+      "memory_learning_archive",
+      "memory_learning_supersede",
+      "memory_learning_update",
+      "memory_learning_migrate_legacy",
+      "memory_learning_delete",
+      "learning_memory_reject",
+      "learning_memory_archive",
+      "learning_memory_supersede",
+      "learning_memory_migrate_legacy",
       "mcp_server_control",
     ])
   })
@@ -1689,5 +1726,237 @@ describe("proxy fast-fail when connection failed", () => {
     const result = await tools.memory_manage.execute({ action: "get", id: "mem-1" }, mockContext)
     expect(result).toContain("Memory server temporarily unavailable")
     expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+})
+
+describe("memory_learning_list tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("calls listLearningMemories with no filters when none provided", async () => {
+    const config = makeConfig()
+    const tools = buildToolRegistry(config)
+    const result = await tools.memory_learning_list.execute({}, mockContext)
+    expect(listLearningMemories).toHaveBeenCalledWith(config, {})
+    expect(JSON.parse(result)).toMatchObject({ status: "ok", records: [] })
+  })
+
+  it("forwards kind filter to listLearningMemories", async () => {
+    const config = makeConfig()
+    const tools = buildToolRegistry(config)
+    await tools.memory_learning_list.execute({ kind: "user_preference" }, mockContext)
+    expect(listLearningMemories).toHaveBeenCalledWith(config, expect.objectContaining({ kind: "user_preference" }))
+  })
+
+  it("forwards status as include_status array", async () => {
+    const config = makeConfig()
+    const tools = buildToolRegistry(config)
+    await tools.memory_learning_list.execute({ status: "candidate" }, mockContext)
+    expect(listLearningMemories).toHaveBeenCalledWith(config, expect.objectContaining({ include_status: ["candidate"] }))
+  })
+
+  it("parses metadata_filter_json and forwards as metadata_filter", async () => {
+    const config = makeConfig()
+    const tools = buildToolRegistry(config)
+    await tools.memory_learning_list.execute({ metadata_filter_json: '{"project":"foo"}' }, mockContext)
+    expect(listLearningMemories).toHaveBeenCalledWith(config, expect.objectContaining({ metadata_filter: { project: "foo" } }))
+  })
+
+  it("does not call callMemoryTool directly", async () => {
+    const config = makeConfig()
+    const tools = buildToolRegistry(config)
+    await tools.memory_learning_list.execute({}, mockContext)
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+})
+
+describe("memory_learning_reject tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("calls rejectLearningMemory with id and optional reason", async () => {
+    const config = makeConfig()
+    const tools = buildToolRegistry(config)
+    await tools.memory_learning_reject.execute({ id: "mem-1", reason: "not accurate" }, mockContext)
+    expect(rejectLearningMemory).toHaveBeenCalledWith(config, { id: "mem-1", reason: "not accurate" })
+  })
+
+  it("does not call callMemoryTool directly", async () => {
+    const config = makeConfig()
+    const tools = buildToolRegistry(config)
+    await tools.memory_learning_reject.execute({ id: "mem-1" }, mockContext)
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+
+  it("returns error when id is missing", async () => {
+    const config = makeConfig()
+    const tools = buildToolRegistry(config)
+    const result = await tools.memory_learning_reject.execute({ id: "" }, mockContext)
+    expect(result).toContain("Error")
+    expect(rejectLearningMemory).not.toHaveBeenCalled()
+  })
+})
+
+describe("memory_learning_confirm tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("calls promoteLearningMemory with target_status confirmed", async () => {
+    const config = makeConfig()
+    const tools = buildToolRegistry(config)
+    await tools.memory_learning_confirm.execute({ id: "mem-1" }, mockContext)
+    expect(promoteLearningMemory).toHaveBeenCalledWith(config, { id: "mem-1", target_status: "confirmed" })
+  })
+
+  it("does not call callMemoryTool directly", async () => {
+    const config = makeConfig()
+    const tools = buildToolRegistry(config)
+    await tools.memory_learning_confirm.execute({ id: "mem-1" }, mockContext)
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+})
+
+describe("memory_learning_promote tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("calls promoteLearningMemory with target_status rule", async () => {
+    const config = makeConfig()
+    const tools = buildToolRegistry(config)
+    await tools.memory_learning_promote.execute({ id: "mem-1", target_status: "rule" }, mockContext)
+    expect(promoteLearningMemory).toHaveBeenCalledWith(config, { id: "mem-1", target_status: "rule" })
+  })
+})
+
+describe("memory_learning_archive tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("calls archiveLearningMemory with id", async () => {
+    const config = makeConfig()
+    const tools = buildToolRegistry(config)
+    await tools.memory_learning_archive.execute({ id: "mem-1" }, mockContext)
+    expect(archiveLearningMemory).toHaveBeenCalledWith(config, { id: "mem-1" })
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+})
+
+describe("memory_learning_supersede tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("calls supersedeLearningMemory with id and replacement_id", async () => {
+    const config = makeConfig()
+    const tools = buildToolRegistry(config)
+    await tools.memory_learning_supersede.execute({ id: "mem-1", replacement_id: "mem-2" }, mockContext)
+    expect(supersedeLearningMemory).toHaveBeenCalledWith(config, { id: "mem-1", replacement_id: "mem-2" })
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+})
+
+describe("memory_learning_update tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("calls updateLearningMemory with content and confidence", async () => {
+    const config = makeConfig()
+    const tools = buildToolRegistry(config)
+    await tools.memory_learning_update.execute({ id: "mem-1", content: "new content", confidence: 0.9 }, mockContext)
+    expect(updateLearningMemory).toHaveBeenCalledWith(config, { id: "mem-1", content: "new content", confidence: 0.9 })
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+
+  it("parses metadata_json and passes as metadata", async () => {
+    const config = makeConfig()
+    const tools = buildToolRegistry(config)
+    await tools.memory_learning_update.execute({ id: "mem-1", metadata_json: '{"tag":"v2"}' }, mockContext)
+    expect(updateLearningMemory).toHaveBeenCalledWith(config, { id: "mem-1", metadata: { tag: "v2" } })
+  })
+})
+
+describe("memory_learning_retrieve tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("calls getLearningMemory with id", async () => {
+    const config = makeConfig()
+    const tools = buildToolRegistry(config)
+    await tools.memory_learning_retrieve.execute({ id: "mem-1" }, mockContext)
+    expect(getLearningMemory).toHaveBeenCalledWith(config, { id: "mem-1" })
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+})
+
+describe("memory_learning_migrate_legacy tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("defaults dry_run to true", async () => {
+    const config = makeConfig()
+    const tools = buildToolRegistry(config)
+    await tools.memory_learning_migrate_legacy.execute({}, mockContext)
+    expect(migrateLegacyLearningMemories).toHaveBeenCalledWith(config, expect.objectContaining({ dry_run: true }))
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+
+  it("passes dry_run=false when explicitly set", async () => {
+    const config = makeConfig()
+    const tools = buildToolRegistry(config)
+    await tools.memory_learning_migrate_legacy.execute({ dry_run: false }, mockContext)
+    expect(migrateLegacyLearningMemories).toHaveBeenCalledWith(config, expect.objectContaining({ dry_run: false }))
+  })
+})
+
+describe("memory_learning_delete tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("calls deleteLearningMemory with id (deprecated shim)", async () => {
+    const config = makeConfig()
+    const tools = buildToolRegistry(config)
+    await tools.memory_learning_delete.execute({ id: "mem-1" }, mockContext)
+    expect(deleteLearningMemory).toHaveBeenCalledWith(config, { id: "mem-1" })
+    expect(callMemoryTool).not.toHaveBeenCalled()
+  })
+
+  it("description mentions DEPRECATED", () => {
+    const tools = buildToolRegistry(makeConfig())
+    expect(tools.memory_learning_delete.description).toContain("DEPRECATED")
+  })
+})
+
+describe("all learning memory tools exist in registry", () => {
+  it("all 14 learning tools are present (10 memory_learning_* + 4 canonical learning_memory_*)", () => {
+    const tools = buildToolRegistry(makeConfig())
+    const learningTools = [
+      "memory_learning_list",
+      "memory_learning_retrieve",
+      "memory_learning_confirm",
+      "memory_learning_promote",
+      "memory_learning_reject",
+      "memory_learning_archive",
+      "memory_learning_supersede",
+      "memory_learning_update",
+      "memory_learning_migrate_legacy",
+      "memory_learning_delete",
+      "learning_memory_reject",
+      "learning_memory_archive",
+      "learning_memory_supersede",
+      "learning_memory_migrate_legacy",
+    ]
+    for (const name of learningTools) {
+      expect(tools).toHaveProperty(name)
+      expect(typeof tools[name].execute).toBe("function")
+    }
   })
 })

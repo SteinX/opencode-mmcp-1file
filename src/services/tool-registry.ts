@@ -28,6 +28,17 @@ import { isConnectionFailed, getConnectionStatus } from "./connection-state.js"
 import type { MemoryOperationContext } from "./mcp-client.js"
 import { buildCodeIndexFilterArgs } from "../utils/code-index-filters.js"
 import { migrateMemory } from "./memory-migration.js"
+import {
+  listLearningMemories,
+  getLearningMemory,
+  promoteLearningMemory,
+  rejectLearningMemory,
+  archiveLearningMemory,
+  supersedeLearningMemory,
+  updateLearningMemory,
+  migrateLegacyLearningMemories,
+  deleteLearningMemory,
+} from "./learning-memory-client.js"
 
 const UNAVAILABLE_MESSAGE =
   "Memory server temporarily unavailable — auto-reconnecting. " +
@@ -750,6 +761,348 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
           return msg
         } catch (err) {
           return `Config reload failed: ${String(err)}`
+        }
+      },
+    }),
+
+    // --- Learning Memory Management Tools ---
+
+    memory_learning_list: tool({
+      description:
+        "List learning memories with optional filters. Use to browse stored learnings by kind (user_preference, project_lesson, project_pattern, project_pitfall, workflow_rule), " +
+        "status (candidate, confirmed, rule, rejected, superseded, archived), scope, namespace, user_id, or metadata. " +
+        "Omit filters to list all learnings. Use memory_learning_retrieve to fetch a specific record by id.",
+      args: {
+        kind: tool.schema.string().optional(),
+        status: tool.schema.string().optional(),
+        scope: tool.schema.string().optional(),
+        namespace: tool.schema.string().optional(),
+        user_id: tool.schema.string().optional(),
+        metadata_filter_json: tool.schema.string().optional(),
+        limit: tool.schema.number().optional(),
+      },
+      execute: async (args) => {
+        if (isConnectionFailed()) return UNAVAILABLE_MESSAGE
+        try {
+          const callArgs: Record<string, unknown> = {}
+          if (args.kind) callArgs.kind = args.kind
+          if (args.status) callArgs.include_status = [args.status]
+          if (args.scope) callArgs.scope = args.scope
+          if (args.namespace) callArgs.namespace = args.namespace
+          if (args.user_id) callArgs.user_id = args.user_id
+          if (args.metadata_filter_json) {
+            const parsed = parseJsonArg(args.metadata_filter_json)
+            if (parsed) callArgs.metadata_filter = parsed
+          }
+          if (args.limit) callArgs.limit = args.limit
+          const result = await listLearningMemories(config, callArgs as any)
+          return JSON.stringify(result)
+        } catch (err) {
+          logger.error("memory_learning_list failed", { error: String(err) })
+          return `Error: ${String(err)}`
+        }
+      },
+    }),
+
+    memory_learning_retrieve: tool({
+      description: "Retrieve a specific learning memory by id. Returns the full record including metadata, status, and lifecycle state.",
+      args: {
+        id: tool.schema.string(),
+      },
+      execute: async (args) => {
+        if (isConnectionFailed()) return UNAVAILABLE_MESSAGE
+        if (!args.id) return "Error: id is required"
+        try {
+          const result = await getLearningMemory(config, { id: args.id })
+          return JSON.stringify(result)
+        } catch (err) {
+          logger.error("memory_learning_retrieve failed", { error: String(err) })
+          return `Error: ${String(err)}`
+        }
+      },
+    }),
+
+    memory_learning_confirm: tool({
+      description:
+        "Confirm a candidate learning memory by id, promoting it to confirmed status. " +
+        "Use when a candidate learning has been validated and should be treated as an active confirmed memory.",
+      args: {
+        id: tool.schema.string(),
+      },
+      execute: async (args) => {
+        if (isConnectionFailed()) return UNAVAILABLE_MESSAGE
+        if (!args.id) return "Error: id is required"
+        try {
+          const result = await promoteLearningMemory(config, { id: args.id, target_status: "confirmed" })
+          return JSON.stringify(result)
+        } catch (err) {
+          logger.error("memory_learning_confirm failed", { error: String(err) })
+          return `Error: ${String(err)}`
+        }
+      },
+    }),
+
+    memory_learning_promote: tool({
+      description:
+        "Promote a learning memory to a higher status by id. Use target_status='confirmed' to confirm a candidate, or 'rule' to elevate to a hard rule. " +
+        "For simple candidate confirmation, prefer memory_learning_confirm.",
+      args: {
+        id: tool.schema.string(),
+        target_status: tool.schema.enum(["confirmed", "rule"]),
+      },
+      execute: async (args) => {
+        if (isConnectionFailed()) return UNAVAILABLE_MESSAGE
+        if (!args.id) return "Error: id is required"
+        if (!args.target_status) return "Error: target_status is required"
+        try {
+          const result = await promoteLearningMemory(config, { id: args.id, target_status: args.target_status })
+          return JSON.stringify(result)
+        } catch (err) {
+          logger.error("memory_learning_promote failed", { error: String(err) })
+          return `Error: ${String(err)}`
+        }
+      },
+    }),
+
+    memory_learning_reject: tool({
+      description:
+        "Reject a learning memory by id. Marks it as rejected so it is excluded from future injection and search. " +
+        "Optionally provide a reason. Does not delete the record — use memory_learning_delete (deprecated) for hard removal.",
+      args: {
+        id: tool.schema.string(),
+        reason: tool.schema.string().optional(),
+      },
+      execute: async (args) => {
+        if (isConnectionFailed()) return UNAVAILABLE_MESSAGE
+        if (!args.id) return "Error: id is required"
+        try {
+          const result = await rejectLearningMemory(config, { id: args.id, reason: args.reason })
+          return JSON.stringify(result)
+        } catch (err) {
+          logger.error("memory_learning_reject failed", { error: String(err) })
+          return `Error: ${String(err)}`
+        }
+      },
+    }),
+
+    memory_learning_archive: tool({
+      description:
+        "Archive a learning memory by id. Moves it to archived status — excluded from default injection but retained for history. " +
+        "Use for learnings that are no longer relevant but should be preserved.",
+      args: {
+        id: tool.schema.string(),
+      },
+      execute: async (args) => {
+        if (isConnectionFailed()) return UNAVAILABLE_MESSAGE
+        if (!args.id) return "Error: id is required"
+        try {
+          const result = await archiveLearningMemory(config, { id: args.id })
+          return JSON.stringify(result)
+        } catch (err) {
+          logger.error("memory_learning_archive failed", { error: String(err) })
+          return `Error: ${String(err)}`
+        }
+      },
+    }),
+
+    memory_learning_supersede: tool({
+      description:
+        "Supersede a learning memory by id, linking it to a replacement record. " +
+        "Marks the original as superseded and records the replacement_id in the lineage chain. " +
+        "Use when a learning has been replaced by a newer, more accurate version.",
+      args: {
+        id: tool.schema.string(),
+        replacement_id: tool.schema.string(),
+      },
+      execute: async (args) => {
+        if (isConnectionFailed()) return UNAVAILABLE_MESSAGE
+        if (!args.id) return "Error: id is required"
+        if (!args.replacement_id) return "Error: replacement_id is required"
+        try {
+          const result = await supersedeLearningMemory(config, { id: args.id, replacement_id: args.replacement_id })
+          return JSON.stringify(result)
+        } catch (err) {
+          logger.error("memory_learning_supersede failed", { error: String(err) })
+          return `Error: ${String(err)}`
+        }
+      },
+    }),
+
+    memory_learning_update: tool({
+      description:
+        "Update the content or metadata of a learning memory by id. " +
+        "Use to correct content, adjust confidence, or add/change metadata fields. " +
+        "Only provide fields you want to change; omit unchanged fields.",
+      args: {
+        id: tool.schema.string(),
+        content: tool.schema.string().optional(),
+        confidence: tool.schema.number().optional(),
+        metadata_json: tool.schema.string().optional(),
+      },
+      execute: async (args) => {
+        if (isConnectionFailed()) return UNAVAILABLE_MESSAGE
+        if (!args.id) return "Error: id is required"
+        try {
+          const updateArgs: { id: string; content?: string; confidence?: number; metadata?: Record<string, unknown> } = { id: args.id }
+          if (args.content !== undefined) updateArgs.content = args.content
+          if (args.confidence !== undefined) updateArgs.confidence = args.confidence
+          if (args.metadata_json) {
+            const parsed = parseJsonArg(args.metadata_json)
+            if (parsed) updateArgs.metadata = parsed
+          }
+          const result = await updateLearningMemory(config, updateArgs)
+          return JSON.stringify(result)
+        } catch (err) {
+          logger.error("memory_learning_update failed", { error: String(err) })
+          return `Error: ${String(err)}`
+        }
+      },
+    }),
+
+    memory_learning_migrate_legacy: tool({
+      description:
+        "Trigger migration of legacy learning memories to the current schema. " +
+        "Set dry_run=true (default) to preview what would be migrated without making changes. " +
+        "Set dry_run=false to execute the migration. Optionally filter by source_prefixes.",
+      args: {
+        dry_run: tool.schema.boolean().optional(),
+        source_prefixes: tool.schema.string().optional(),
+      },
+      execute: async (args) => {
+        if (isConnectionFailed()) return UNAVAILABLE_MESSAGE
+        try {
+          const migrateArgs: { dry_run?: boolean; source_prefixes?: string[] } = {
+            dry_run: args.dry_run ?? true,
+          }
+          if (args.source_prefixes) {
+            migrateArgs.source_prefixes = args.source_prefixes.split(",").map((s) => s.trim()).filter(Boolean)
+          }
+          const result = await migrateLegacyLearningMemories(config, migrateArgs)
+          return JSON.stringify(result)
+        } catch (err) {
+          logger.error("memory_learning_migrate_legacy failed", { error: String(err) })
+          return `Error: ${String(err)}`
+        }
+      },
+    }),
+
+    memory_learning_delete: tool({
+      description:
+        "[DEPRECATED] Soft-invalidation compatibility shim. Prefer memory_learning_reject or memory_learning_archive for lifecycle management. " +
+        "This tool forwards to the server's delete operation for backward compatibility only. " +
+        "Do not use for new workflows — use reject/archive/supersede instead.",
+      args: {
+        id: tool.schema.string(),
+      },
+      execute: async (args) => {
+        if (isConnectionFailed()) return UNAVAILABLE_MESSAGE
+        if (!args.id) return "Error: id is required"
+        try {
+          const result = await deleteLearningMemory(config, { id: args.id })
+          return JSON.stringify(result)
+        } catch (err) {
+          logger.error("memory_learning_delete failed", { error: String(err) })
+          return `Error: ${String(err)}`
+        }
+      },
+    }),
+
+    // --- Canonical learning_memory_* tools (server protocol naming) ---
+    // These are the authoritative tool names per the server protocol handoff.
+    // The memory_learning_* tools above are the plugin's internal naming convention;
+    // these canonical aliases ensure the LLM can use the protocol-specified names.
+
+    learning_memory_reject: tool({
+      description:
+        "Reject a learning memory by id. Marks it as rejected so it is excluded from future injection and search. " +
+        "Optionally provide a reason. Does not delete the record — use the deprecated delete shim for hard removal. " +
+        "Preferred over memory_learning_reject for new workflows.",
+      args: {
+        id: tool.schema.string(),
+        reason: tool.schema.string().optional(),
+      },
+      execute: async (args) => {
+        if (isConnectionFailed()) return UNAVAILABLE_MESSAGE
+        if (!args.id) return "Error: id is required"
+        try {
+          const result = await rejectLearningMemory(config, { id: args.id, reason: args.reason })
+          return JSON.stringify(result)
+        } catch (err) {
+          logger.error("learning_memory_reject failed", { error: String(err) })
+          return `Error: ${String(err)}`
+        }
+      },
+    }),
+
+    learning_memory_archive: tool({
+      description:
+        "Archive a learning memory by id. Moves it to archived status — excluded from default injection but retained for history. " +
+        "Use for learnings that are no longer relevant but should be preserved. " +
+        "Preferred over memory_learning_archive for new workflows.",
+      args: {
+        id: tool.schema.string(),
+      },
+      execute: async (args) => {
+        if (isConnectionFailed()) return UNAVAILABLE_MESSAGE
+        if (!args.id) return "Error: id is required"
+        try {
+          const result = await archiveLearningMemory(config, { id: args.id })
+          return JSON.stringify(result)
+        } catch (err) {
+          logger.error("learning_memory_archive failed", { error: String(err) })
+          return `Error: ${String(err)}`
+        }
+      },
+    }),
+
+    learning_memory_supersede: tool({
+      description:
+        "Supersede a learning memory by id, linking it to a replacement record. " +
+        "Marks the original as superseded and records the replacement_id in the lineage chain. " +
+        "Use when a learning has been replaced by a newer, more accurate version. " +
+        "Preferred over memory_learning_supersede for new workflows.",
+      args: {
+        id: tool.schema.string(),
+        replacement_id: tool.schema.string(),
+      },
+      execute: async (args) => {
+        if (isConnectionFailed()) return UNAVAILABLE_MESSAGE
+        if (!args.id) return "Error: id is required"
+        if (!args.replacement_id) return "Error: replacement_id is required"
+        try {
+          const result = await supersedeLearningMemory(config, { id: args.id, replacement_id: args.replacement_id })
+          return JSON.stringify(result)
+        } catch (err) {
+          logger.error("learning_memory_supersede failed", { error: String(err) })
+          return `Error: ${String(err)}`
+        }
+      },
+    }),
+
+    learning_memory_migrate_legacy: tool({
+      description:
+        "Trigger migration of legacy learning memories to the current schema. " +
+        "Set dry_run=true (default) to preview what would be migrated without making changes. " +
+        "Set dry_run=false to execute the migration. Optionally filter by source_prefixes. " +
+        "Preferred over memory_learning_migrate_legacy for new workflows.",
+      args: {
+        dry_run: tool.schema.boolean().optional(),
+        source_prefixes: tool.schema.string().optional(),
+      },
+      execute: async (args) => {
+        if (isConnectionFailed()) return UNAVAILABLE_MESSAGE
+        try {
+          const migrateArgs: { dry_run?: boolean; source_prefixes?: string[] } = {
+            dry_run: args.dry_run ?? true,
+          }
+          if (args.source_prefixes) {
+            migrateArgs.source_prefixes = args.source_prefixes.split(",").map((s) => s.trim()).filter(Boolean)
+          }
+          const result = await migrateLegacyLearningMemories(config, migrateArgs)
+          return JSON.stringify(result)
+        } catch (err) {
+          logger.error("learning_memory_migrate_legacy failed", { error: String(err) })
+          return `Error: ${String(err)}`
         }
       },
     }),

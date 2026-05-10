@@ -10,6 +10,15 @@ export type PreferenceSignalType =
   | "negation"
   | "message_updated"
 
+export interface LearningMemoryCandidate {
+  kind: "user_preference" | "project_lesson" | "project_pattern" | "project_pitfall"
+  content: string
+  confidence: number
+  importance: number
+  source: string
+  evidence?: string
+}
+
 export interface PreferenceSignal {
   signalType: PreferenceSignalType
   excerpt: string
@@ -491,16 +500,24 @@ export async function extractPreferenceCandidates(
   text: string,
   signal: PreferenceSignal,
   llmCaller: LlmCaller = callChatCompletion,
-): Promise<PreferenceCandidate[]> {
+): Promise<LearningMemoryCandidate[]> {
   const truncated = truncateInput(text, config.preferenceLearning.maxInputChars)
   const messages = buildPreferenceExtractionPrompt(truncated, signal)
 
   try {
     const raw = await llmCaller(config, messages)
-    return parsePreferenceCandidates(raw, signal.signalType, {
+    const parsed = parsePreferenceCandidates(raw, signal.signalType, {
       minConfidence: config.preferenceLearning.minConfidence,
       candidateConfidence: config.preferenceLearning.candidateConfidence,
     })
+    return parsed.map((c) => ({
+      kind: "user_preference" as const,
+      content: c.content,
+      confidence: c.confidence,
+      importance: c.status === "confirmed" ? 0.8 : 0.5,
+      source: signal.source ?? "preference-learning",
+      evidence: c.rationale,
+    }))
   } catch {
     return []
   }

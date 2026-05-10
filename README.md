@@ -155,6 +155,7 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
   },
 
   // Preference learning from conversational signals
+  // NOTE: "preferenceLearning" is a legacy/compatibility alias. Use "learningMemory" instead for new configurations.
   "preferenceLearning": {
     "enabled": false,
     "learnOnCorrections": true,      // Learn when users correct prior assistant output
@@ -169,6 +170,31 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
     "debounceMs": 10000,             // Debounce learning updates to avoid rapid duplicate writes
     "maxInputChars": 4000,           // Truncate oversized inputs before preference extraction
     "maxStoredPreferences": 50       // Upper bound for stored preference records per scope
+  },
+
+  // Learning memory — typed preference/lesson/rule capture (default: disabled)
+  // Requires server-side support: metadata.learning.schema_version = 1 must be present on stored records.
+  // Only confirmed/rule records that are active and injectable_by_default=true are injected into context.
+  "learningMemory": {
+    // Master switch — set to true to enable any learning memory features
+    "enabled": false,
+    // Preference learning — capture user preferences from chat signals
+    "preferences": { "enabled": false },
+    // Lesson learning — extract lessons/patterns/pitfalls from sessions
+    "lessons": { "enabled": false },
+    // Rule learning — promote confirmed preferences to hard rules
+    "rules": { "enabled": false },
+    // Injection settings — how learning memories appear in context
+    "injection": {
+      "mode": "auto",              // "auto" | "manual"
+      "maxPinned": 3,              // max hard rules pinned in context
+      "maxRetrieved": 10,          // max retrieved learning memories
+      "includeEvidence": false     // include source evidence snippets
+    },
+    // Fallback — read legacy USER — Preference: memories when server unsupported
+    "fallback": {
+      "legacyPreferences": true
+    }
   },
 
   // LLM for auto-capture summarization
@@ -225,7 +251,8 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
 | **privacy** | Redaction of `<private>` tagged content |
 | **compactionSummaryCapture** | Saves compaction summaries as memories |
 | **codeIndexSync** | Detects stale workspace indexes; queries server status first; resumes interrupted jobs when possible; falls back to full rebuild only when policy permits (`allowFullRestartFallback`). Nested `resume` policy controls polling, timeouts, and fallback behavior. Optional `includePatterns` / `excludePatterns` filter defaults narrow which files the server indexes; omit to use server env-var defaults. |
-| **preferenceLearning** | Controls preference extraction, confidence thresholds, scope, and injection cadence for learned user preferences |
+| **preferenceLearning** | Legacy/compatibility alias for `learningMemory`. Controls preference extraction, confidence thresholds, scope, and injection cadence for learned user preferences. Use `learningMemory` for new configurations. |
+| **learningMemory** | Typed preference/lesson/rule capture from conversational signals. Requires server-side support (`metadata.learning.schema_version = 1`). Only `confirmed`/`rule` records that are `active` and `injectable_by_default=true` are injected into context. Sub-sections: `preferences`, `lessons`, `rules`, `injection`, `fallback`. |
 | **captureModel** | LLM for auto-capture summarization — uses direct HTTP when apiKey is set, otherwise OpenCode session API |
 | **memoryScope** | Logical scope, agent-sharing defaults, and default metadata layered inside the current shard |
 | **mcpServer** | [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server command, physical data shard, embedding model, transport mode, and HTTP reconnect/heartbeat timing |
@@ -399,6 +426,26 @@ The agent will walk you through:
 After answering, the agent generates `opencode-mmcp-1file.jsonc` in the project root and calls `reload_config()` to apply changes immediately — no restart needed.
 
 You can also re-run `/setup-mcp-memory` anytime to update your configuration.
+
+## Learning Memory Commands
+
+The plugin ships with two slash commands for managing learning memories:
+
+### `/manage-learning-memory`
+
+View, confirm, reject, archive, or supersede learning memory records (preferences, lessons, rules). Supports listing pending candidates, promoting confirmed preferences to rules, and reviewing the full learning memory lifecycle.
+
+```
+/manage-learning-memory
+```
+
+### `/migrate-learning-memory`
+
+Migrate legacy `USER — Preference:` memories to the typed learning memory format (`metadata.learning.schema_version = 1`). Run once after enabling `learningMemory` to preserve existing preferences.
+
+```
+/migrate-learning-memory
+```
 
 ## MCP Server Management
 

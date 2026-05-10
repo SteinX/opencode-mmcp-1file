@@ -84,6 +84,21 @@ export interface PluginConfig {
     maxInputChars: number
     maxStoredPreferences: number
   }
+  learningMemory?: {
+    enabled?: boolean
+    preferences?: { enabled?: boolean }
+    lessons?: { enabled?: boolean }
+    rules?: { enabled?: boolean }
+    injection?: {
+      mode?: "auto" | "manual"
+      maxPinned?: number
+      maxRetrieved?: number
+      includeEvidence?: boolean
+    }
+    fallback?: {
+      legacyPreferences?: boolean
+    }
+  }
   captureModel: {
     provider: string
     model: string
@@ -202,6 +217,21 @@ export const DEFAULT_CONFIG: PluginConfig = {
     maxInputChars: 4_000,
     maxStoredPreferences: 50,
   },
+  learningMemory: {
+    enabled: false,
+    preferences: { enabled: false },
+    lessons: { enabled: false },
+    rules: { enabled: false },
+    injection: {
+      mode: "auto",
+      maxPinned: 3,
+      maxRetrieved: 10,
+      includeEvidence: false,
+    },
+    fallback: {
+      legacyPreferences: true,
+    },
+  },
   captureModel: {
     provider: "",
     model: "",
@@ -283,6 +313,30 @@ function mergeConfig(defaults: PluginConfig, overrides: Partial<any>): PluginCon
       },
     },
     preferenceLearning: { ...defaults.preferenceLearning, ...overrides.preferenceLearning },
+    learningMemory: {
+      ...defaults.learningMemory,
+      ...overrides.learningMemory,
+      preferences: {
+        ...defaults.learningMemory?.preferences,
+        ...overrides.learningMemory?.preferences,
+      },
+      lessons: {
+        ...defaults.learningMemory?.lessons,
+        ...overrides.learningMemory?.lessons,
+      },
+      rules: {
+        ...defaults.learningMemory?.rules,
+        ...overrides.learningMemory?.rules,
+      },
+      injection: {
+        ...defaults.learningMemory?.injection,
+        ...overrides.learningMemory?.injection,
+      },
+      fallback: {
+        ...defaults.learningMemory?.fallback,
+        ...overrides.learningMemory?.fallback,
+      },
+    },
     captureModel: { ...defaults.captureModel, ...overrides.captureModel },
     memoryScope: { ...defaults.memoryScope, ...overrides.memoryScope },
     mcpServer: { ...defaults.mcpServer, ...overrides.mcpServer },
@@ -303,7 +357,11 @@ export function applyConfig(target: PluginConfig, directory?: string): string[] 
   for (const section of sections) {
     if (JSON.stringify(target[section]) !== JSON.stringify(fresh[section])) {
       changed.push(section)
-      Object.assign(target[section], fresh[section])
+      if (target[section] != null && typeof target[section] === "object") {
+        Object.assign(target[section] as object, fresh[section])
+      } else {
+        ;(target as any)[section] = fresh[section]
+      }
     }
   }
   return changed

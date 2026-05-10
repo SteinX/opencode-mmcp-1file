@@ -694,12 +694,12 @@ describe("extractPreferenceCandidates", () => {
     const result = await extractPreferenceCandidates(config, "Actually, use pnpm.", signal, llmCaller)
     expect(result).toEqual([
       {
+        kind: "user_preference",
         content: "Use pnpm in this repo",
         confidence: 0.9,
-        signalType: "correction",
-        status: "confirmed",
-        category: "tooling",
-        rationale: undefined,
+        importance: 0.8,
+        source: "preference-learning",
+        evidence: undefined,
       },
     ])
   })

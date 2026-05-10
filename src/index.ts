@@ -51,6 +51,12 @@ import {
 } from "./services/preemptive-compaction.js"
 
 import { buildMemorySystemPrompt } from "./services/system-prompt.js"
+import {
+  learnFromChatMessage,
+  learnFromMessageUpdated,
+  retrieveRecordsForInjection,
+} from "./services/learning-memory-orchestrator.js"
+import { formatLearningMemoryInjection } from "./services/learning-memory-format.js"
 import { buildToolRegistry } from "./services/tool-registry.js"
 import { ensureCodeIndexFresh, resetCodeIndexSyncState } from "./services/code-index-sync.js"
 import type { PluginConfig } from "./config.js"
@@ -209,9 +215,13 @@ const plugin: Plugin = async (input) => {
       }
 
       if (userText) {
-        await learnPreferencesFromText(config, userText, {
-          source: "chat.message",
-        })
+        if (config.learningMemory?.enabled) {
+          await learnFromChatMessage(config, userText, { source: "chat.message" })
+        } else {
+          await learnPreferencesFromText(config, userText, {
+            source: "chat.message",
+          })
+        }
       }
 
       if (!userText) return
@@ -239,9 +249,29 @@ const plugin: Plugin = async (input) => {
         && shouldInjectKnowledgeGraph(config, hookInput.sessionID, isAfterCompaction)
         ? fetchKnowledgeGraphContext(config, userText)
         : Promise.resolve(null)
-      const learnedPreferencesPromise = shouldInjectLearned
-        ? fetchAndFormatLearnedPreferences(config)
-        : Promise.resolve(null)
+
+      const learnedPreferencesPromise: Promise<string | null> = (() => {
+        if (!shouldInjectLearned) return Promise.resolve(null)
+        if (config.learningMemory?.enabled) {
+          return retrieveRecordsForInjection(config, {
+            source: "chat.message",
+            sessionId: hookInput.sessionID,
+            query: userText,
+          }).then((result) => {
+            if (!result) return null
+            const badCodes = ["unsupported", "degraded", "stale", "generation_mismatch"]
+            if (result.reason_code && badCodes.includes(result.reason_code)) return null
+            return formatLearningMemoryInjection(
+              { records: result.records, learning_summary: result.learning_summary },
+              {
+                includeEvidence: false,
+                includeCandidates: false,
+              },
+            )
+          })
+        }
+        return fetchAndFormatLearnedPreferences(config)
+      })()
 
       const [formatted, projectKnowledge, codeIntelContext, knowledgeGraphContext, learnedPreferences] = await Promise.all([
         formattedPromise,
@@ -359,10 +389,17 @@ const plugin: Plugin = async (input) => {
       if (event.type === "message.updated" && config.preferenceLearning.enabled) {
         const messageText = extractEventMessageText(event)
         if (messageText) {
-          await learnPreferencesFromText(config, messageText, {
-            source: "message.updated",
-            eventType: "message.updated",
-          })
+          if (config.learningMemory?.enabled) {
+            await learnFromMessageUpdated(config, messageText, {
+              source: "message.updated",
+              eventType: "message.updated",
+            })
+          } else {
+            await learnPreferencesFromText(config, messageText, {
+              source: "message.updated",
+              eventType: "message.updated",
+            })
+          }
         }
       }
 
@@ -528,7 +565,15 @@ async function learnPreferencesFromText(
   const candidates = await extractPreferenceCandidates(config, filteredText, signal)
   if (candidates.length === 0) return
 
-  await storePreferenceCandidates(config, candidates, {
+  const preferenceCandidates = candidates.map((c) => ({
+    content: c.content,
+    confidence: c.confidence,
+    signalType: signal.signalType,
+    status: (c.importance >= 0.7 ? "confirmed" : "candidate") as "confirmed" | "candidate",
+    evidence: c.evidence,
+  }))
+
+  await storePreferenceCandidates(config, preferenceCandidates, {
     metadata: {
       source: context.source,
       ...(context.eventType ? { eventType: context.eventType } : {}),
