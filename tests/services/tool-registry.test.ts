@@ -488,6 +488,25 @@ describe("code_search tool", () => {
     )
   })
 
+  it("annotates stale partial intent results with a hint", async () => {
+    vi.mocked(callMemoryTool).mockResolvedValueOnce(
+      JSON.stringify({
+        summary: { partial: { is_partial: true, reason_code: "stale" } },
+      }),
+    )
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.code_search.execute({ query: "authentication handler" }, mockContext)
+    expect(result).toContain("[HINT] 索引更新中")
+  })
+
+  it("passes through code search output when no partial summary is present", async () => {
+    const raw = JSON.stringify({ items: [{ id: "x", name: "handleRequest" }] })
+    vi.mocked(callMemoryTool).mockResolvedValueOnce(raw)
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.code_search.execute({ query: "handleRequest", search_type: "symbol" }, mockContext)
+    expect(result).toBe(raw)
+  })
+
   it("calls search_symbols for symbol search", async () => {
     const tools = buildToolRegistry(makeConfig())
     await tools.code_search.execute({ query: "handleRequest", search_type: "symbol" }, mockContext)
@@ -548,6 +567,25 @@ describe("project_status tool", () => {
       "project_info",
       expect.objectContaining({ action: "list" }),
     )
+  })
+
+  it("annotates list output when capability status is degraded", async () => {
+    vi.mocked(callMemoryTool).mockResolvedValueOnce(
+      JSON.stringify({
+        capability_status: { index: "serving", search: "degraded" },
+      }),
+    )
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.project_status.execute({ action: "list" }, mockContext)
+    expect(result).toContain("[Capability Status]")
+  })
+
+  it("passes through project status list output without capability status", async () => {
+    const raw = JSON.stringify({ projects: [{ id: "proj-1" }] })
+    vi.mocked(callMemoryTool).mockResolvedValueOnce(raw)
+    const tools = buildToolRegistry(makeConfig())
+    const result = await tools.project_status.execute({ action: "list" }, mockContext)
+    expect(result).toBe(raw)
   })
 
   it("calls project_info for stats action", async () => {

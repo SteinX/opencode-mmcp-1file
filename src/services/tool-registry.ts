@@ -39,6 +39,7 @@ import {
   migrateLegacyLearningMemories,
   deleteLearningMemory,
 } from "./learning-memory-client.js"
+import { annotateCodeIntelResponse, annotateProjectStatusResponse } from "../utils/code-intel-annotations.js"
 
 const UNAVAILABLE_MESSAGE =
   "Memory server temporarily unavailable — auto-reconnecting. " +
@@ -337,18 +338,18 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
 
         switch (searchType) {
           case "intent":
-            return proxy("recall_code", {
+            return annotateCodeIntelResponse(await proxy("recall_code", {
               query: args.query,
               projectId: args.project_id,
               limit: args.limit ?? 10,
-            })
+            }))
 
           case "symbol":
-            return proxy("search_symbols", {
+            return annotateCodeIntelResponse(await proxy("search_symbols", {
               query: args.query,
               project_id: args.project_id,
               limit: args.limit ?? 10,
-            })
+            }))
 
           case "callers":
           case "callees":
@@ -356,10 +357,10 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
             if (!args.symbol_id) {
               return `Error: symbol_id is required for ${searchType} search. First call code_search({ search_type: "symbol", query: "<name>" }) to find the symbol ID.`
             }
-            return proxy("symbol_graph", {
+            return annotateCodeIntelResponse(await proxy("symbol_graph", {
               action: searchType,
               symbol_id: args.symbol_id,
-            })
+            }))
           }
 
           default:
@@ -564,13 +565,13 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
       execute: async (args) => {
         switch (args.action) {
           case "list":
-            return proxy("project_info", { action: "list" })
+            return annotateProjectStatusResponse(await proxy("project_info", { action: "list" }))
 
           case "status": {
             const callArgs: Record<string, unknown> = { action: "status" }
             if (args.project_id !== undefined) callArgs.project_id = args.project_id
             if (args.path !== undefined) callArgs.path = args.path
-            return proxy("project_info", callArgs)
+            return annotateProjectStatusResponse(await proxy("project_info", callArgs))
           }
 
           case "stats":

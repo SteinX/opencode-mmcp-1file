@@ -33,6 +33,7 @@ export interface MemoryOperationContext {
 }
 
 export type ProjectInfoReasonCode =
+  | "fresh"
   | "missing"
   | "stale"
   | "partial"
