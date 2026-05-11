@@ -267,7 +267,11 @@ export async function fetchCodeIntelContext(
     if (!info) return null
 
     const indexed = info.projects.filter(
-      (project) => project.status === "completed" || project.status === "indexed",
+      (project) =>
+        project.status === "completed" ||
+        project.status === "indexed" ||
+        project.status === "stale" ||
+        project.status === "serving",
     )
     if (indexed.length === 0) return formatUnindexedCodeIntelContext(info.projects)
 

@@ -482,6 +482,36 @@ describe("fetchCodeIntelContext", () => {
     expect(result).toContain("indexed-proj")
   })
 
+  it("accepts 'stale' status as indexed", async () => {
+    const config = makeConfig()
+    vi.mocked(getProjectListInfo).mockResolvedValue({
+      action: "list",
+      projects: [{ id: "stale-proj", status: "stale", chunks: 150, symbols: 60, raw: {} }],
+      raw: {},
+    } as any)
+
+    const result = await fetchCodeIntelContext(config)
+
+    expect(result).not.toBeNull()
+    expect(result).toContain("stale-proj")
+    expect(result).not.toContain("No indexed projects are available yet.")
+  })
+
+  it("accepts 'serving' status as indexed", async () => {
+    const config = makeConfig()
+    vi.mocked(getProjectListInfo).mockResolvedValue({
+      action: "list",
+      projects: [{ id: "serving-proj", status: "serving", chunks: 175, symbols: 70, raw: {} }],
+      raw: {},
+    } as any)
+
+    const result = await fetchCodeIntelContext(config)
+
+    expect(result).not.toBeNull()
+    expect(result).toContain("serving-proj")
+    expect(result).not.toContain("No indexed projects are available yet.")
+  })
+
   it("returns null and does not throw when project list lookup fails", async () => {
     const config = makeConfig()
     vi.mocked(getProjectListInfo).mockRejectedValue(new Error("connection refused"))
