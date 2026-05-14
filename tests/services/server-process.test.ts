@@ -35,7 +35,7 @@ function makeConfig(overrides: Partial<PluginConfig["mcpServer"]> = {}): PluginC
     preemptiveCompaction: { enabled: true, thresholdPercent: 80, modelContextLimit: 200000, autoContinue: true },
     privacy: { enabled: true },
     compactionSummaryCapture: { enabled: true },
-    codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
+    codeIndexSync: { enabled: true, autoRefresh: false, debounceMs: 10000, minReindexIntervalMs: 300000 },
     preferenceLearning: {
       enabled: false,
       learnOnCorrections: true,
@@ -607,7 +607,10 @@ describe("ensureServerRunning", () => {
       pid: 424242,
       unref: vi.fn(),
     } as unknown as ChildProcess))
-    vi.doMock("node:child_process", () => ({ spawn: mockSpawn }))
+    vi.doMock("node:child_process", async (importOriginal) => {
+      const original = await importOriginal<typeof import("node:child_process")>()
+      return { ...original, spawn: mockSpawn }
+    })
     const { ensureServerRunning } = await import("../../src/services/server-process.js")
     const config = makeConfig()
 
@@ -646,7 +649,10 @@ describe("ensureServerRunning", () => {
       pid: 424242,
       unref: vi.fn(),
     } as unknown as ChildProcess))
-    vi.doMock("node:child_process", () => ({ spawn: mockSpawn }))
+    vi.doMock("node:child_process", async (importOriginal) => {
+      const original = await importOriginal<typeof import("node:child_process")>()
+      return { ...original, spawn: mockSpawn }
+    })
     const { ensureServerRunning } = await import("../../src/services/server-process.js")
     const config = makeConfig()
 
@@ -694,7 +700,10 @@ describe("ensureServerRunning", () => {
       pid: 424242,
       unref: vi.fn(),
     } as unknown as ChildProcess))
-    vi.doMock("node:child_process", () => ({ spawn: mockSpawn }))
+    vi.doMock("node:child_process", async (importOriginal) => {
+      const original = await importOriginal<typeof import("node:child_process")>()
+      return { ...original, spawn: mockSpawn }
+    })
     const { ensureServerRunning } = await import("../../src/services/server-process.js")
     const config = makeConfig()
 
@@ -719,6 +728,54 @@ describe("ensureServerRunning", () => {
     expect(lock.pid).toBe(424242)
     expect(lock.holders).toContain(process.pid)
     expect(existsSync(startupLockPath)).toBe(false)
+  })
+
+  it("does not terminate stale lock pid when process command does not match expected server", async () => {
+    vi.resetModules()
+    vi.doMock("../../src/config.js", async (importOriginal) => {
+      const original = await importOriginal<typeof import("../../src/config.js")>()
+      return { ...original, resolveDataDir: () => testDir }
+    })
+    const mockSpawn = vi.fn(() => ({
+      pid: 424242,
+      unref: vi.fn(),
+    } as unknown as ChildProcess))
+    const mockExecFileSync = vi.fn(() => "node unrelated-process.js")
+    vi.doMock("node:child_process", async (importOriginal) => {
+      const original = await importOriginal<typeof import("node:child_process")>()
+      return { ...original, spawn: mockSpawn, execFileSync: mockExecFileSync }
+    })
+    const { ensureServerRunning } = await import("../../src/services/server-process.js")
+    const config = makeConfig()
+
+    const stalePid = 434343
+    const lockPath = join(testDir, ".server-lock")
+    writeNewLock(lockPath, stalePid, [])
+
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, sig) => {
+      if (pid === stalePid && (sig == null || sig === 0 || sig === "0")) return true
+      if (pid === stalePid) throw new Error("should not terminate stale pid")
+      return true
+    })
+
+    mockFetch
+      .mockResolvedValueOnce({ ok: false })
+      .mockResolvedValueOnce({ ok: false })
+      .mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ status: "ok" }),
+      })
+
+    await expect(ensureServerRunning(config)).resolves.toBe("http://127.0.0.1:23817")
+
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "ps",
+      ["-p", String(stalePid), "-o", "command="],
+      expect.any(Object),
+    )
+    expect(killSpy).toHaveBeenCalledWith(stalePid, 0)
+    expect(killSpy).not.toHaveBeenCalledWith(stalePid, "SIGTERM")
+    expect(mockSpawn).toHaveBeenCalledTimes(1)
   })
 
   it("adds own PID to holders when joining existing server", async () => {

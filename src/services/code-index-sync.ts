@@ -653,7 +653,7 @@ export async function ensureCodeIndexFresh(
   workspaceDir?: string,
   reason: SyncReason = "session.idle",
 ): Promise<void> {
-  if (!config.codeIndexSync.enabled || !workspaceDir) return
+  if (!config.codeIndexSync.enabled || !config.codeIndexSync.autoRefresh || !workspaceDir) return
 
   const shouldCoordinate = await shouldCoordinateCodeIndexSync(config)
   if (!shouldCoordinate) {

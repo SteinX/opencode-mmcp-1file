@@ -9,7 +9,7 @@ Persistent memory for OpenCode agents via [memory-mcp-1file](https://github.com/
 
 ## What it does
 
-This OpenCode plugin gives agents persistent memory across sessions. It connects to a `memory-mcp-1file` MCP server via stdio and registers **14 unified tools** as plugin tools — consolidating memory search, storage, lifecycle management, code intelligence, project indexing, and shared HTTP server control into an ergonomic interface with automatic routing. The plugin also provides automatic context injection, idle-time capture, background code-index refresh, compaction recovery, smart trigger nudges, agent guidance via system prompt, a `/init-mcp-memory` bootstrap command for deep project onboarding, a `/setup-mcp-memory` guided configuration wizard, and a `/manage-mcp-server` command for controlled HTTP lifecycle actions.
+This OpenCode plugin gives agents persistent memory across sessions. It connects to a `memory-mcp-1file` MCP server via stdio and registers **28 plugin tools** — consolidating memory search, storage, lifecycle management, code intelligence, project indexing, learning memory management, and shared HTTP server control into an ergonomic interface with automatic routing. The plugin also provides automatic context injection, idle-time capture, optional background code-index refresh, compaction recovery, smart trigger nudges, agent guidance via system prompt, a `/init-mcp-memory` bootstrap command for deep project onboarding, a `/setup-mcp-memory` guided configuration wizard, and a `/manage-mcp-server` command for controlled HTTP lifecycle actions.
 
 The plugin now distinguishes between a **physical storage shard** and a **logical retrieval scope**:
 - `mcpServer.tag` / `dataDir` decide which on-disk memory store you are using.
@@ -20,7 +20,7 @@ The plugin now distinguishes between a **physical storage shard** and a **logica
 
 ### Agent-facing (via plugin tool registration)
 
-- **Unified Memory Tools (14 tools)** — The plugin consolidates 17 underlying MCP operations into 14 ergonomic tools:
+- **Plugin Tools (28 tools)** — The plugin consolidates underlying MCP operations into ergonomic tools:
   - `memory_query` — Unified search with auto/semantic/keyword/recent modes. Routes to the best search strategy automatically.
   - `memory_save` — Smart storage with auto-categorization (DECISION, TASK, PATTERN, BUGFIX, etc.) and privacy filtering.
   - `memory_manage` — Memory lifecycle: get, update, delete, or invalidate by ID.
@@ -35,6 +35,7 @@ The plugin now distinguishes between a **physical storage shard** and a **logica
   - `knowledge_graph` — Map and query architectural relationships between codebase components. Use when analyzing system architecture, tracing module dependencies, or recording structural relationships. Actions: create_entity, create_relation, get_related, detect_communities.
   - `get_status` — Memory system status and startup progress.
   - `reload_config` — Hot-reload configuration from disk without restart.
+  - `memory_learning_*` / `learning_memory_*` — Manage typed learning memory records, including list, retrieve, confirm/promote, update, reject, archive, supersede, migrate legacy records, and the deprecated delete compatibility shim.
 - **System Prompt Guidance** — Injects a Memory Protocol into the system prompt via `experimental.chat.system.transform`, teaching the agent when and how to use memory tools, prefix conventions, memory lifecycle, action triggers, and anti-patterns.
 - **Tool Description Enhancement** — Augments raw MCP tool descriptions via `tool.definition` hook with guidance that points agents back to the unified plugin tools first.
 - **Keyword Detection** — Detects phrases like "remember this", "save this", "记住" in user messages and nudges the agent to store explicit user-requested memories with a `USER:` prefix.
@@ -44,7 +45,7 @@ The plugin now distinguishes between a **physical storage shard** and a **logica
 
 - **Memory Injection** — Injects query recall, project knowledge, and code-intelligence guidance independently, with per-source injection strategies, score filtering, dedupe, and source-specific budgets before synthetic context is added.
 - **Auto-Capture** — When session goes idle (10s default), extracts the latest exchange, summarizes it via an external LLM, and stores with AGENTS.md-compatible prefixes.
-- **Code Index Sync** — On startup and idle, computes a lightweight workspace fingerprint for code index freshness detection and refreshes stale code indexes in the background with debounce, cooldown, and single-flight locking. Freshness signals include common iOS, Android, and Flutter source/project/dependency metadata changes, while common generated/dependency directories are ignored. This is freshness detection only and does not add mobile semantic indexing, mobile parsers, or mobile LSP support. Sync metadata, cooldown, and lock contention are tracked per workspace inside the current shard. In HTTP mode, only the shared server's primary live holder coordinates freshness checks; follower clients skip redundant coordination work.
+- **Code Index Sync** — Optional startup/idle refresh computes a lightweight workspace fingerprint for code index freshness detection and refreshes stale code indexes in the background with debounce, cooldown, and single-flight locking when `codeIndexSync.autoRefresh` is enabled. Freshness signals include common iOS, Android, and Flutter source/project/dependency metadata changes, while common generated/dependency directories are ignored. This is freshness detection only and does not add mobile semantic indexing, mobile parsers, or mobile LSP support. Sync metadata, cooldown, and lock contention are tracked per workspace inside the current shard. In HTTP mode, only the shared server's primary live holder coordinates freshness checks; follower clients skip redundant coordination work.
 - **Compaction Recovery** — After context compaction, injects recovery guidance and relevant memories via `experimental.session.compacting` hook. Instructs the agent to use `memory_query` to restore in-progress tasks and project context.
 - **Preemptive Compaction** — Tracks estimated token usage per session. When approaching model context limit (default 80%), triggers early compaction with memory context preserved.
 - **Privacy Filtering** — Content wrapped in `<private>...</private>` is stripped to `[REDACTED]` before storing. Also intercepts agent's direct raw MCP `store_memory`/`update_memory` calls via `tool.execute.before`.
@@ -79,12 +80,12 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
     "maxInjectedMemories": 6,       // Max query-recall memories injected after filtering/dedupe
     "maxProjectMemories": 30,       // Max memories to fetch for tiered allocation (pool size)
     "injectOn": "first",           // Query recall only: "first" or "always"
-    "projectKnowledgeInjectOn": "first", // "first" | "always" | "compaction" | "never"
-    "codeIntelInjectOn": "first",  // "first" | "always" | "compaction" | "never"
+    "projectKnowledgeInjectOn": "compaction", // "first" | "always" | "compaction" | "never"
+    "codeIntelInjectOn": "compaction",  // "first" | "always" | "compaction" | "never"
     "shortQueryMinLength": 3,       // Skip query recall for very short queries
     "minScore": 0.35,               // Query recall score threshold before injection
     "projectKnowledgeValidOnly": false, // Use only valid project memories when true
-    "knowledgeGraphInjectOn": "first", // "first" | "always" | "compaction" | "never"
+    "knowledgeGraphInjectOn": "compaction", // "first" | "always" | "compaction" | "never"
     "maxKnowledgeGraphItems": 10,   // Max related entities to inject from the graph
     "knowledgeGraphRelatedDepth": 1, // Traversal depth for related entity lookup
     "knowledgeGraphEntityMatch": true, // Enable automatic entity matching in conversation
@@ -138,6 +139,7 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
   // Plugin-managed code intelligence refresh
   "codeIndexSync": {
     "enabled": true,
+    "autoRefresh": false,           // Automatically refresh stale indexes on startup/idle; manual project_index tools still work when false
     "debounceMs": 10000,            // Wait after detecting staleness before re-indexing
     "minReindexIntervalMs": 300000, // Cooldown between successful re-indexes
     "resume": {
@@ -250,7 +252,7 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
 | **preemptiveCompaction** | Early compaction trigger based on token estimates |
 | **privacy** | Redaction of `<private>` tagged content |
 | **compactionSummaryCapture** | Saves compaction summaries as memories |
-| **codeIndexSync** | Detects stale workspace indexes; queries server status first; resumes interrupted jobs when possible; falls back to full rebuild only when policy permits (`allowFullRestartFallback`). Nested `resume` policy controls polling, timeouts, and fallback behavior. Optional `includePatterns` / `excludePatterns` filter defaults narrow which files the server indexes; omit to use server env-var defaults. |
+| **codeIndexSync** | Controls code index readiness and optional automatic refresh. `enabled` keeps manual code-index tools available; `autoRefresh` controls startup/idle stale-index refresh. Nested `resume` policy controls polling, timeouts, and fallback behavior. Optional `includePatterns` / `excludePatterns` filter defaults narrow which files the server indexes; omit to use server env-var defaults. |
 | **preferenceLearning** | Legacy/compatibility alias for `learningMemory`. Controls preference extraction, confidence thresholds, scope, and injection cadence for learned user preferences. Use `learningMemory` for new configurations. |
 | **learningMemory** | Typed preference/lesson/rule capture from conversational signals. Requires server-side support (`metadata.learning.schema_version = 1`). Only `confirmed`/`rule` records that are `active` and `injectable_by_default=true` are injected into context. Sub-sections: `preferences`, `lessons`, `rules`, `injection`, `fallback`. |
 | **captureModel** | LLM for auto-capture summarization — uses direct HTTP when apiKey is set, otherwise OpenCode session API |
@@ -268,6 +270,7 @@ The plugin can narrow the files the Memory MCP server indexes to a specific subs
 
 ```jsonc
 "codeIndexSync": {
+  "autoRefresh": false,                         // opt into startup/idle stale-index refresh
   "includePatterns": ["src/**/*", "tests/**/*"],  // project-relative globs, / separator, no leading /
   "excludePatterns": ["**/generated/**"]
 }
@@ -344,10 +347,10 @@ Plugin hooks (index.ts)
   ├── event:session.idle → auto-capture + code-index freshness check
   ├── event:compacted    → inject recovery context
   ├── event:message.updated → preemptive compaction + summary capture
-  └── tool              → 14 unified plugin tools
+  └── tool              → 28 plugin tools
         ↓
   Services layer (src/services/)
-    ├── tool-registry.ts  → register 14 unified tools (consolidating 17 MCP operations)
+    ├── tool-registry.ts  → register 28 plugin tools (unified wrappers plus learning-memory lifecycle tools)
     ├── mcp-client.ts     → stdio/HTTP transport + centralized contract adapters
     ├── system-prompt.ts  → Memory Protocol prompt builder
     ├── auto-capture.ts   → LLM summarization + store
@@ -363,13 +366,13 @@ Plugin hooks (index.ts)
 
 ## How It Works
 
-The plugin spawns a [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server via stdio and registers 14 unified tools that consolidate 17 underlying MCP operations into an ergonomic interface. The agent calls these tools directly; each call is automatically routed to the appropriate MCP operation.
+The plugin spawns a [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server via stdio and registers 28 plugin tools that wrap underlying MCP operations. The agent calls these tools directly; each call is automatically routed to the appropriate MCP operation.
 
-`project_projection` is the simple projection/readback entry point. It takes only `project_id` plus optional `locator`, `relation_scope`, and `sort_mode`, returning raw JSON from the server and falling back to a fresh projection when locator readback is unavailable. `project_status` remains part of that same 14-tool surface for indexing lifecycle control and compatibility projection actions. In addition to `list`, `index`, and `stats`, it still supports projection workflows with `action: "projection"` and `action: "projection_by_locator"`. Projection requests default to `relation_scope: "all"` and `sort_mode: "canonical"`, and any locator returned by the server is treated as an opaque, same-process, non-persistable handle.
+`project_projection` is the simple projection/readback entry point. It takes only `project_id` plus optional `locator`, `relation_scope`, and `sort_mode`, returning raw JSON from the server and falling back to a fresh projection when locator readback is unavailable. `project_status` remains part of that same tool surface for indexing lifecycle control and compatibility projection actions. In addition to `list`, `index`, and `stats`, it still supports projection workflows with `action: "projection"` and `action: "projection_by_locator"`. Projection requests default to `relation_scope: "all"` and `sort_mode: "canonical"`, and any locator returned by the server is treated as an opaque, same-process, non-persistable handle.
 
 `project_ensure_index` is the default readiness path for agents. It takes only `path`, checks durable status first, returns already-running or already-ready responses without extra work, resumes only when the server provides resume identity, and otherwise starts a clean fresh index.
 
-`mcp_server_control` is also part of the same 14-tool surface and supports `action: "status" | "stop" | "restart"` for controlled shared HTTP MCP server lifecycle operations.
+`mcp_server_control` is also part of the same tool surface and supports `action: "status" | "stop" | "restart"` for controlled shared HTTP MCP server lifecycle operations.
 
 Memory context is also handled through **synthetic parts** — invisible in the OpenCode TUI but received by the LLM as part of the conversation. The agent has full access to past project context without cluttering the user's view.
 

@@ -6,12 +6,12 @@
     "maxInjectedMemories": 6,       // Max query-recall memories injected after filtering/dedupe
     "maxProjectMemories": 30,       // Max memories to fetch for tiered allocation (pool size)
     "injectOn": "first",           // Query recall only: "first" or "always"
-    "projectKnowledgeInjectOn": "first", // "first" | "always" | "compaction" | "never"
-    "codeIntelInjectOn": "first",  // "first" | "always" | "compaction" | "never"
+    "projectKnowledgeInjectOn": "compaction", // "first" | "always" | "compaction" | "never"
+    "codeIntelInjectOn": "compaction",  // "first" | "always" | "compaction" | "never"
     "shortQueryMinLength": 3,       // Skip query recall for very short queries
     "minScore": 0.35,               // Query recall score threshold before injection
     "projectKnowledgeValidOnly": false, // Use only valid project memories when true
-    "knowledgeGraphInjectOn": "first", // "first" | "always" | "compaction" | "never"
+    "knowledgeGraphInjectOn": "compaction", // "first" | "always" | "compaction" | "never"
     "maxKnowledgeGraphItems": 10,   // Max related entities to inject from the graph
     "knowledgeGraphRelatedDepth": 1, // Traversal depth for related entity lookup
     "knowledgeGraphEntityMatch": true, // Enable automatic entity matching in conversation
@@ -67,6 +67,7 @@
   // Plugin-managed code intelligence refresh
   "codeIndexSync": {
     "enabled": true,
+    "autoRefresh": false,           // Automatically refresh stale indexes on startup/idle; manual project_index tools still work when false
     "debounceMs": 10000,            // Wait after detecting staleness before re-indexing
     "minReindexIntervalMs": 300000, // Cooldown between successful re-indexes
     "resume": {

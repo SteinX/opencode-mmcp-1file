@@ -11,7 +11,7 @@ function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
     preemptiveCompaction: { enabled: true, thresholdPercent: 80, modelContextLimit: 200000, autoContinue: true },
     privacy: { enabled: true },
     compactionSummaryCapture: { enabled: true },
-    codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
+    codeIndexSync: { enabled: true, autoRefresh: false, debounceMs: 10000, minReindexIntervalMs: 300000 },
     captureModel: { provider: "openai", model: "gpt-4o-mini", apiUrl: "", apiKey: "" },
     memoryScope: { namespace: "", shareAcrossAgents: true, includeAgentMetadata: true, includeRunMetadata: false, userId: "", defaultMetadata: {} },
     mcpServer: { command: [], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1" },
@@ -111,7 +111,7 @@ describe("buildMemorySystemPrompt", () => {
 
   it("uses one-time setup guidance when code index sync is disabled", () => {
     const result = buildMemorySystemPrompt(
-      makeConfig({ codeIndexSync: { enabled: false, debounceMs: 10000, minReindexIntervalMs: 300000 } }),
+      makeConfig({ codeIndexSync: { enabled: false, autoRefresh: false, debounceMs: 10000, minReindexIntervalMs: 300000 } }),
       ["code_search", "project_status"],
     )
 

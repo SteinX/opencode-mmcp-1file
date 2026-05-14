@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process"
+import { spawn, execFileSync, type ChildProcess } from "node:child_process"
 import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync, renameSync, openSync, closeSync } from "node:fs"
 import { join, dirname } from "node:path"
 import { randomBytes } from "node:crypto"
@@ -233,6 +233,36 @@ function isProcessAlive(pid: number): boolean {
   } catch {
     return false
   }
+}
+
+function getProcessCommandLine(pid: number): string | null {
+  if (pid <= 0) return null
+  try {
+    return execFileSync("ps", ["-p", String(pid), "-o", "command="], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 1000,
+    }).trim()
+  } catch {
+    return null
+  }
+}
+
+function isExpectedServerProcess(config: PluginConfig, lock: LockFileData): boolean {
+  if (lock.pid <= 0 || !isProcessAlive(lock.pid)) return false
+
+  const commandLine = getProcessCommandLine(lock.pid)
+  if (!commandLine) return false
+
+  const dataDir = resolveDataDir(config)
+  const expectedFragments = [
+    "memory-mcp",
+    String(config.mcpServer.port),
+    config.mcpServer.bind,
+    dataDir ?? "",
+  ].filter(Boolean)
+
+  return expectedFragments.every((fragment) => commandLine.includes(fragment))
 }
 
 function pruneDeadHolders(holders: number[]): number[] {
@@ -554,8 +584,14 @@ async function ensureServerRunningUnshared(config: PluginConfig): Promise<string
 
   const staleLock = readLockFile(lockPath)
   if (staleLock) {
-    if (staleLock.pid > 0 && isProcessAlive(staleLock.pid)) {
+    if (isExpectedServerProcess(config, staleLock)) {
       try { process.kill(staleLock.pid, "SIGTERM") } catch {}
+    } else if (staleLock.pid > 0 && isProcessAlive(staleLock.pid)) {
+      logger.warn("Refusing to terminate stale MCP lock pid because process identity did not match expected server", {
+        pid: staleLock.pid,
+        port: staleLock.port,
+        bind: staleLock.bind,
+      })
     }
     try { unlinkSync(lockPath) } catch {}
   }

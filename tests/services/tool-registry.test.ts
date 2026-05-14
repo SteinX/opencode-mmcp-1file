@@ -831,6 +831,7 @@ describe("project_status tool", () => {
     const tools = buildToolRegistry(makeConfig({
       codeIndexSync: {
         enabled: true,
+        autoRefresh: false,
         debounceMs: 10000,
         minReindexIntervalMs: 300000,
         includePatterns: ["src/**/*"],
@@ -853,6 +854,7 @@ describe("project_status tool", () => {
     const tools = buildToolRegistry(makeConfig({
       codeIndexSync: {
         enabled: true,
+        autoRefresh: false,
         debounceMs: 10000,
         minReindexIntervalMs: 300000,
         includePatterns: ["src/**/*"],

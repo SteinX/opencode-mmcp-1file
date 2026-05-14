@@ -187,15 +187,45 @@ const { default: plugin } = await import("../src/index.js")
 // ─── Helpers ────────────────────────────────────────────────────────
 
 function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
+  const chatMessage = {
+    enabled: true,
+    maxMemories: 5,
+    maxProjectMemories: 10,
+    maxInjectedMemories: 6,
+    injectOn: "first" as const,
+    shortQueryMinLength: 3,
+    minScore: 0.35,
+    projectKnowledgeInjectOn: "compaction" as const,
+    codeIntelInjectOn: "compaction" as const,
+    knowledgeGraphInjectOn: "compaction" as const,
+    maxKnowledgeGraphItems: 10,
+    knowledgeGraphRelatedDepth: 1,
+    knowledgeGraphEntityMatch: true,
+    projectKnowledgeValidOnly: false,
+    projectKnowledgeTiers: [
+      { categories: ["USER"], limit: 5 },
+      { categories: ["DECISION", "PATTERN"], limit: 5 },
+      { categories: ["CONTEXT"], limit: 5 },
+    ],
+    ...overrides?.chatMessage,
+  }
+  const codeIndexSync = {
+    enabled: true,
+    autoRefresh: false,
+    debounceMs: 10000,
+    minReindexIntervalMs: 300000,
+    ...overrides?.codeIndexSync,
+  }
+
   return {
-    chatMessage: { enabled: true, maxMemories: 5, maxProjectMemories: 10, maxInjectedMemories: 6, injectOn: "first", shortQueryMinLength: 3, minScore: 0.35 },
+    chatMessage,
     autoCapture: { enabled: true, debounceMs: 10, language: "en" },
     compaction: { enabled: true, memoryLimit: 10 },
     keywordDetection: { enabled: true, extraPatterns: [] },
     preemptiveCompaction: { enabled: true, thresholdPercent: 80, modelContextLimit: 200000, autoContinue: true },
     privacy: { enabled: true },
     compactionSummaryCapture: { enabled: true },
-    codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
+    codeIndexSync,
     preferenceLearning: {
       enabled: false,
       learnOnCorrections: true,
@@ -223,6 +253,8 @@ function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
     mcpServer: { command: ["npx", "-y", "memory-mcp-1file"], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1", reconnectIntervalMs: 30000, heartbeatIntervalMs: 20000 },
     systemPrompt: { enabled: true },
     ...overrides,
+    chatMessage,
+    codeIndexSync,
   }
 }
 
@@ -309,8 +341,19 @@ describe("plugin factory", () => {
     expect(getMemoryClient).toHaveBeenCalled()
   })
 
-  it("checks code index freshness on startup", async () => {
+  it("passes default autoRefresh=false config to startup freshness check", async () => {
     const config = makeConfig()
+    vi.mocked(loadConfig).mockReturnValue(config)
+    vi.mocked(resolveDataDir).mockReturnValue("/mock-data-dir")
+    const input = makePluginInput()
+
+    await plugin(input)
+
+    expect(ensureCodeIndexFresh).toHaveBeenCalledWith(config, input.directory, "startup")
+  })
+
+  it("passes autoRefresh-enabled config to startup freshness check", async () => {
+    const config = makeConfig({ codeIndexSync: { autoRefresh: true } })
     vi.mocked(loadConfig).mockReturnValue(config)
     vi.mocked(resolveDataDir).mockReturnValue("/mock-data-dir")
     const input = makePluginInput()
@@ -1189,6 +1232,7 @@ describe("event handler: session.idle", () => {
   it("checks code index freshness on idle", async () => {
     const { hooks, config, input } = await initPlugin({
       autoCapture: { enabled: false, debounceMs: 10, language: "en" },
+      codeIndexSync: { autoRefresh: true },
     })
 
     await hooks.event({

@@ -119,7 +119,9 @@ describe("loadConfig", () => {
     const config = loadConfig("/some/dir")
     expect(config.chatMessage.enabled).toBe(true)
     expect(config.chatMessage.maxMemories).toBe(5)
-    expect(config.chatMessage.knowledgeGraphInjectOn).toBe("first")
+    expect(config.chatMessage.projectKnowledgeInjectOn).toBe("compaction")
+    expect(config.chatMessage.codeIntelInjectOn).toBe("compaction")
+    expect(config.chatMessage.knowledgeGraphInjectOn).toBe("compaction")
     expect(config.chatMessage.maxKnowledgeGraphItems).toBe(10)
     expect(config.chatMessage.knowledgeGraphRelatedDepth).toBe(1)
     expect(config.chatMessage.knowledgeGraphEntityMatch).toBe(true)
@@ -131,6 +133,7 @@ describe("loadConfig", () => {
     expect(config.mcpServer.tag).toBe("")
     expect(config.privacy.enabled).toBe(true)
     expect(config.codeIndexSync.enabled).toBe(true)
+    expect(config.codeIndexSync.autoRefresh).toBe(false)
     expect(config.codeIndexSync.includePatterns).toBeUndefined()
     expect(config.codeIndexSync.excludePatterns).toBeUndefined()
     expect(config.codeIndexSync.resume).toEqual({
@@ -424,7 +427,7 @@ describe("loadConfig", () => {
   })
 
   it("exposes KG defaults in DEFAULT_CONFIG", () => {
-    expect(DEFAULT_CONFIG.chatMessage.knowledgeGraphInjectOn).toBe("first")
+    expect(DEFAULT_CONFIG.chatMessage.knowledgeGraphInjectOn).toBe("compaction")
     expect(DEFAULT_CONFIG.chatMessage.maxKnowledgeGraphItems).toBe(10)
     expect(DEFAULT_CONFIG.chatMessage.knowledgeGraphRelatedDepth).toBe(1)
     expect(DEFAULT_CONFIG.chatMessage.knowledgeGraphEntityMatch).toBe(true)
@@ -440,7 +443,7 @@ describe("loadConfig", () => {
 
     const config = loadConfig("/dir")
     expect(config.chatMessage.maxMemories).toBe(12)
-    expect(config.chatMessage.knowledgeGraphInjectOn).toBe("first")
+    expect(config.chatMessage.knowledgeGraphInjectOn).toBe("compaction")
     expect(config.chatMessage.maxKnowledgeGraphItems).toBe(10)
     expect(config.chatMessage.knowledgeGraphRelatedDepth).toBe(1)
     expect(config.chatMessage.knowledgeGraphEntityMatch).toBe(true)
@@ -455,6 +458,7 @@ describe("loadConfig", () => {
     )
 
     const config = loadConfig("/dir")
+    expect(config.codeIndexSync.autoRefresh).toBe(false)
     expect(config.codeIndexSync.resume).toEqual({
       enabled: true,
       pollIntervalMs: 5000,
@@ -481,9 +485,9 @@ describe("applyConfig", () => {
         injectOn: "first",
         shortQueryMinLength: 3,
         minScore: 0.35,
-        projectKnowledgeInjectOn: "first",
-        codeIntelInjectOn: "first",
-        knowledgeGraphInjectOn: "first",
+        projectKnowledgeInjectOn: "compaction",
+        codeIntelInjectOn: "compaction",
+        knowledgeGraphInjectOn: "compaction",
         maxKnowledgeGraphItems: 10,
         knowledgeGraphRelatedDepth: 1,
         knowledgeGraphEntityMatch: true,

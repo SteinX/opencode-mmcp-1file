@@ -61,8 +61,9 @@ Ask the user these questions (adapt based on their answers — skip what's alrea
 
 7. **Privacy**: "Keep privacy filtering enabled? (strips `<private>...</private>` tagged content before storing)" — default: yes
 
-8. **Code index scope**: "Do you want to limit code indexing to specific paths? For monorepos or generated-heavy projects, configure `codeIndexSync.includePatterns` / `excludePatterns`; otherwise omit them and use server defaults."
+8. **Code index auto-refresh and scope**: "Do you want the plugin to automatically refresh stale code indexes on startup/idle, or only index when you call the project tools manually? For monorepos or generated-heavy projects, you can also configure `codeIndexSync.includePatterns` / `excludePatterns`; otherwise omit them and use server defaults."
    - Ask only when the project is large, generated-heavy, a monorepo, or the user asks about indexing scope/performance
+   - `codeIndexSync.autoRefresh` default is `false`; manual `project_index`, `project_ensure_index`, and `project_recover_index` still work when it is false
    - Patterns are project-relative globs using `/` separators and must not start with `/`
    - Example include: `["src/**/*", "tests/**/*"]`
    - Example exclude: `["**/generated/**", "**/*.min.js", "**/dist/**"]`
@@ -136,6 +137,7 @@ Based on the user's answers, generate a `opencode-mmcp-1file.jsonc` file. Use th
   // Plugin-managed code intelligence refresh and optional index scope filters
   "codeIndexSync": {
     "enabled": true,
+    "autoRefresh": false,
     "debounceMs": 10000,
     "minReindexIntervalMs": 300000,
     "resume": {
@@ -192,7 +194,7 @@ Based on the user's answers, generate a `opencode-mmcp-1file.jsonc` file. Use th
 - Default recommendation for agentic coding: `shareAcrossAgents: true`, `includeAgentMetadata: true`, `includeRunMetadata: false`
 - Include comments explaining non-obvious settings
 - Only include sections that differ from defaults
-- Include `codeIndexSync` only when the user customizes index refresh/resume behavior or wants project-specific `includePatterns` / `excludePatterns`; otherwise omit it and rely on defaults
+- Include `codeIndexSync` only when the user customizes index refresh/resume behavior, enables `autoRefresh`, or wants project-specific `includePatterns` / `excludePatterns`; otherwise omit it and rely on defaults
 - For index filters, prefer config defaults over per-call agent arguments; do not generate empty `includePatterns` / `excludePatterns` unless the user explicitly wants to disable server defaults
 - Exception: always include `mcpServer` section (it's the core config)
 
