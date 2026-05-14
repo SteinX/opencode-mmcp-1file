@@ -168,6 +168,34 @@ describe("learned preference injection helpers", () => {
     expect(shouldInjectLearnedPreferences(config, "s1", true)).toBe(false)
   })
 
+  it("uses typed learningMemory injection mode when enabled", () => {
+    resetPreferenceLearningStoreStateForTests()
+    const config = {
+      ...makeConfig({ enabled: false, injectOn: "never" }),
+      learningMemory: {
+        enabled: true,
+        injection: { mode: "auto" as const },
+      },
+    }
+
+    expect(shouldInjectLearnedPreferences(config, "s1", false)).toBe(true)
+    expect(shouldInjectLearnedPreferences(config, "s1", true)).toBe(true)
+  })
+
+  it("respects manual typed learningMemory injection mode", () => {
+    resetPreferenceLearningStoreStateForTests()
+    const config = {
+      ...makeConfig({ enabled: true, injectOn: "always" }),
+      learningMemory: {
+        enabled: true,
+        injection: { mode: "manual" as const },
+      },
+    }
+
+    expect(shouldInjectLearnedPreferences(config, "s1", false)).toBe(false)
+    expect(shouldInjectLearnedPreferences(config, "s1", true)).toBe(false)
+  })
+
   it("allows first-mode reinjection after compaction reset helper", () => {
     resetPreferenceLearningStoreStateForTests()
     const config = makeConfig({ injectOn: "first" })

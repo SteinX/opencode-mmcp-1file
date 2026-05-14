@@ -120,7 +120,9 @@ vi.mock("../src/services/preference-learning.js", () => ({
 
 vi.mock("../src/services/learning-memory-orchestrator.js", () => ({
   learnFromChatMessage: vi.fn().mockResolvedValue(undefined),
+  learnFromCompactionSummary: vi.fn().mockResolvedValue(undefined),
   learnFromMessageUpdated: vi.fn().mockResolvedValue(undefined),
+  learnFromSessionIdleSummary: vi.fn().mockResolvedValue(undefined),
   retrieveRecordsForInjection: vi.fn().mockResolvedValue(null),
 }))
 
@@ -175,7 +177,9 @@ const {
 const { existsSync, mkdirSync, copyFileSync } = await import("node:fs")
 const {
   learnFromChatMessage,
+  learnFromCompactionSummary,
   learnFromMessageUpdated,
+  learnFromSessionIdleSummary,
   retrieveRecordsForInjection,
 } = await import("../src/services/learning-memory-orchestrator.js")
 const { formatLearningMemoryInjection } = await import("../src/services/learning-memory-format.js")
@@ -1051,6 +1055,43 @@ describe("chat.message hook", () => {
     expect(fetchAndFormatLearnedPreferences).not.toHaveBeenCalled()
   })
 
+  it("lets typed learningMemory inject without legacy preferenceLearning enabled", async () => {
+    vi.mocked(shouldInjectLearnedPreferences).mockRestore()
+    const { shouldInjectLearnedPreferences: realShouldInjectLearnedPreferences } = await vi.importActual<typeof import("../src/services/preference-learning.js")>(
+      "../src/services/preference-learning.js",
+    )
+    vi.mocked(shouldInjectLearnedPreferences).mockImplementation(realShouldInjectLearnedPreferences)
+
+    const { hooks } = await initPlugin({
+      learningMemory: { enabled: true },
+      preferenceLearning: { ...makeConfig().preferenceLearning, enabled: false },
+    })
+    vi.mocked(shouldInjectMemories).mockReturnValueOnce(false)
+    vi.mocked(retrieveRecordsForInjection).mockResolvedValueOnce({
+      status: "ok",
+      records: [],
+      learning_summary: { injectable_by_default: true, raw: {} },
+    })
+    vi.mocked(formatLearningMemoryInjection).mockReturnValueOnce("[MEMORY] Learned Memory\n\n## Hard Rules\nUse vitest.")
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "help me code" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s-typed-real-gate" }, output)
+
+    expect(retrieveRecordsForInjection).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ source: "chat.message", sessionId: "s-typed-real-gate", query: "help me code" }),
+    )
+    expect(output.parts[0]).toMatchObject({
+      type: "text",
+      text: "[MEMORY] Learned Memory\n\n## Hard Rules\nUse vitest.",
+      synthetic: true,
+    })
+  })
+
   it("skips candidates by default in typed injection path", async () => {
     const { hooks } = await initPlugin({
       learningMemory: { enabled: true },
@@ -1310,6 +1351,32 @@ describe("event handler: session.idle", () => {
     expect(input.client.tui.showToast).toHaveBeenCalledWith({
       body: expect.objectContaining({ message: "Memory auto-captured", variant: "info" }),
     })
+  })
+
+  it("learns lessons from captured idle session text when learningMemory lessons are enabled", async () => {
+    const { hooks, input } = await initPlugin({
+      autoCapture: { enabled: true, debounceMs: 10, language: "en" },
+      learningMemory: { enabled: true, lessons: { enabled: true } },
+    })
+
+    input.client.session.messages.mockResolvedValue({
+      data: [
+        { info: { id: "m1", role: "user" }, parts: [{ type: "text", text: "We changed the API client after repeated timeout failures." }] },
+        { info: { id: "m2", role: "assistant" }, parts: [{ type: "text", text: "Lesson: wrap slow recall calls with bounded timeouts and keep injection moving." }] },
+      ],
+    })
+    vi.mocked(performAutoCapture).mockResolvedValue(true)
+
+    await hooks.event({
+      event: { type: "session.idle", properties: { sessionID: "s-lesson-idle" } },
+    })
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(learnFromSessionIdleSummary).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringContaining("bounded timeouts"),
+      expect.objectContaining({ source: "session.idle", sessionId: "s-lesson-idle" }),
+    )
   })
 
   it("uses session API for capture when apiKey is empty", async () => {
@@ -1720,6 +1787,7 @@ describe("captureCompactionSummary (via message.updated)", () => {
     const { hooks, input } = await initPlugin({
       compactionSummaryCapture: { enabled: true },
       privacy: { enabled: false },
+      learningMemory: { enabled: true, lessons: { enabled: true } },
     })
 
     input.client.session.messages.mockResolvedValue({
@@ -1746,6 +1814,11 @@ describe("captureCompactionSummary (via message.updated)", () => {
       expect.anything(),
       expect.stringContaining("CONTEXT: Session compaction summary"),
       "episodic",
+    )
+    expect(learnFromCompactionSummary).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringContaining("CONTEXT: Session compaction summary"),
+      expect.objectContaining({ source: "compaction", sessionId: "s-summ" }),
     )
   })
 
