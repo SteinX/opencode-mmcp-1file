@@ -246,6 +246,10 @@ export function shouldInjectLearnedPreferences(
   sessionID: string,
   isAfterCompaction: boolean,
 ): boolean {
+  if (config.learningMemory?.enabled === true) {
+    return config.learningMemory.injection?.mode !== "manual"
+  }
+
   if (!config.preferenceLearning.enabled) return false
 
   const mode = config.preferenceLearning.injectOn

@@ -53,7 +53,9 @@ import {
 import { buildMemorySystemPrompt } from "./services/system-prompt.js"
 import {
   learnFromChatMessage,
+  learnFromCompactionSummary,
   learnFromMessageUpdated,
+  learnFromSessionIdleSummary,
   retrieveRecordsForInjection,
 } from "./services/learning-memory-orchestrator.js"
 import { formatLearningMemoryInjection } from "./services/learning-memory-format.js"
@@ -386,7 +388,11 @@ const plugin: Plugin = async (input) => {
         await handleCompactionRecovery(config, input, sessionID)
       }
 
-      if (event.type === "message.updated" && config.preferenceLearning.enabled) {
+      const shouldLearnFromMessageUpdated = config.learningMemory?.enabled
+        ? config.learningMemory.preferences?.enabled !== false
+        : config.preferenceLearning.enabled
+
+      if (event.type === "message.updated" && shouldLearnFromMessageUpdated) {
         const messageText = extractEventMessageText(event)
         if (messageText) {
           if (config.learningMemory?.enabled) {
@@ -602,6 +608,18 @@ async function handleIdleCapture(
     const captured = await performAutoCapture(config, sessionID, messages, callLLM)
 
     if (captured) {
+      const lessonText = buildSessionLessonText(messages)
+      if (lessonText) {
+        void learnFromSessionIdleSummary(config, lessonText, {
+          source: "session.idle",
+          sessionId: sessionID,
+        }).catch((err: unknown) =>
+          logger.debug("Background lesson learning failed", { sessionID, error: String(err) })
+        )
+      }
+    }
+
+    if (captured) {
       await input.client.tui.showToast({
         body: {
           message: "Memory auto-captured",
@@ -684,9 +702,27 @@ async function captureCompactionSummary(
     }
 
     await storeMemory(config, content, "episodic")
+
+    void learnFromCompactionSummary(config, content, {
+      source: "compaction",
+      sessionId: sessionID,
+    }).catch((err: unknown) =>
+      logger.debug("Background compaction lesson learning failed", { sessionID, error: String(err) })
+    )
   } catch (err) {
     logger.error("compaction summary capture failed", { sessionID, error: String(err) })
   }
+}
+
+function buildSessionLessonText(messages: any[]): string | null {
+  const text = messages
+    .flatMap((m: any) => Array.isArray(m.parts) ? m.parts : [])
+    .filter((p: any) => p.type === "text" && p.text)
+    .map((p: any) => p.text)
+    .join("\n")
+    .trim()
+
+  return text.length >= 50 ? text.slice(0, 4000) : null
 }
 
 function installCommand(): void {
