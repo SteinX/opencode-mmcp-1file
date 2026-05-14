@@ -25,6 +25,7 @@ You have access to a persistent memory system via MCP tools. Use it to store and
 - **memory_save**: Save knowledge — automatically categorizes based on content (DECISION, TASK, PATTERN, etc.)
 - **memory_manage**: Manage existing memories — get, update, delete, or invalidate by ID
 - **knowledge_graph**: Map and query architectural relationships between components — services, modules, data flows, dependencies. Actions: create_entity, create_relation, get_related, detect_communities
+- **memory_learning_* / learning_memory_***: Manage typed learning records when learning memory is enabled. Prefer the tool names listed in Available Memory Tools.
 
 ### Scope Guidance
 - Prefer the configured default scope unless you have a concrete reason to override it.

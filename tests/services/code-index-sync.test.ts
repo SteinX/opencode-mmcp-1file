@@ -42,7 +42,7 @@ function makeConfig(dataDir: string): PluginConfig {
     privacy: { enabled: true },
     compactionSummaryCapture: { enabled: true },
     preferenceLearning: { enabled: false, learnOnCorrections: true, learnOnNegations: true, learnOnMessageUpdated: true, injectOn: "first", scope: "project", minConfidence: 0.7, candidateConfidence: 0.4, maxPreferences: 5, maxCandidates: 3, debounceMs: 10000, maxInputChars: 4000, maxStoredPreferences: 50 },
-    codeIndexSync: { enabled: true, debounceMs: 50, minReindexIntervalMs: 300000 },
+    codeIndexSync: { enabled: true, autoRefresh: true, debounceMs: 50, minReindexIntervalMs: 300000 },
     captureModel: { provider: "", model: "", apiUrl: "", apiKey: "" },
     memoryScope: { namespace: "", shareAcrossAgents: true, includeAgentMetadata: true, includeRunMetadata: false, userId: "", defaultMetadata: {} },
     mcpServer: {
@@ -255,6 +255,17 @@ describe("code-index-sync", () => {
     expect(saved.version).toBe(3)
     expect(saved.workspaces[workspaceKey]?.fingerprint).toBe(computeWorkspaceFingerprint(workspaceDir))
     expect(saved.workspaces[workspaceKey]?.lastReindexAt).toBeGreaterThan(0)
+  })
+
+  it("skips automatic refresh when autoRefresh is disabled", async () => {
+    const config = makeConfig(dataDir)
+    config.codeIndexSync.autoRefresh = false
+
+    await ensureCodeIndexFresh(config, workspaceDir, "startup")
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(shouldCoordinateCodeIndexSync).not.toHaveBeenCalled()
+    expect(callMemoryTool).not.toHaveBeenCalled()
   })
 
   it("skips reindex when fingerprint matches saved state", async () => {

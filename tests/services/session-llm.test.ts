@@ -15,7 +15,7 @@ function makeConfig(overrides?: Partial<PluginConfig["captureModel"]>): PluginCo
     preemptiveCompaction: { enabled: true, thresholdPercent: 80, modelContextLimit: 200000, autoContinue: true },
     privacy: { enabled: true },
     compactionSummaryCapture: { enabled: true },
-    codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
+    codeIndexSync: { enabled: true, autoRefresh: false, debounceMs: 10000, minReindexIntervalMs: 300000 },
     captureModel: {
       provider: "openai",
       model: "gpt-4o-mini",

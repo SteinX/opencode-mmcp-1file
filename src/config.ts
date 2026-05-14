@@ -57,6 +57,8 @@ export interface PluginConfig {
   }
   codeIndexSync: {
     enabled: boolean
+    /** Automatically refresh stale code indexes on startup/session idle. When false, manual project_index/project_ensure_index tools still work. */
+    autoRefresh: boolean
     debounceMs: number
     minReindexIntervalMs: number
     includePatterns?: string[]
@@ -152,9 +154,9 @@ export const DEFAULT_CONFIG: PluginConfig = {
     injectOn: "first",
     shortQueryMinLength: 3,
     minScore: 0.35,
-    projectKnowledgeInjectOn: "first",
-    codeIntelInjectOn: "first",
-    knowledgeGraphInjectOn: "first",
+    projectKnowledgeInjectOn: "compaction",
+    codeIntelInjectOn: "compaction",
+    knowledgeGraphInjectOn: "compaction",
     maxKnowledgeGraphItems: 10,
     knowledgeGraphRelatedDepth: 1,
     knowledgeGraphEntityMatch: true,
@@ -192,6 +194,7 @@ export const DEFAULT_CONFIG: PluginConfig = {
   },
   codeIndexSync: {
     enabled: true,
+    autoRefresh: false,
     debounceMs: 10_000,
     minReindexIntervalMs: 300_000,
     resume: {

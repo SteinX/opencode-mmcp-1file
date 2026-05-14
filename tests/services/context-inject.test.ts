@@ -50,9 +50,9 @@ function makeConfig(overrides?: { chatMessage?: Partial<PluginConfig["chatMessag
       injectOn: "first",
       shortQueryMinLength: 3,
       minScore: 0.35,
-      projectKnowledgeInjectOn: "first",
-      codeIntelInjectOn: "first",
-      knowledgeGraphInjectOn: "first",
+      projectKnowledgeInjectOn: "compaction",
+      codeIntelInjectOn: "compaction",
+      knowledgeGraphInjectOn: "compaction",
       maxKnowledgeGraphItems: 10,
       knowledgeGraphEntityMatch: false,
       projectKnowledgeValidOnly: false,
@@ -65,7 +65,7 @@ function makeConfig(overrides?: { chatMessage?: Partial<PluginConfig["chatMessag
     preemptiveCompaction: { enabled: true, thresholdPercent: 80, modelContextLimit: 200000, autoContinue: true },
     privacy: { enabled: true },
     compactionSummaryCapture: { enabled: true },
-    codeIndexSync: { enabled: true, debounceMs: 10000, minReindexIntervalMs: 300000 },
+    codeIndexSync: { enabled: true, autoRefresh: false, debounceMs: 10000, minReindexIntervalMs: 300000 },
     captureModel: { provider: "openai", model: "gpt-4o-mini", apiUrl: "", apiKey: "" },
     memoryScope: { namespace: "", shareAcrossAgents: true, includeAgentMetadata: true, includeRunMetadata: false, userId: "", defaultMetadata: {}, ...overrides?.memoryScope },
     mcpServer: { command: ["npx", "-y", "memory-mcp-1file"], tag: "default", model: "qwen3", transport: "http", port: 23817, bind: "127.0.0.1", reconnectIntervalMs: 30000, heartbeatIntervalMs: 20000, mcpServerName: "memory-mcp-1file" },
@@ -93,6 +93,14 @@ describe("shouldInjectMemories", () => {
     const config = makeConfig()
     const sessionID = "s-first-" + Date.now()
     expect(shouldInjectMemories(config, sessionID, false)).toBe(true)
+  })
+
+  it("does not inject project-wide sources before compaction by default", () => {
+    const config = makeConfig({ chatMessage: { injectOn: "never" as any } })
+    const sessionID = "s-project-default-" + Date.now()
+
+    expect(shouldInjectMemories(config, sessionID, false)).toBe(false)
+    expect(shouldInjectMemories(config, sessionID, true)).toBe(true)
   })
 
   it("returns false on second call for 'first' mode after marking injected", () => {
