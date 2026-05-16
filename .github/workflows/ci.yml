@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  build-test-pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+
+      - run: npm run build --workspaces
+
+      - run: npm run test --workspaces
+
+      - run: npm run bundle:core
+
+      - run: npm run verify:packages
+
+      - run: npm pack --workspace opencode-mmcp-1file --dry-run
+
+      - run: npm pack --workspace codex-mmcp-1file --dry-run

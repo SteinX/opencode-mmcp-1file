@@ -1,0 +1,182 @@
+{
+  // Memory injection on user messages (READ)
+  "chatMessage": {
+    "enabled": true,
+    "maxMemories": 5,
+    "maxInjectedMemories": 6,       // Max query-recall memories injected after filtering/dedupe
+    "maxProjectMemories": 30,       // Max memories to fetch for tiered allocation (pool size)
+    "injectOn": "first",           // Query recall only: "first" or "always"
+    "projectKnowledgeInjectOn": "compaction", // "first" | "always" | "compaction" | "never"
+    "codeIntelInjectOn": "compaction",  // "first" | "always" | "compaction" | "never"
+    "shortQueryMinLength": 3,       // Skip query recall for very short queries
+    "minScore": 0.35,               // Query recall score threshold before injection
+    "projectKnowledgeValidOnly": false, // Use only valid project memories when true
+    "knowledgeGraphInjectOn": "compaction", // "first" | "always" | "compaction" | "never"
+    "maxKnowledgeGraphItems": 10,   // Max related entities to inject from the graph
+    "knowledgeGraphRelatedDepth": 1, // Traversal depth for related entity lookup
+    "knowledgeGraphEntityMatch": true, // Enable automatic entity matching in conversation
+    // Tiered injection: prioritize explicit user-requested memories first, then project guidance.
+    // Each tier defines category prefixes to match and a max slot count.
+    // Memories are allocated in tier order; unmatched go to catch-all (empty categories).
+    // Set to null to disable tiering and use flat recency-based list.
+    "projectKnowledgeTiers": [
+      { "categories": ["USER"], "limit": 5 },
+      { "categories": ["DECISION", "PATTERN"], "limit": 5 },
+      { "categories": ["CONTEXT"], "limit": 5 }
+    ]
+  },
+
+  // Auto-capture on session idle (WRITE)
+  "autoCapture": {
+    "enabled": false,
+    "debounceMs": 10000,
+    "language": "en"
+  },
+
+  // Memory recovery after context compaction (READ)
+  "compaction": {
+    "enabled": true,
+    "memoryLimit": 10
+  },
+
+  // Keyword detection for explicit memory requests
+  // Agent should store these with a USER: prefix when they are direct user instructions to remember something.
+  "keywordDetection": {
+    "enabled": true,
+    "extraPatterns": []              // Additional regex patterns to detect
+  },
+
+  // Preemptive compaction before hitting context limit
+  "preemptiveCompaction": {
+    "enabled": true,
+    "thresholdPercent": 80,
+    "modelContextLimit": 200000,
+    "autoContinue": true
+  },
+
+  // Privacy: strip <private> tags before storing
+  "privacy": {
+    "enabled": true
+  },
+
+  // Store compaction summaries as memories
+  "compactionSummaryCapture": {
+    "enabled": true
+  },
+
+  // Plugin-managed code intelligence refresh
+  "codeIndexSync": {
+    "enabled": true,
+    "autoRefresh": false,           // Automatically refresh stale indexes on startup/idle; manual project_index tools still work when false
+    "debounceMs": 10000,            // Wait after detecting staleness before re-indexing
+    "minReindexIntervalMs": 300000, // Cooldown between successful re-indexes
+    "resume": {
+      "enabled": true,                    // Enable checkpoint resume for interrupted index jobs
+      "pollIntervalMs": 5000,             // How often to poll server status during resume (ms)
+      "maxPollMs": 300000,                // Maximum time to wait for resume completion (ms, 5 min)
+      "allowFullRestartFallback": false,  // Allow full rebuild when resume is not possible (default: false for safety)
+      "allowDestructiveRecovery": false   // Allow destructive recovery for corrupt storage (default: false)
+    },
+    // Optional code-index scope filters. Omit both to use MCP server defaults (env vars CODE_INDEX_INCLUDE_PATTERNS / CODE_INDEX_EXCLUDE_PATTERNS).
+    // Empty array [] is meaningful: it disables that side of filtering entirely.
+    // Values are project-relative glob patterns using / separators, must not start with /.
+    // "includePatterns": ["src/**/*", "tests/**/*"],  // Include only these paths; omit to use server default
+    // "excludePatterns": ["**/generated/**", "**/*.min.js"]  // Exclude these paths; omit to use server default
+  },
+
+  // Preference learning from conversational signals
+  // Legacy compatibility alias — use learningMemory instead
+  "preferenceLearning": {
+    "enabled": false,
+    "learnOnCorrections": true,      // Learn when users correct prior assistant output
+    "learnOnNegations": true,        // Learn when users reject/negate suggestions
+    "learnOnMessageUpdated": true,   // Learn from message-updated events when available
+    "injectOn": "first",            // "first" | "always" | "compaction" | "never"
+    "scope": "project",             // "project" or "global"
+    "minConfidence": 0.7,            // Minimum confidence required to persist a learned preference
+    "candidateConfidence": 0.4,      // Lower threshold for candidate preferences pending stronger evidence
+    "maxPreferences": 5,             // Max injected preferences per retrieval
+    "maxCandidates": 3,              // Max candidate preferences tracked per cycle
+    "debounceMs": 10000,             // Debounce learning updates to avoid rapid duplicate writes
+    "maxInputChars": 4000,           // Truncate oversized inputs before preference extraction
+    "maxStoredPreferences": 50       // Upper bound for stored preference records per scope
+  },
+
+  // Learning memory — typed preference/lesson/rule capture (default: disabled)
+  "learningMemory": {
+    // Master switch — set to true to enable any learning memory features
+    "enabled": false,
+    // Preference learning — capture user preferences from chat signals
+    "preferences": { "enabled": false },
+    // Lesson learning — extract lessons/patterns/pitfalls from sessions
+    "lessons": { "enabled": false },
+    // Rule learning — promote confirmed preferences to hard rules
+    "rules": { "enabled": false },
+    // Injection settings — how learning memories appear in context
+    "injection": {
+      "mode": "auto",              // "auto" | "manual"
+      "maxPinned": 3,              // max hard rules pinned in context
+      "maxRetrieved": 10,          // max retrieved learning memories
+      "includeEvidence": false     // include source evidence snippets
+    },
+    // Fallback — read legacy USER — Preference: memories when server unsupported
+    "fallback": {
+      "legacyPreferences": true
+    }
+  },
+
+  // LLM for auto-capture summarization
+  // apiKey set → direct HTTP to apiUrl; apiKey empty → OpenCode session API (zero-config)
+  "captureModel": {
+    "provider": "",                  // OpenCode provider ID (e.g. "openai", "anthropic"); empty = use default
+    "model": "",                     // Model ID (e.g. "gpt-4o-mini"); empty = use default
+    "apiUrl": "",                    // Only used with direct HTTP mode (when apiKey is set)
+    "apiKey": ""                     // Optional; leave empty to use OpenCode session API
+  },
+
+  // Logical memory scope inside the current tag/dataDir shard
+  "memoryScope": {
+    "namespace": "",                 // Optional logical scope for one project/workstream inside the current shard
+    "shareAcrossAgents": true,        // Default for agentic coding: collaborating agents read/write shared memory
+    "includeAgentMetadata": true,     // Record source_agent_id in metadata for observability
+    "includeRunMetadata": false,      // Record source_run_id in metadata when run/session provenance matters
+    "userId": "",                    // Optional default user scope applied to reads/writes
+    "defaultMetadata": {}             // Optional metadata merged into every write
+  },
+
+  // MCP server configuration (memory-mcp-1file)
+  "mcpServer": {
+    "command": ["npm", "exec", "-y", "memory-mcp-1file", "--"],
+    "tag": "default",                // Physical storage shard; derives dataDir as ~/.local/share/opencode-mmcp-1file/{tag}
+    // "dataDir": "",               // Override: explicit data directory (takes precedence over tag)
+    "model": "qwen3",
+    "mcpServerName": "memory-mcp-1file",  // Cosmetic name for logging
+    // "commandPath": "",            // Override: path to custom binary (replaces command array, plugin still appends flags)
+    "transport": "stdio",            // "stdio" = one server per plugin process; "http" = shared server via HTTP
+    "port": 23817,                   // HTTP mode: server port (ignored in stdio mode)
+    "bind": "127.0.0.1",            // HTTP mode: server bind address (ignored in stdio mode)
+    "reconnectIntervalMs": 30000,    // Background reconnect cadence after failures
+    "heartbeatIntervalMs": 20000     // HTTP mode: keepalive/liveness check while connected
+  },
+
+  // System prompt injection — guides agent on memory tool usage
+  "systemPrompt": {
+    "enabled": true
+  },
+
+  // Performance resilience: per-call timeouts and caching
+  "performance": {
+    // Timeout for recall/semantic search MCP calls (ms). Increase if your DB is large.
+    "recallTimeoutMs": 15000,
+    // Timeout for project_info list MCP calls (ms).
+    "projectInfoTimeoutMs": 10000,
+    // Timeout for knowledge graph entity lookup MCP calls (ms).
+    "knowledgeGraphTimeoutMs": 10000,
+    // Timeout for project knowledge retrieval MCP calls (ms).
+    "projectKnowledgeTimeoutMs": 15000,
+    // Timeout for learning memory retrieval MCP calls (ms).
+    "learningMemoryTimeoutMs": 10000,
+    // TTL for project_info in-memory cache (ms). Default: 5 minutes.
+    "projectInfoCacheTtlMs": 300000
+  }
+}

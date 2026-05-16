@@ -1,0 +1,147 @@
+/**
+ * Central connection state management for the MCP server.
+ *
+ * Tracks whether the server is reachable and manages a background retry loop
+ * that periodically attempts reconnection when the connection has failed.
+ *
+ * Separated from mcp-client.ts to avoid circular dependencies — multiple
+ * modules (tool-registry, system-prompt, index) need to read connection state.
+ */
+
+import { logger } from "../utils/logger.js"
+
+const DEFAULT_RETRY_INTERVAL_MS = 30_000
+const DEFAULT_CONNECTION_KEY = "default"
+
+interface MutableConnectionState {
+  connectionFailed: boolean
+  failureCount: number
+  lastFailureTime: number | null
+  retryTimer: ReturnType<typeof setInterval> | null
+  retryInFlight: boolean
+  onReconnect: (() => void) | null
+}
+
+const connectionStates = new Map<string, MutableConnectionState>()
+
+function createState(): MutableConnectionState {
+  return {
+    connectionFailed: false,
+    failureCount: 0,
+    lastFailureTime: null,
+    retryTimer: null,
+    retryInFlight: false,
+    onReconnect: null,
+  }
+}
+
+function getState(key = DEFAULT_CONNECTION_KEY): MutableConnectionState {
+  const existing = connectionStates.get(key)
+  if (existing) return existing
+
+  const state = createState()
+  connectionStates.set(key, state)
+  return state
+}
+
+export function isConnectionFailed(key?: string): boolean {
+  return getState(key).connectionFailed
+}
+
+export function markConnectionFailed(key?: string): void {
+  const state = getState(key)
+  state.connectionFailed = true
+  state.failureCount++
+  state.lastFailureTime = Date.now()
+  logger.warn("MCP connection marked as failed", { failureCount: state.failureCount })
+}
+
+export function markConnectionHealthy(key?: string): void {
+  const state = getState(key)
+  const wasFailed = state.connectionFailed
+  state.connectionFailed = false
+  state.failureCount = 0
+  state.lastFailureTime = null
+  if (wasFailed) {
+    logger.info("MCP connection restored")
+    state.onReconnect?.()
+  }
+}
+
+export interface ConnectionStatus {
+  connected: boolean
+  failureCount: number
+  lastFailureTime: number | null
+  retrying: boolean
+}
+
+export function getConnectionStatus(key?: string): ConnectionStatus {
+  const state = getState(key)
+  return {
+    connected: !state.connectionFailed,
+    failureCount: state.failureCount,
+    lastFailureTime: state.lastFailureTime,
+    retrying: state.retryTimer !== null,
+  }
+}
+
+/**
+ * Start a periodic retry loop. The loop calls `retryFn` at `intervalMs`
+ * intervals. When `retryFn` resolves to `true`, the loop stops and
+ * `markConnectionHealthy()` is called automatically.
+ */
+export function startRetryLoop(
+  retryFn: () => Promise<boolean>,
+  intervalMs = DEFAULT_RETRY_INTERVAL_MS,
+  reconnectCallback?: () => void,
+  key?: string,
+): void {
+  const state = getState(key)
+  stopRetryLoop(key)
+  state.onReconnect = reconnectCallback ?? null
+
+  state.retryTimer = setInterval(async () => {
+    if (state.retryInFlight) {
+      logger.debug("Skipping MCP reconnection attempt because previous attempt is still running")
+      return
+    }
+
+    state.retryInFlight = true
+    logger.debug("Attempting MCP reconnection...")
+    try {
+      const success = await retryFn()
+      if (success) {
+        markConnectionHealthy(key)
+        stopRetryLoop(key)
+      }
+    } catch {
+      logger.debug("MCP reconnection attempt failed")
+    } finally {
+      state.retryInFlight = false
+    }
+  }, intervalMs)
+
+  // Allow Node to exit even if the timer is still active
+  if (state.retryTimer && typeof state.retryTimer === "object" && "unref" in state.retryTimer) {
+    state.retryTimer.unref()
+  }
+}
+
+export function stopRetryLoop(key?: string): void {
+  const state = getState(key)
+  if (state.retryTimer !== null) {
+    clearInterval(state.retryTimer)
+    state.retryTimer = null
+  }
+  state.retryInFlight = false
+  state.onReconnect = null
+}
+
+export function _resetForTest(): void {
+  for (const state of connectionStates.values()) {
+    if (state.retryTimer !== null) {
+      clearInterval(state.retryTimer)
+    }
+  }
+  connectionStates.clear()
+}

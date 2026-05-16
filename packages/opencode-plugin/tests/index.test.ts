@@ -1,0 +1,2401 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
+import type { PluginConfig } from "../src/config.js"
+
+// ─── Mock all dependencies ─────────────────────────────────────────
+
+vi.mock("node:fs", () => ({
+  existsSync: vi.fn().mockReturnValue(false),
+  mkdirSync: vi.fn(),
+  copyFileSync: vi.fn(),
+}))
+
+vi.mock("node:os", () => ({
+  homedir: vi.fn().mockReturnValue("/mock-home"),
+}))
+
+vi.mock("../src/config.js", () => ({
+  loadConfig: vi.fn(),
+  resolveDataDir: vi.fn(),
+}))
+
+vi.mock("../src/services/context-inject.js", () => ({
+  shouldInjectMemories: vi.fn().mockReturnValue(false),
+  shouldInjectQueryRecall: vi.fn().mockReturnValue(false),
+  shouldInjectProjectKnowledge: vi.fn().mockReturnValue(false),
+  shouldInjectCodeIntel: vi.fn().mockReturnValue(false),
+  shouldInjectKnowledgeGraph: vi.fn().mockReturnValue(false),
+  markSessionInjected: vi.fn(),
+  markSessionCompacted: vi.fn(),
+  fetchAndFormatMemories: vi.fn().mockResolvedValue(null),
+  fetchCodeIntelContext: vi.fn().mockResolvedValue(null),
+  fetchProjectKnowledge: vi.fn().mockResolvedValue(null),
+  fetchKnowledgeGraphContext: vi.fn().mockResolvedValue(null),
+}))
+
+vi.mock("../src/services/auto-capture.js", () => ({
+  performAutoCapture: vi.fn().mockResolvedValue(false),
+}))
+
+vi.mock("../src/services/compaction.js", () => ({
+  buildCompactionRecoveryContext: vi.fn().mockResolvedValue(null),
+}))
+
+vi.mock("../src/services/mcp-client.js", () => ({
+  getMemoryClient: vi.fn().mockResolvedValue({}),
+  getMemoryConnectionKey: vi.fn().mockReturnValue("test-connection-key"),
+  storeMemory: vi.fn().mockResolvedValue(true),
+  disconnectMemoryClient: vi.fn().mockResolvedValue(undefined),
+  tryReconnect: vi.fn().mockResolvedValue(true),
+  registerConnectionFailureHandler: vi.fn(),
+}))
+
+vi.mock("../src/services/connection-state.js", () => ({
+  isConnectionFailed: vi.fn().mockReturnValue(false),
+  startRetryLoop: vi.fn(),
+  stopRetryLoop: vi.fn(),
+}))
+
+vi.mock("../src/services/llm-client.js", () => ({
+  summarizeExchange: vi.fn().mockResolvedValue("summary"),
+}))
+
+vi.mock("../src/services/session-llm.js", () => ({
+  callSessionLLM: vi.fn().mockResolvedValue("session-summary"),
+}))
+
+vi.mock("../src/utils/keywords.js", () => ({
+  detectMemoryKeyword: vi.fn().mockReturnValue(null),
+  MEMORY_NUDGE_MESSAGE: "💡 You can use memory tools to store/recall information.",
+}))
+
+vi.mock("../src/utils/privacy.js", () => ({
+  stripPrivateContent: vi.fn((s: string) => s),
+  isFullyPrivate: vi.fn().mockReturnValue(false),
+}))
+
+vi.mock("../src/utils/logger.js", () => ({
+  initLogger: vi.fn(),
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}))
+
+vi.mock("../src/services/preemptive-compaction.js", () => ({
+  trackMessageTokens: vi.fn(),
+  shouldTriggerCompaction: vi.fn().mockReturnValue(false),
+  performPreemptiveCompaction: vi.fn().mockResolvedValue(false),
+  resetSessionState: vi.fn(),
+}))
+
+vi.mock("../src/services/server-process.js", () => ({
+  stopServer: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock("../src/services/system-prompt.js", () => ({
+  buildMemorySystemPrompt: vi.fn().mockReturnValue("system prompt text"),
+}))
+
+vi.mock("../src/services/tool-registry.js", () => ({
+  buildToolRegistry: vi.fn().mockReturnValue({}),
+}))
+
+vi.mock("../src/services/code-index-sync.js", () => ({
+  ensureCodeIndexFresh: vi.fn().mockResolvedValue(undefined),
+  resetCodeIndexSyncState: vi.fn(),
+}))
+
+vi.mock("../src/services/preference-learning.js", () => ({
+  shouldInjectLearnedPreferences: vi.fn().mockReturnValue(false),
+  fetchAndFormatLearnedPreferences: vi.fn().mockResolvedValue(null),
+  markLearnedPreferencesInjected: vi.fn(),
+  markLearnedPreferencesCompacted: vi.fn(),
+  detectPreferenceSignal: vi.fn().mockReturnValue(null),
+  extractPreferenceCandidates: vi.fn().mockResolvedValue([]),
+  storePreferenceCandidates: vi.fn().mockResolvedValue({
+    stored: 0,
+    skippedDuplicate: 0,
+    skippedPrivate: 0,
+    skippedThrottled: 0,
+    skippedLimit: 0,
+    failed: 0,
+  }),
+}))
+
+vi.mock("../src/services/learning-memory-orchestrator.js", () => ({
+  learnFromChatMessage: vi.fn().mockResolvedValue(undefined),
+  learnFromCompactionSummary: vi.fn().mockResolvedValue(undefined),
+  learnFromMessageUpdated: vi.fn().mockResolvedValue(undefined),
+  learnFromSessionIdleSummary: vi.fn().mockResolvedValue(undefined),
+  retrieveRecordsForInjection: vi.fn().mockResolvedValue(null),
+}))
+
+vi.mock("../src/services/learning-memory-format.js", () => ({
+  formatLearningMemoryInjection: vi.fn().mockReturnValue(null),
+}))
+
+// ─── Import mocked modules for assertions ──────────────────────────
+
+const { loadConfig, resolveDataDir } = await import("../src/config.js")
+const {
+  shouldInjectMemories,
+  shouldInjectQueryRecall,
+  shouldInjectProjectKnowledge,
+  shouldInjectCodeIntel,
+  shouldInjectKnowledgeGraph,
+  markSessionInjected,
+  markSessionCompacted,
+  fetchAndFormatMemories,
+  fetchCodeIntelContext,
+  fetchProjectKnowledge,
+  fetchKnowledgeGraphContext,
+} = await import("../src/services/context-inject.js")
+const { performAutoCapture } = await import("../src/services/auto-capture.js")
+const { buildCompactionRecoveryContext } = await import("../src/services/compaction.js")
+const {
+  getMemoryClient,
+  storeMemory,
+  disconnectMemoryClient,
+  tryReconnect,
+  registerConnectionFailureHandler,
+} = await import("../src/services/mcp-client.js")
+const { isConnectionFailed, startRetryLoop, stopRetryLoop } = await import("../src/services/connection-state.js")
+const { summarizeExchange } = await import("../src/services/llm-client.js")
+const { callSessionLLM } = await import("../src/services/session-llm.js")
+const { detectMemoryKeyword, MEMORY_NUDGE_MESSAGE } = await import("../src/utils/keywords.js")
+const { stripPrivateContent, isFullyPrivate } = await import("../src/utils/privacy.js")
+const { initLogger, logger } = await import("../src/utils/logger.js")
+const { trackMessageTokens, shouldTriggerCompaction, performPreemptiveCompaction, resetSessionState } = await import("../src/services/preemptive-compaction.js")
+const { buildMemorySystemPrompt } = await import("../src/services/system-prompt.js")
+const { buildToolRegistry } = await import("../src/services/tool-registry.js")
+const { ensureCodeIndexFresh, resetCodeIndexSyncState } = await import("../src/services/code-index-sync.js")
+const {
+  shouldInjectLearnedPreferences,
+  fetchAndFormatLearnedPreferences,
+  markLearnedPreferencesInjected,
+  markLearnedPreferencesCompacted,
+  detectPreferenceSignal,
+  extractPreferenceCandidates,
+  storePreferenceCandidates,
+} = await import("../src/services/preference-learning.js")
+const { existsSync, mkdirSync, copyFileSync } = await import("node:fs")
+const {
+  learnFromChatMessage,
+  learnFromCompactionSummary,
+  learnFromMessageUpdated,
+  learnFromSessionIdleSummary,
+  retrieveRecordsForInjection,
+} = await import("../src/services/learning-memory-orchestrator.js")
+const { formatLearningMemoryInjection } = await import("../src/services/learning-memory-format.js")
+
+// ─── Import the plugin under test ──────────────────────────────────
+
+const { default: plugin } = await import("../src/index.js")
+
+// ─── Helpers ────────────────────────────────────────────────────────
+
+function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
+  const chatMessage = {
+    enabled: true,
+    maxMemories: 5,
+    maxProjectMemories: 10,
+    maxInjectedMemories: 6,
+    injectOn: "first" as const,
+    shortQueryMinLength: 3,
+    minScore: 0.35,
+    projectKnowledgeInjectOn: "compaction" as const,
+    codeIntelInjectOn: "compaction" as const,
+    knowledgeGraphInjectOn: "compaction" as const,
+    maxKnowledgeGraphItems: 10,
+    knowledgeGraphRelatedDepth: 1,
+    knowledgeGraphEntityMatch: true,
+    projectKnowledgeValidOnly: false,
+    projectKnowledgeTiers: [
+      { categories: ["USER"], limit: 5 },
+      { categories: ["DECISION", "PATTERN"], limit: 5 },
+      { categories: ["CONTEXT"], limit: 5 },
+    ],
+    ...overrides?.chatMessage,
+  }
+  const codeIndexSync = {
+    enabled: true,
+    autoRefresh: false,
+    debounceMs: 10000,
+    minReindexIntervalMs: 300000,
+    ...overrides?.codeIndexSync,
+  }
+
+  return {
+    chatMessage,
+    autoCapture: { enabled: true, debounceMs: 10, language: "en" },
+    compaction: { enabled: true, memoryLimit: 10 },
+    keywordDetection: { enabled: true, extraPatterns: [] },
+    preemptiveCompaction: { enabled: true, thresholdPercent: 80, modelContextLimit: 200000, autoContinue: true },
+    privacy: { enabled: true },
+    compactionSummaryCapture: { enabled: true },
+    codeIndexSync,
+    preferenceLearning: {
+      enabled: false,
+      learnOnCorrections: true,
+      learnOnNegations: true,
+      learnOnMessageUpdated: true,
+      injectOn: "first",
+      scope: "project",
+      minConfidence: 0.7,
+      candidateConfidence: 0.4,
+      maxPreferences: 5,
+      maxCandidates: 3,
+      debounceMs: 10000,
+      maxInputChars: 4000,
+      maxStoredPreferences: 50,
+    },
+    captureModel: { provider: "openai", model: "gpt-4o-mini", apiUrl: "", apiKey: "test-key" },
+    memoryScope: {
+      namespace: "",
+      shareAcrossAgents: true,
+      includeAgentMetadata: true,
+      includeRunMetadata: false,
+      userId: "",
+      defaultMetadata: {},
+    },
+    mcpServer: { command: ["npx", "-y", "memory-mcp-1file"], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1", reconnectIntervalMs: 30000, heartbeatIntervalMs: 20000 },
+    systemPrompt: { enabled: true },
+    ...overrides,
+    chatMessage,
+    codeIndexSync,
+  }
+}
+
+function makePluginInput(directoryOverride?: string) {
+  return {
+    directory: directoryOverride || "/test/project",
+    client: {
+      tui: {
+        showToast: vi.fn().mockResolvedValue(undefined),
+      },
+      session: {
+        messages: vi.fn().mockResolvedValue({ data: [] }),
+        prompt: vi.fn().mockResolvedValue(undefined),
+        create: vi.fn().mockResolvedValue({ data: { id: "ephemeral-session" } }),
+        delete: vi.fn().mockResolvedValue({ data: true }),
+      },
+    },
+  } as any
+}
+
+async function initPlugin(configOverrides?: Partial<PluginConfig>, directoryOverride?: string) {
+  const config = makeConfig(configOverrides)
+  vi.mocked(loadConfig).mockReturnValue(config)
+  vi.mocked(resolveDataDir).mockReturnValue("/mock-data-dir")
+
+  const input = makePluginInput(directoryOverride)
+  const hooks = await plugin(input)
+  // Flush the eager-connect IIFE (includes 1500ms TUI-ready delay) so its showToast call doesn't leak
+  await vi.advanceTimersByTimeAsync(1500)
+  vi.mocked(input.client.tui.showToast).mockClear()
+  return { hooks: hooks as any, input, config }
+}
+
+// ─── Store original process.on for cleanup ─────────────────────────
+
+const originalProcessOn = process.on.bind(process)
+const registeredHandlers: Array<{ event: string; handler: (...args: any[]) => any }> = []
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.useFakeTimers()
+
+  // Track signal handlers registered by the plugin
+  const processOnSpy = vi.spyOn(process, "on").mockImplementation(((event: string, handler: (...args: any[]) => any) => {
+    registeredHandlers.push({ event, handler })
+    return process
+  }) as any)
+})
+
+afterEach(() => {
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+  registeredHandlers.length = 0
+})
+
+// ─── Tests ──────────────────────────────────────────────────────────
+
+describe("plugin factory", () => {
+  it("returns empty object when dataDir is null (plugin disabled)", async () => {
+    vi.mocked(loadConfig).mockReturnValue(makeConfig())
+    vi.mocked(resolveDataDir).mockReturnValue(null)
+
+    const hooks = await plugin(makePluginInput())
+    expect(hooks).toEqual({})
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("disabled"))
+  })
+
+  it("initializes logger with input.client and logDir", async () => {
+    const input = makePluginInput()
+    vi.mocked(loadConfig).mockReturnValue(makeConfig())
+    vi.mocked(resolveDataDir).mockReturnValue("/data")
+
+    await plugin(input)
+    expect(initLogger).toHaveBeenCalledWith(input.client, "/data/log")
+  })
+
+  it("eagerly connects to memory server in background", async () => {
+    const config = makeConfig()
+    vi.mocked(loadConfig).mockReturnValue(config)
+    vi.mocked(resolveDataDir).mockReturnValue("/mock-data-dir")
+    const input = makePluginInput()
+    await plugin(input)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(getMemoryClient).toHaveBeenCalled()
+  })
+
+  it("passes default autoRefresh=false config to startup freshness check", async () => {
+    const config = makeConfig()
+    vi.mocked(loadConfig).mockReturnValue(config)
+    vi.mocked(resolveDataDir).mockReturnValue("/mock-data-dir")
+    const input = makePluginInput()
+
+    await plugin(input)
+
+    expect(ensureCodeIndexFresh).toHaveBeenCalledWith(config, input.directory, "startup")
+  })
+
+  it("passes autoRefresh-enabled config to startup freshness check", async () => {
+    const config = makeConfig({ codeIndexSync: { autoRefresh: true } })
+    vi.mocked(loadConfig).mockReturnValue(config)
+    vi.mocked(resolveDataDir).mockReturnValue("/mock-data-dir")
+    const input = makePluginInput()
+
+    await plugin(input)
+
+    expect(ensureCodeIndexFresh).toHaveBeenCalledWith(config, input.directory, "startup")
+  })
+
+  it("shows success toast on memory server connection", async () => {
+    const config = makeConfig()
+    vi.mocked(loadConfig).mockReturnValue(config)
+    vi.mocked(resolveDataDir).mockReturnValue("/mock-data-dir")
+    const input = makePluginInput()
+    await plugin(input)
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(input.client.tui.showToast).toHaveBeenCalledWith({
+      body: expect.objectContaining({ variant: "success" }),
+    })
+  })
+
+  it("shows error toast on memory server connection failure", async () => {
+    vi.mocked(getMemoryClient).mockRejectedValueOnce(new Error("connection failed"))
+    const config = makeConfig()
+    vi.mocked(loadConfig).mockReturnValue(config)
+    vi.mocked(resolveDataDir).mockReturnValue("/mock-data-dir")
+    const input = makePluginInput()
+    await plugin(input)
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(input.client.tui.showToast).toHaveBeenCalledWith({
+      body: expect.objectContaining({ variant: "error" }),
+    })
+  })
+
+  it("starts retry loop on connection failure", async () => {
+    vi.mocked(getMemoryClient).mockRejectedValueOnce(new Error("connection failed"))
+    const config = makeConfig()
+    vi.mocked(loadConfig).mockReturnValue(config)
+    vi.mocked(resolveDataDir).mockReturnValue("/mock-data-dir")
+    const input = makePluginInput()
+    await plugin(input)
+    await vi.advanceTimersByTimeAsync(1500)
+
+    expect(startRetryLoop).toHaveBeenCalledWith(
+      expect.any(Function),
+      30_000,
+      expect.any(Function),
+      "test-connection-key",
+    )
+  })
+
+  it("registers a runtime connection failure handler", async () => {
+    await initPlugin()
+
+    expect(registerConnectionFailureHandler).toHaveBeenCalledWith(expect.any(Function), "test-connection-key")
+  })
+
+  it("runtime connection failure shows toast and starts retry loop once", async () => {
+    const { input } = await initPlugin()
+
+    const runtimeFailureHandler = vi.mocked(registerConnectionFailureHandler).mock.calls[0]?.[0] as (() => void) | null
+    expect(runtimeFailureHandler).toBeTypeOf("function")
+
+    runtimeFailureHandler?.()
+    runtimeFailureHandler?.()
+
+    expect(input.client.tui.showToast).toHaveBeenCalledWith({
+      body: expect.objectContaining({
+        message: "Memory server connection lost — retrying in background",
+        variant: "error",
+      }),
+    })
+    expect(startRetryLoop).toHaveBeenCalledTimes(1)
+  })
+
+  it("retry loop success callback resets runtime guard and shows reconnect toast", async () => {
+    const { input } = await initPlugin()
+
+    const runtimeFailureHandler = vi.mocked(registerConnectionFailureHandler).mock.calls[0]?.[0] as (() => void) | null
+    runtimeFailureHandler?.()
+
+    const onSuccess = vi.mocked(startRetryLoop).mock.calls[0]?.[2] as (() => void) | undefined
+    expect(onSuccess).toBeTypeOf("function")
+
+    onSuccess?.()
+    runtimeFailureHandler?.()
+
+    expect(input.client.tui.showToast).toHaveBeenCalledWith({
+      body: expect.objectContaining({
+        message: "Memory server reconnected!",
+        variant: "success",
+      }),
+    })
+    expect(startRetryLoop).toHaveBeenCalledTimes(2)
+  })
+
+  it("does not start retry loop on successful connection", async () => {
+    const config = makeConfig()
+    vi.mocked(loadConfig).mockReturnValue(config)
+    vi.mocked(resolveDataDir).mockReturnValue("/mock-data-dir")
+    const input = makePluginInput()
+    await plugin(input)
+    await vi.advanceTimersByTimeAsync(1500)
+
+    expect(startRetryLoop).not.toHaveBeenCalled()
+  })
+
+  it("registers SIGTERM and SIGINT cleanup handlers", async () => {
+    await initPlugin()
+    const events = registeredHandlers.map((h) => h.event)
+    expect(events).toContain("SIGTERM")
+    expect(events).toContain("SIGINT")
+  })
+
+  it("cleanup handler calls stopRetryLoop before disconnecting", async () => {
+    await initPlugin()
+    const sigterm = registeredHandlers.find((h) => h.event === "SIGTERM")
+    expect(sigterm).toBeDefined()
+    sigterm!.handler()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(resetCodeIndexSyncState).toHaveBeenCalled()
+    expect(stopRetryLoop).toHaveBeenCalledWith("test-connection-key")
+    expect(registerConnectionFailureHandler).toHaveBeenLastCalledWith(null, "test-connection-key")
+    expect(disconnectMemoryClient).toHaveBeenCalled()
+  })
+
+  it("returns all expected hook keys", async () => {
+    const { hooks } = await initPlugin()
+    expect(hooks).toHaveProperty("chat.message")
+    expect(hooks).toHaveProperty("event")
+    expect(hooks).toHaveProperty("experimental.chat.system.transform")
+    expect(hooks).toHaveProperty("tool.definition")
+    expect(hooks).toHaveProperty("experimental.session.compacting")
+    expect(hooks).toHaveProperty("tool.execute.before")
+    expect(hooks).toHaveProperty("tool")
+  })
+})
+
+// ─── extractUserText (tested indirectly via chat.message) ──────────
+
+describe("extractUserText (via chat.message)", () => {
+  it("extracts text from non-synthetic parts", async () => {
+    const { hooks } = await initPlugin({ keywordDetection: { enabled: true, extraPatterns: [] } })
+    vi.mocked(detectMemoryKeyword).mockReturnValue("remember")
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [
+        { type: "text", text: "remember this important fact about the project" },
+      ],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+    expect(detectMemoryKeyword).toHaveBeenCalledWith("remember this important fact about the project", expect.any(Array))
+  })
+
+  it("passes short text through to source-specific injection gates", async () => {
+    const { hooks } = await initPlugin()
+    vi.mocked(shouldInjectMemories).mockReturnValue(true)
+    vi.mocked(shouldInjectQueryRecall).mockReturnValue(true)
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "hi" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+    expect(fetchAndFormatMemories).toHaveBeenCalledWith(expect.anything(), "hi")
+  })
+
+  it("ignores synthetic parts", async () => {
+    const { hooks } = await initPlugin({ keywordDetection: { enabled: true, extraPatterns: [] } })
+    vi.mocked(detectMemoryKeyword).mockReturnValue(null)
+    vi.mocked(shouldInjectQueryRecall).mockReturnValue(true)
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [
+        { type: "text", text: "some injected context that is synthetic", synthetic: true },
+        { type: "text", text: "actual user question that is long enough" },
+      ],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+    expect(detectMemoryKeyword).toHaveBeenCalledWith("actual user question that is long enough", expect.any(Array))
+  })
+
+  it("returns null for empty parts array", async () => {
+    const { hooks } = await initPlugin()
+    vi.mocked(shouldInjectQueryRecall).mockReturnValue(true)
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+    expect(fetchAndFormatMemories).not.toHaveBeenCalled()
+  })
+
+  it("joins multiple text parts", async () => {
+    const { hooks } = await initPlugin({ keywordDetection: { enabled: true, extraPatterns: [] } })
+    vi.mocked(detectMemoryKeyword).mockReturnValue("remember")
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [
+        { type: "text", text: "first part of message" },
+        { type: "text", text: "second part continues" },
+      ],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+    expect(detectMemoryKeyword).toHaveBeenCalledWith(
+      "first part of message\nsecond part continues",
+      expect.any(Array),
+    )
+  })
+
+  it("skips non-text part types", async () => {
+    const { hooks } = await initPlugin({ keywordDetection: { enabled: true, extraPatterns: [] } })
+    vi.mocked(detectMemoryKeyword).mockReturnValue("remember")
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [
+        { type: "image", url: "http://example.com/img.png" },
+        { type: "text", text: "this is a text part long enough" },
+      ],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+    expect(detectMemoryKeyword).toHaveBeenCalledWith("this is a text part long enough", expect.any(Array))
+  })
+})
+
+// ─── chat.message hook ─────────────────────────────────────────────
+
+describe("chat.message hook", () => {
+  it("appends nudge part when keyword detected", async () => {
+    const { hooks } = await initPlugin({ keywordDetection: { enabled: true, extraPatterns: [] } })
+    vi.mocked(detectMemoryKeyword).mockReturnValue("remember")
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "remember this fact about memory usage" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+    expect(output.parts).toHaveLength(2)
+    expect(output.parts[1]).toMatchObject({
+      type: "text",
+      text: MEMORY_NUDGE_MESSAGE,
+      synthetic: true,
+    })
+  })
+
+  it("does not append nudge when keyword detection disabled", async () => {
+    const { hooks } = await initPlugin({ keywordDetection: { enabled: false, extraPatterns: [] } })
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "remember this fact about memory usage" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+    expect(output.parts).toHaveLength(1)
+    expect(detectMemoryKeyword).not.toHaveBeenCalled()
+  })
+
+  it("does not append nudge when keyword not matched", async () => {
+    const { hooks } = await initPlugin({ keywordDetection: { enabled: true, extraPatterns: [] } })
+    vi.mocked(detectMemoryKeyword).mockReturnValue(null)
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "just a regular question about code" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+    expect(output.parts).toHaveLength(1)
+  })
+
+  it("appends code exploration nudge for mixed local-code questions through the hook", async () => {
+    const { hooks } = await initPlugin({ keywordDetection: { enabled: true, extraPatterns: [] } })
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "The error is in loadConfig, where is it defined?" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+
+    expect(output.parts).toHaveLength(2)
+    expect(output.parts[0]).toMatchObject({
+      type: "text",
+      text: "The error is in loadConfig, where is it defined?",
+    })
+    expect(output.parts[1]).toMatchObject({
+      type: "text",
+      synthetic: true,
+    })
+    expect((output.parts[1] as any).text).toContain("code_search")
+  })
+
+  it("injects memory context when query recall gate allows it", async () => {
+    const { hooks } = await initPlugin()
+    vi.mocked(shouldInjectMemories).mockReturnValue(true)
+    vi.mocked(shouldInjectQueryRecall).mockReturnValue(true)
+    vi.mocked(fetchAndFormatMemories).mockResolvedValue("[MEMORY] some recalled memory")
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "what do you know about this project setup?" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+    expect(output.parts[0]).toMatchObject({
+      type: "text",
+      text: "[MEMORY] some recalled memory",
+      synthetic: true,
+    })
+    expect(markSessionInjected).toHaveBeenCalledWith("s1", ["query_recall"])
+  })
+
+  it("injects project knowledge and code intel when relevant memories are unavailable", async () => {
+    const { hooks } = await initPlugin()
+    vi.mocked(shouldInjectMemories).mockReturnValue(true)
+    vi.mocked(shouldInjectProjectKnowledge).mockReturnValue(true)
+    vi.mocked(shouldInjectCodeIntel).mockReturnValue(true)
+    vi.mocked(fetchAndFormatMemories).mockResolvedValue(null)
+    vi.mocked(fetchProjectKnowledge).mockResolvedValue("[MEMORY] project knowledge")
+    vi.mocked(fetchCodeIntelContext).mockResolvedValue("[CODE INTELLIGENCE] indexed project")
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "tell me about this project setup" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+    expect(output.parts).toHaveLength(3)
+    expect(output.parts[0]).toMatchObject({
+      type: "text",
+      text: "tell me about this project setup",
+    })
+    expect(output.parts[1]).toMatchObject({
+      type: "text",
+      text: "[MEMORY] project knowledge",
+      synthetic: true,
+    })
+    expect(output.parts[2]).toMatchObject({
+      type: "text",
+      text: "[CODE INTELLIGENCE] indexed project",
+      synthetic: true,
+    })
+    expect(markSessionInjected).toHaveBeenCalledWith("s1", ["project_knowledge", "code_intel"])
+  })
+
+  it("injects knowledge graph context when KG source returns content", async () => {
+    const { hooks } = await initPlugin()
+    vi.mocked(shouldInjectMemories).mockReturnValue(true)
+    vi.mocked(shouldInjectKnowledgeGraph).mockReturnValue(true)
+    vi.mocked(fetchAndFormatMemories).mockResolvedValue(null)
+    vi.mocked(fetchProjectKnowledge).mockResolvedValue(null)
+    vi.mocked(fetchCodeIntelContext).mockResolvedValue(null)
+    vi.mocked(fetchKnowledgeGraphContext).mockResolvedValue("[KNOWLEDGE GRAPH] Architectural Overview")
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "tell me how modules relate" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+    expect(fetchKnowledgeGraphContext).toHaveBeenCalledWith(expect.anything(), "tell me how modules relate")
+    expect(output.parts).toHaveLength(2)
+    expect(output.parts[1]).toMatchObject({
+      type: "text",
+      text: "[KNOWLEDGE GRAPH] Architectural Overview",
+      synthetic: true,
+    })
+    expect(markSessionInjected).toHaveBeenCalledWith("s1", ["knowledge_graph"])
+  })
+
+  it("injects learned preferences even when base memory injection is disabled", async () => {
+    const { hooks } = await initPlugin({
+      preferenceLearning: { ...makeConfig().preferenceLearning, enabled: true },
+    })
+    vi.mocked(shouldInjectMemories).mockReturnValue(false)
+    vi.mocked(shouldInjectLearnedPreferences).mockReturnValue(true)
+    vi.mocked(fetchAndFormatLearnedPreferences).mockResolvedValue("[MEMORY] Learned User Preferences\n\n- Use concise answers")
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "help me with setup" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+
+    expect(fetchAndFormatMemories).not.toHaveBeenCalled()
+    expect(output.parts[0]).toMatchObject({
+      type: "text",
+      text: "[MEMORY] Learned User Preferences\n\n- Use concise answers",
+      synthetic: true,
+    })
+    expect(markLearnedPreferencesInjected).toHaveBeenCalledWith("s1")
+    expect(markSessionInjected).not.toHaveBeenCalled()
+  })
+
+  it("does not mark learned preferences injected when formatter returns null", async () => {
+    const { hooks } = await initPlugin({
+      preferenceLearning: { ...makeConfig().preferenceLearning, enabled: true },
+    })
+    vi.mocked(shouldInjectMemories).mockReturnValue(false)
+    vi.mocked(shouldInjectLearnedPreferences).mockReturnValue(true)
+    vi.mocked(fetchAndFormatLearnedPreferences).mockResolvedValue(null)
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "help me with setup" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+
+    expect(markLearnedPreferencesInjected).not.toHaveBeenCalled()
+    expect(output.parts).toHaveLength(1)
+  })
+
+  it("passes isAfterCompaction=true to learned preference injection gate on first post-compaction message", async () => {
+    const { hooks } = await initPlugin({
+      preferenceLearning: { ...makeConfig().preferenceLearning, enabled: true },
+      compaction: { enabled: true, memoryLimit: 10 },
+    })
+
+    await hooks.event({
+      event: {
+        type: "session.compacted",
+        properties: { sessionID: "s-learned-compact" },
+      },
+    })
+
+    vi.mocked(shouldInjectMemories).mockReturnValue(false)
+    vi.mocked(shouldInjectLearnedPreferences).mockReturnValue(false)
+
+    await hooks["chat.message"](
+      { sessionID: "s-learned-compact" },
+      {
+        message: { id: "msg1" },
+        parts: [{ type: "text", text: "continue after compaction" }],
+      },
+    )
+
+    expect(shouldInjectLearnedPreferences).toHaveBeenCalledWith(
+      expect.anything(),
+      "s-learned-compact",
+      true,
+    )
+
+    vi.clearAllMocks()
+    vi.mocked(shouldInjectMemories).mockReturnValue(false)
+    vi.mocked(shouldInjectLearnedPreferences).mockReturnValue(false)
+
+    await hooks["chat.message"](
+      { sessionID: "s-learned-compact" },
+      {
+        message: { id: "msg2" },
+        parts: [{ type: "text", text: "second message" }],
+      },
+    )
+
+    expect(shouldInjectLearnedPreferences).toHaveBeenCalledWith(
+      expect.anything(),
+      "s-learned-compact",
+      false,
+    )
+  })
+
+  it("does not learn preferences from chat.message when preference learning is disabled", async () => {
+    const { hooks } = await initPlugin({
+      preferenceLearning: { ...makeConfig().preferenceLearning, enabled: false },
+    })
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "I prefer concise answers" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s-disabled-chat" }, output)
+
+    expect(stripPrivateContent).not.toHaveBeenCalledWith("I prefer concise answers")
+    expect(detectPreferenceSignal).not.toHaveBeenCalled()
+    expect(extractPreferenceCandidates).not.toHaveBeenCalled()
+    expect(storePreferenceCandidates).not.toHaveBeenCalled()
+  })
+
+  it("learns preferences from chat.message when enabled and signal exists", async () => {
+    const { hooks, config } = await initPlugin({
+      preferenceLearning: { ...makeConfig().preferenceLearning, enabled: true },
+    })
+    vi.mocked(detectPreferenceSignal).mockReturnValue({
+      signalType: "explicit_preference",
+      excerpt: "I prefer concise answers",
+      source: "chat.message",
+    })
+    const candidates = [{
+      kind: "user_preference" as const,
+      content: "Use concise answers",
+      confidence: 0.9,
+      importance: 0.8,
+      source: "preference-learning",
+    }]
+    vi.mocked(extractPreferenceCandidates).mockResolvedValue(candidates)
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "I prefer concise answers" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s-pref" }, output)
+
+    expect(stripPrivateContent).toHaveBeenCalledWith("I prefer concise answers")
+    expect(detectPreferenceSignal).toHaveBeenCalledWith(
+      "I prefer concise answers",
+      config.preferenceLearning,
+      { source: "chat.message", eventType: undefined },
+    )
+    expect(extractPreferenceCandidates).toHaveBeenCalledWith(config, "I prefer concise answers", expect.any(Object))
+    expect(storePreferenceCandidates).toHaveBeenCalledWith(config, [{
+      content: "Use concise answers",
+      confidence: 0.9,
+      signalType: "explicit_preference",
+      status: "confirmed",
+      evidence: undefined,
+    }], {
+      metadata: { source: "chat.message" },
+    })
+  })
+
+  it("skips preference extraction/storage for fully private chat.message text", async () => {
+    const { hooks } = await initPlugin({
+      preferenceLearning: { ...makeConfig().preferenceLearning, enabled: true },
+    })
+    vi.mocked(isFullyPrivate).mockReturnValueOnce(true)
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "<private>keep this secret</private>" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s-private" }, output)
+
+    expect(detectPreferenceSignal).not.toHaveBeenCalled()
+    expect(extractPreferenceCandidates).not.toHaveBeenCalled()
+    expect(storePreferenceCandidates).not.toHaveBeenCalled()
+  })
+
+  it("does not inject knowledge graph part when KG source returns null", async () => {
+    const { hooks } = await initPlugin()
+    vi.mocked(shouldInjectMemories).mockReturnValue(true)
+    vi.mocked(shouldInjectKnowledgeGraph).mockReturnValue(true)
+    vi.mocked(fetchAndFormatMemories).mockResolvedValue(null)
+    vi.mocked(fetchProjectKnowledge).mockResolvedValue(null)
+    vi.mocked(fetchCodeIntelContext).mockResolvedValue(null)
+    vi.mocked(fetchKnowledgeGraphContext).mockResolvedValue(null)
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "tell me how modules relate" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+    expect(fetchKnowledgeGraphContext).toHaveBeenCalledWith(expect.anything(), "tell me how modules relate")
+    expect(output.parts).toHaveLength(1)
+    expect(markSessionInjected).not.toHaveBeenCalled()
+  })
+
+  it("skips query recall when source-specific gates return false", async () => {
+    const { hooks } = await initPlugin()
+    vi.mocked(shouldInjectMemories).mockReturnValue(false)
+    vi.mocked(shouldInjectQueryRecall).mockReturnValue(false)
+    vi.mocked(shouldInjectProjectKnowledge).mockReturnValue(false)
+    vi.mocked(shouldInjectCodeIntel).mockReturnValue(false)
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "what do you know about the project?" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+    expect(fetchAndFormatMemories).not.toHaveBeenCalled()
+  })
+
+  it("skips injection when all injection sources are empty", async () => {
+    const { hooks } = await initPlugin()
+    vi.mocked(shouldInjectQueryRecall).mockReturnValue(true)
+    vi.mocked(shouldInjectProjectKnowledge).mockReturnValue(true)
+    vi.mocked(shouldInjectCodeIntel).mockReturnValue(true)
+    vi.mocked(fetchAndFormatMemories).mockResolvedValue(null)
+    vi.mocked(fetchProjectKnowledge).mockResolvedValue(null)
+    vi.mocked(fetchCodeIntelContext).mockResolvedValue(null)
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "tell me about this project setup" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+    expect(markSessionInjected).not.toHaveBeenCalled()
+    // Original part count unchanged (no unshift happened)
+    expect(output.parts).toHaveLength(1)
+  })
+
+  it("clears compacted session flag on next chat.message", async () => {
+    const { hooks } = await initPlugin({ compaction: { enabled: true, memoryLimit: 10 } })
+
+    // First: simulate compaction event to add to compactedSessions
+    await hooks.event({
+      event: {
+        type: "session.compacted",
+        properties: { sessionID: "s-compact" },
+      },
+    })
+
+    // Now chat.message should pass isAfterCompaction=true
+    vi.mocked(shouldInjectMemories).mockReturnValue(false)
+    vi.mocked(shouldInjectQueryRecall).mockReturnValue(false)
+    vi.mocked(shouldInjectProjectKnowledge).mockReturnValue(false)
+    vi.mocked(shouldInjectCodeIntel).mockReturnValue(false)
+    const output = { message: { id: "msg1" }, parts: [{ type: "text", text: "continuing after compaction" }] }
+    await hooks["chat.message"]({ sessionID: "s-compact" }, output)
+
+    // shouldInjectMemories called with isAfterCompaction=true
+    expect(shouldInjectMemories).toHaveBeenCalledWith(expect.anything(), "s-compact", true)
+
+    // Second call should have isAfterCompaction=false (flag cleared)
+    vi.clearAllMocks()
+    vi.mocked(shouldInjectMemories).mockReturnValue(false)
+    vi.mocked(shouldInjectQueryRecall).mockReturnValue(false)
+    vi.mocked(shouldInjectProjectKnowledge).mockReturnValue(false)
+    vi.mocked(shouldInjectCodeIntel).mockReturnValue(false)
+    await hooks["chat.message"]({ sessionID: "s-compact" }, output)
+    expect(shouldInjectMemories).toHaveBeenCalledWith(expect.anything(), "s-compact", false)
+  })
+
+  it("passes extraPatterns to detectMemoryKeyword as RegExp array", async () => {
+    const { hooks } = await initPlugin({
+      keywordDetection: { enabled: true, extraPatterns: ["my-custom-pattern", "another\\d+"] },
+    })
+    vi.mocked(detectMemoryKeyword).mockReturnValue(null)
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "test message about my custom pattern here" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+    const passedPatterns = vi.mocked(detectMemoryKeyword).mock.calls[0]?.[1]
+    expect(passedPatterns).toHaveLength(2)
+    expect(passedPatterns![0]).toBeInstanceOf(RegExp)
+    expect(passedPatterns![1]).toBeInstanceOf(RegExp)
+  })
+
+  it("uses typed injection path when learningMemory.enabled=true", async () => {
+    const { hooks } = await initPlugin({
+      learningMemory: { enabled: true },
+    })
+    vi.mocked(shouldInjectMemories).mockReturnValueOnce(false)
+    vi.mocked(shouldInjectLearnedPreferences).mockReturnValueOnce(true)
+    vi.mocked(retrieveRecordsForInjection).mockResolvedValueOnce({
+      status: "ok",
+      records: [],
+      learning_summary: { injectable_by_default: true, raw: {} },
+    })
+    vi.mocked(formatLearningMemoryInjection).mockReturnValueOnce("[MEMORY] Learned Memory\n\n## Hard Rules\nDo not use var.")
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "help me code" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s-typed" }, output)
+
+    expect(retrieveRecordsForInjection).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ source: "chat.message", sessionId: "s-typed", query: "help me code" }),
+    )
+    expect(formatLearningMemoryInjection).toHaveBeenCalledWith(
+      expect.objectContaining({ records: [], learning_summary: expect.objectContaining({ injectable_by_default: true }) }),
+      expect.objectContaining({ includeCandidates: false }),
+    )
+    expect(output.parts[0]).toMatchObject({
+      type: "text",
+      text: "[MEMORY] Learned Memory\n\n## Hard Rules\nDo not use var.",
+      synthetic: true,
+    })
+    expect(markLearnedPreferencesInjected).toHaveBeenCalledWith("s-typed")
+    expect(fetchAndFormatLearnedPreferences).not.toHaveBeenCalled()
+  })
+
+  it("lets typed learningMemory inject without legacy preferenceLearning enabled", async () => {
+    vi.mocked(shouldInjectLearnedPreferences).mockRestore()
+    const { shouldInjectLearnedPreferences: realShouldInjectLearnedPreferences } = await vi.importActual<typeof import("../src/services/preference-learning.js")>(
+      "../src/services/preference-learning.js",
+    )
+    vi.mocked(shouldInjectLearnedPreferences).mockImplementation(realShouldInjectLearnedPreferences)
+
+    const { hooks } = await initPlugin({
+      learningMemory: { enabled: true },
+      preferenceLearning: { ...makeConfig().preferenceLearning, enabled: false },
+    })
+    vi.mocked(shouldInjectMemories).mockReturnValueOnce(false)
+    vi.mocked(retrieveRecordsForInjection).mockResolvedValueOnce({
+      status: "ok",
+      records: [],
+      learning_summary: { injectable_by_default: true, raw: {} },
+    })
+    vi.mocked(formatLearningMemoryInjection).mockReturnValueOnce("[MEMORY] Learned Memory\n\n## Hard Rules\nUse vitest.")
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "help me code" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s-typed-real-gate" }, output)
+
+    expect(retrieveRecordsForInjection).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ source: "chat.message", sessionId: "s-typed-real-gate", query: "help me code" }),
+    )
+    expect(output.parts[0]).toMatchObject({
+      type: "text",
+      text: "[MEMORY] Learned Memory\n\n## Hard Rules\nUse vitest.",
+      synthetic: true,
+    })
+  })
+
+  it("skips candidates by default in typed injection path", async () => {
+    const { hooks } = await initPlugin({
+      learningMemory: { enabled: true },
+    })
+    vi.mocked(shouldInjectMemories).mockReturnValueOnce(false)
+    vi.mocked(shouldInjectLearnedPreferences).mockReturnValueOnce(true)
+    vi.mocked(retrieveRecordsForInjection).mockResolvedValueOnce({
+      status: "ok",
+      records: [],
+      learning_summary: { injectable_by_default: true, raw: {} },
+    })
+    vi.mocked(formatLearningMemoryInjection).mockReturnValueOnce(null)
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "help" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s-candidates" }, output)
+
+    expect(formatLearningMemoryInjection).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ includeCandidates: false }),
+    )
+    expect(markLearnedPreferencesInjected).not.toHaveBeenCalled()
+    expect(output.parts).toHaveLength(1)
+  })
+
+  it("skips typed injection when reason_code is a degraded code", async () => {
+    const badCodes = ["unsupported", "degraded", "stale", "generation_mismatch"]
+    for (const code of badCodes) {
+      vi.clearAllMocks()
+      const { hooks } = await initPlugin({
+        learningMemory: { enabled: true },
+      })
+      vi.mocked(shouldInjectMemories).mockReturnValueOnce(false)
+      vi.mocked(shouldInjectLearnedPreferences).mockReturnValueOnce(true)
+      vi.mocked(retrieveRecordsForInjection).mockResolvedValueOnce({
+        status: "partial",
+        reason_code: code as any,
+        records: [],
+        learning_summary: { injectable_by_default: true, raw: {} },
+      })
+
+      const output = {
+        message: { id: "msg1" },
+        parts: [{ type: "text", text: "help" }],
+      }
+
+      await hooks["chat.message"]({ sessionID: `s-bad-${code}` }, output)
+
+      expect(formatLearningMemoryInjection).not.toHaveBeenCalled()
+      expect(output.parts).toHaveLength(1)
+    }
+  })
+
+  it("uses legacy injection path when learningMemory.enabled=false", async () => {
+    const { hooks } = await initPlugin({
+      preferenceLearning: { ...makeConfig().preferenceLearning, enabled: true },
+    })
+    vi.mocked(shouldInjectMemories).mockReturnValueOnce(false)
+    vi.mocked(shouldInjectLearnedPreferences).mockReturnValueOnce(true)
+    vi.mocked(fetchAndFormatLearnedPreferences).mockResolvedValueOnce("[MEMORY] Learned User Preferences\n\n- Use concise answers")
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "help me" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s-legacy" }, output)
+
+    expect(fetchAndFormatLearnedPreferences).toHaveBeenCalled()
+    expect(retrieveRecordsForInjection).not.toHaveBeenCalled()
+    expect(output.parts[0]).toMatchObject({
+      type: "text",
+      text: "[MEMORY] Learned User Preferences\n\n- Use concise answers",
+      synthetic: true,
+    })
+  })
+})
+
+// ─── extractEventMessageText (tested indirectly via event handler) ─
+
+describe("extractEventMessageText (via event message.updated)", () => {
+  it("extracts text from event parts array", async () => {
+    const { hooks } = await initPlugin()
+
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: {
+          sessionID: "s1",
+          parts: [{ type: "text", text: "hello world message" }],
+        },
+      },
+    })
+
+    expect(trackMessageTokens).toHaveBeenCalledWith("s1", "hello world message")
+  })
+
+  it("skips tracking when parts is not an array", async () => {
+    const { hooks } = await initPlugin()
+
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: { sessionID: "s1", parts: "not-an-array" },
+      },
+    })
+
+    expect(trackMessageTokens).not.toHaveBeenCalled()
+  })
+
+  it("skips tracking when no text parts exist", async () => {
+    const { hooks } = await initPlugin()
+
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: {
+          sessionID: "s1",
+          parts: [{ type: "image", url: "img.png" }],
+        },
+      },
+    })
+
+    expect(trackMessageTokens).not.toHaveBeenCalled()
+  })
+
+  it("joins multiple text parts from event", async () => {
+    const { hooks } = await initPlugin()
+
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: {
+          sessionID: "s1",
+          parts: [
+            { type: "text", text: "first" },
+            { type: "text", text: "second" },
+          ],
+        },
+      },
+    })
+
+    expect(trackMessageTokens).toHaveBeenCalledWith("s1", "first\nsecond")
+  })
+})
+
+// ─── event handler: session.idle ────────────────────────────────────
+
+describe("event handler: session.idle", () => {
+  it("debounces idle capture with configurable delay", async () => {
+    const { hooks, input, config } = await initPlugin({
+      autoCapture: { enabled: true, debounceMs: 500, language: "en" },
+    })
+
+    input.client.session.messages.mockResolvedValue({
+      data: [
+        { info: { id: "m1", role: "user" }, parts: [{ type: "text", text: "question" }] },
+        { info: { id: "m2", role: "assistant" }, parts: [{ type: "text", text: "answer" }] },
+      ],
+    })
+
+    await hooks.event({
+      event: { type: "session.idle", properties: { sessionID: "s-idle" } },
+    })
+
+    // Not called yet (debounce pending)
+    expect(performAutoCapture).not.toHaveBeenCalled()
+
+    // Advance past debounce
+    await vi.advanceTimersByTimeAsync(500)
+
+    expect(input.client.session.messages).toHaveBeenCalledWith({ path: { id: "s-idle" } })
+    expect(performAutoCapture).toHaveBeenCalled()
+  })
+
+  it("checks code index freshness on idle", async () => {
+    const { hooks, config, input } = await initPlugin({
+      autoCapture: { enabled: false, debounceMs: 10, language: "en" },
+      codeIndexSync: { autoRefresh: true },
+    })
+
+    await hooks.event({
+      event: { type: "session.idle", properties: { sessionID: "s-idle" } },
+    })
+
+    expect(ensureCodeIndexFresh).toHaveBeenCalledWith(config, input.directory, "session.idle")
+  })
+
+  it("skips capture when sessionID missing", async () => {
+    const { hooks } = await initPlugin()
+
+    await hooks.event({
+      event: { type: "session.idle", properties: {} },
+    })
+
+    await vi.advanceTimersByTimeAsync(100)
+    expect(performAutoCapture).not.toHaveBeenCalled()
+  })
+
+  it("skips capture when autoCapture disabled", async () => {
+    const { hooks } = await initPlugin({
+      autoCapture: { enabled: false, debounceMs: 10, language: "en" },
+    })
+
+    await hooks.event({
+      event: { type: "session.idle", properties: { sessionID: "s1" } },
+    })
+
+    await vi.advanceTimersByTimeAsync(100)
+    expect(performAutoCapture).not.toHaveBeenCalled()
+  })
+
+  it("replaces previous timer on rapid idle events (debounce)", async () => {
+    const { hooks, input } = await initPlugin({
+      autoCapture: { enabled: true, debounceMs: 200, language: "en" },
+    })
+
+    input.client.session.messages.mockResolvedValue({ data: [] })
+
+    // Fire idle twice rapidly
+    await hooks.event({
+      event: { type: "session.idle", properties: { sessionID: "s-debounce" } },
+    })
+    await vi.advanceTimersByTimeAsync(100)
+    await hooks.event({
+      event: { type: "session.idle", properties: { sessionID: "s-debounce" } },
+    })
+
+    // Advance past first timer (200ms from second event start)
+    await vi.advanceTimersByTimeAsync(200)
+
+    // Should only fire once (second timer replaced first)
+    expect(input.client.session.messages).toHaveBeenCalledTimes(1)
+  })
+
+  it("shows toast when capture succeeds", async () => {
+    const { hooks, input } = await initPlugin({
+      autoCapture: { enabled: true, debounceMs: 10, language: "en" },
+    })
+
+    input.client.session.messages.mockResolvedValue({
+      data: [
+        { info: { id: "m1", role: "user" }, parts: [{ type: "text", text: "question" }] },
+        { info: { id: "m2", role: "assistant" }, parts: [{ type: "text", text: "answer" }] },
+      ],
+    })
+    vi.mocked(performAutoCapture).mockResolvedValue(true)
+
+    await hooks.event({
+      event: { type: "session.idle", properties: { sessionID: "s1" } },
+    })
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(input.client.tui.showToast).toHaveBeenCalledWith({
+      body: expect.objectContaining({ message: "Memory auto-captured", variant: "info" }),
+    })
+  })
+
+  it("learns lessons from captured idle session text when learningMemory lessons are enabled", async () => {
+    const { hooks, input } = await initPlugin({
+      autoCapture: { enabled: true, debounceMs: 10, language: "en" },
+      learningMemory: { enabled: true, lessons: { enabled: true } },
+    })
+
+    input.client.session.messages.mockResolvedValue({
+      data: [
+        { info: { id: "m1", role: "user" }, parts: [{ type: "text", text: "We changed the API client after repeated timeout failures." }] },
+        { info: { id: "m2", role: "assistant" }, parts: [{ type: "text", text: "Lesson: wrap slow recall calls with bounded timeouts and keep injection moving." }] },
+      ],
+    })
+    vi.mocked(performAutoCapture).mockResolvedValue(true)
+
+    await hooks.event({
+      event: { type: "session.idle", properties: { sessionID: "s-lesson-idle" } },
+    })
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(learnFromSessionIdleSummary).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringContaining("bounded timeouts"),
+      expect.objectContaining({ source: "session.idle", sessionId: "s-lesson-idle" }),
+    )
+  })
+
+  it("uses session API for capture when apiKey is empty", async () => {
+    const { hooks, input } = await initPlugin({
+      autoCapture: { enabled: true, debounceMs: 10, language: "en" },
+      captureModel: { provider: "openai", model: "gpt-4o-mini", apiUrl: "", apiKey: "" },
+    })
+
+    input.client.session.messages.mockResolvedValue({
+      data: [
+        { info: { role: "user" }, parts: [{ type: "text", text: "hello" }] },
+        { info: { role: "assistant" }, parts: [{ type: "text", text: "hi" }] },
+      ],
+    })
+    vi.mocked(performAutoCapture).mockResolvedValue(true)
+
+    await hooks.event({
+      event: { type: "session.idle", properties: { sessionID: "s-nokey" } },
+    })
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(performAutoCapture).toHaveBeenCalled()
+  })
+
+  it("uses direct HTTP for capture when apiKey is set", async () => {
+    const { hooks, input } = await initPlugin({
+      autoCapture: { enabled: true, debounceMs: 10, language: "en" },
+      captureModel: { provider: "openai", model: "gpt-4o-mini", apiUrl: "https://api.example.com/v1", apiKey: "sk-test" },
+    })
+
+    input.client.session.messages.mockResolvedValue({
+      data: [
+        { info: { role: "user" }, parts: [{ type: "text", text: "hello" }] },
+        { info: { role: "assistant" }, parts: [{ type: "text", text: "hi" }] },
+      ],
+    })
+    vi.mocked(performAutoCapture).mockResolvedValue(true)
+
+    await hooks.event({
+      event: { type: "session.idle", properties: { sessionID: "s-withkey" } },
+    })
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(performAutoCapture).toHaveBeenCalled()
+  })
+
+  it("logs error when capture throws", async () => {
+    const { hooks, input } = await initPlugin({
+      autoCapture: { enabled: true, debounceMs: 10, language: "en" },
+    })
+
+    input.client.session.messages.mockRejectedValue(new Error("session fetch failed"))
+
+    await hooks.event({
+      event: { type: "session.idle", properties: { sessionID: "s-err" } },
+    })
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(logger.error).toHaveBeenCalledWith("idle capture failed", expect.objectContaining({ sessionID: "s-err" }))
+  })
+
+  it("blocks repeated capture for same session until new user message", async () => {
+    const { hooks, input } = await initPlugin({
+      autoCapture: { enabled: true, debounceMs: 10, language: "en" },
+    })
+
+    input.client.session.messages.mockResolvedValue({
+      data: [
+        { info: { id: "m1", role: "user" }, parts: [{ type: "text", text: "question" }] },
+        { info: { id: "m2", role: "assistant" }, parts: [{ type: "text", text: "answer" }] },
+      ],
+    })
+    vi.mocked(performAutoCapture).mockResolvedValue(true)
+
+    // First idle → should trigger capture
+    await hooks.event({
+      event: { type: "session.idle", properties: { sessionID: "s-guard" } },
+    })
+    await vi.advanceTimersByTimeAsync(10)
+    expect(performAutoCapture).toHaveBeenCalledTimes(1)
+
+    // Second idle (same session) → should be blocked by guard
+    await hooks.event({
+      event: { type: "session.idle", properties: { sessionID: "s-guard" } },
+    })
+    await vi.advanceTimersByTimeAsync(10)
+    expect(performAutoCapture).toHaveBeenCalledTimes(1)
+
+    // New user message resets the guard
+    vi.mocked(shouldInjectMemories).mockReturnValue(false)
+    await hooks["chat.message"](
+      { sessionID: "s-guard" },
+      { parts: [{ type: "text", text: "new question here" }] },
+    )
+
+    // Third idle (after reset) → should trigger capture again
+    await hooks.event({
+      event: { type: "session.idle", properties: { sessionID: "s-guard" } },
+    })
+    await vi.advanceTimersByTimeAsync(10)
+    expect(performAutoCapture).toHaveBeenCalledTimes(2)
+  })
+
+  it("guards per-session independently", async () => {
+    const { hooks, input } = await initPlugin({
+      autoCapture: { enabled: true, debounceMs: 10, language: "en" },
+    })
+
+    input.client.session.messages.mockResolvedValue({
+      data: [
+        { info: { id: "m1", role: "user" }, parts: [{ type: "text", text: "q" }] },
+        { info: { id: "m2", role: "assistant" }, parts: [{ type: "text", text: "a" }] },
+      ],
+    })
+    vi.mocked(performAutoCapture).mockResolvedValue(true)
+
+    // Capture session A
+    await hooks.event({
+      event: { type: "session.idle", properties: { sessionID: "s-a" } },
+    })
+    await vi.advanceTimersByTimeAsync(10)
+    expect(performAutoCapture).toHaveBeenCalledTimes(1)
+
+    // Session B should still work (independent guard)
+    await hooks.event({
+      event: { type: "session.idle", properties: { sessionID: "s-b" } },
+    })
+    await vi.advanceTimersByTimeAsync(10)
+    expect(performAutoCapture).toHaveBeenCalledTimes(2)
+  })
+})
+
+// ─── event handler: session.compacted ──────────────────────────────
+
+describe("event handler: session.compacted", () => {
+  it("resets session state and triggers recovery", async () => {
+    const { hooks } = await initPlugin()
+    vi.mocked(buildCompactionRecoveryContext).mockResolvedValue({
+      text: "recovery context text",
+      count: 3,
+    })
+
+    await hooks.event({
+      event: { type: "session.compacted", properties: { sessionID: "s-cmp" } },
+    })
+
+    expect(resetSessionState).toHaveBeenCalledWith("s-cmp")
+    expect(markSessionCompacted).toHaveBeenCalledWith("s-cmp")
+    expect(markLearnedPreferencesCompacted).toHaveBeenCalledWith("s-cmp")
+    expect(buildCompactionRecoveryContext).toHaveBeenCalled()
+  })
+
+  it("passes event compact summary into recovery path", async () => {
+    const { hooks, config } = await initPlugin()
+    vi.mocked(buildCompactionRecoveryContext).mockResolvedValue({
+      text: "recovery context text",
+      count: 3,
+    })
+
+    await hooks.event({
+      event: {
+        type: "session.compacted",
+        properties: {
+          sessionID: "s-cmp",
+          compactSummary: "summary from event",
+        },
+      },
+    })
+
+    expect(buildCompactionRecoveryContext).toHaveBeenCalledWith(config, "summary from event")
+  })
+
+  it("sends recovery prompt to session", async () => {
+    const { hooks, input } = await initPlugin()
+    vi.mocked(buildCompactionRecoveryContext).mockResolvedValue({
+      text: "recovery context text",
+      count: 5,
+    })
+
+    await hooks.event({
+      event: { type: "session.compacted", properties: { sessionID: "s-cmp" } },
+    })
+
+    expect(input.client.session.prompt).toHaveBeenCalledWith({
+      path: { id: "s-cmp" },
+      body: {
+        parts: [{ type: "text", text: "recovery context text", synthetic: true }],
+        noReply: true,
+      },
+    })
+  })
+
+  it("shows toast with memory count on successful recovery", async () => {
+    const { hooks, input } = await initPlugin()
+    vi.mocked(buildCompactionRecoveryContext).mockResolvedValue({
+      text: "recovered",
+      count: 7,
+    })
+
+    await hooks.event({
+      event: { type: "session.compacted", properties: { sessionID: "s-cmp" } },
+    })
+
+    expect(input.client.tui.showToast).toHaveBeenCalledWith({
+      body: expect.objectContaining({
+        message: "7 memories restored after compaction",
+        variant: "success",
+      }),
+    })
+  })
+
+  it("skips recovery when buildCompactionRecoveryContext returns null", async () => {
+    const { hooks, input } = await initPlugin()
+    vi.mocked(buildCompactionRecoveryContext).mockResolvedValue(null)
+
+    await hooks.event({
+      event: { type: "session.compacted", properties: { sessionID: "s-null" } },
+    })
+
+    expect(input.client.session.prompt).not.toHaveBeenCalled()
+    expect(input.client.tui.showToast).not.toHaveBeenCalled()
+  })
+
+  it("skips when compaction disabled", async () => {
+    const { hooks } = await initPlugin({ compaction: { enabled: false, memoryLimit: 10 } })
+
+    await hooks.event({
+      event: { type: "session.compacted", properties: { sessionID: "s1" } },
+    })
+
+    expect(markSessionCompacted).not.toHaveBeenCalled()
+    expect(resetSessionState).not.toHaveBeenCalled()
+    expect(buildCompactionRecoveryContext).not.toHaveBeenCalled()
+  })
+
+  it("skips when sessionID missing", async () => {
+    const { hooks } = await initPlugin()
+
+    await hooks.event({
+      event: { type: "session.compacted", properties: {} },
+    })
+
+    expect(markSessionCompacted).not.toHaveBeenCalled()
+    expect(resetSessionState).not.toHaveBeenCalled()
+  })
+
+  it("logs error when recovery throws", async () => {
+    const { hooks, input } = await initPlugin()
+    vi.mocked(buildCompactionRecoveryContext).mockRejectedValue(new Error("recovery boom"))
+
+    await hooks.event({
+      event: { type: "session.compacted", properties: { sessionID: "s-err" } },
+    })
+
+    expect(logger.error).toHaveBeenCalledWith("compaction recovery failed", expect.objectContaining({ sessionID: "s-err" }))
+  })
+})
+
+// ─── event handler: message.updated (preemptive compaction) ────────
+
+describe("event handler: message.updated", () => {
+  it("tracks tokens when text extracted", async () => {
+    const { hooks } = await initPlugin()
+
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: {
+          sessionID: "s1",
+          parts: [{ type: "text", text: "hello world" }],
+        },
+      },
+    })
+
+    expect(trackMessageTokens).toHaveBeenCalledWith("s1", "hello world")
+  })
+
+  it("passes eventType=message.updated to preference signal detection", async () => {
+    const { hooks, config } = await initPlugin({
+      preferenceLearning: { ...makeConfig().preferenceLearning, enabled: true },
+    })
+    vi.mocked(isFullyPrivate).mockReturnValue(false)
+
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: {
+          sessionID: "s-pref-updated",
+          parts: [{ type: "text", text: "Actually, use markdown bullets" }],
+        },
+      },
+    })
+
+    expect(detectPreferenceSignal).toHaveBeenCalledWith(
+      "Actually, use markdown bullets",
+      config.preferenceLearning,
+      { source: "message.updated", eventType: "message.updated" },
+    )
+  })
+
+  it("does not learn preferences on message.updated when preference learning is disabled", async () => {
+    const { hooks } = await initPlugin({
+      preferenceLearning: { ...makeConfig().preferenceLearning, enabled: false },
+    })
+
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: {
+          sessionID: "s-disabled-updated",
+          parts: [{ type: "text", text: "Actually, use markdown bullets" }],
+        },
+      },
+    })
+
+    expect(stripPrivateContent).not.toHaveBeenCalledWith("Actually, use markdown bullets")
+    expect(detectPreferenceSignal).not.toHaveBeenCalled()
+    expect(extractPreferenceCandidates).not.toHaveBeenCalled()
+    expect(storePreferenceCandidates).not.toHaveBeenCalled()
+  })
+
+  it("triggers preemptive compaction when threshold met", async () => {
+    const { hooks, input } = await initPlugin()
+    vi.mocked(shouldTriggerCompaction).mockReturnValue(true)
+    vi.mocked(performPreemptiveCompaction).mockResolvedValue(true)
+
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: { sessionID: "s-pcomp", parts: [{ type: "text", text: "msg" }] },
+      },
+    })
+
+    expect(performPreemptiveCompaction).toHaveBeenCalled()
+    expect(input.client.tui.showToast).toHaveBeenCalledWith({
+      body: expect.objectContaining({ variant: "warning" }),
+    })
+  })
+
+  it("sends auto-continue prompt when autoContinue enabled and compaction occurs", async () => {
+    const { hooks, input } = await initPlugin({
+      preemptiveCompaction: { enabled: true, thresholdPercent: 80, modelContextLimit: 200000, autoContinue: true },
+    })
+    vi.mocked(shouldTriggerCompaction).mockReturnValue(true)
+    vi.mocked(performPreemptiveCompaction).mockResolvedValue(true)
+
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: { sessionID: "s-auto", parts: [{ type: "text", text: "msg" }] },
+      },
+    })
+
+    expect(input.client.session.prompt).toHaveBeenCalledWith({
+      path: { id: "s-auto" },
+      body: {
+        parts: [{ type: "text", text: "Continue" }],
+      },
+    })
+  })
+
+  it("does not send auto-continue when autoContinue disabled", async () => {
+    const { hooks, input } = await initPlugin({
+      preemptiveCompaction: { enabled: true, thresholdPercent: 80, modelContextLimit: 200000, autoContinue: false },
+    })
+    vi.mocked(shouldTriggerCompaction).mockReturnValue(true)
+    vi.mocked(performPreemptiveCompaction).mockResolvedValue(true)
+
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: { sessionID: "s-noauto", parts: [{ type: "text", text: "msg" }] },
+      },
+    })
+
+    expect(input.client.session.prompt).not.toHaveBeenCalled()
+  })
+
+  it("logs warning when auto-continue prompt fails", async () => {
+    const { hooks, input } = await initPlugin({
+      preemptiveCompaction: { enabled: true, thresholdPercent: 80, modelContextLimit: 200000, autoContinue: true },
+    })
+    vi.mocked(shouldTriggerCompaction).mockReturnValue(true)
+    vi.mocked(performPreemptiveCompaction).mockResolvedValue(true)
+    input.client.session.prompt.mockRejectedValue(new Error("prompt failed"))
+
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: { sessionID: "s-err", parts: [{ type: "text", text: "msg" }] },
+      },
+    })
+
+    expect(logger.warn).toHaveBeenCalledWith("auto-continue prompt failed", expect.objectContaining({ sessionID: "s-err" }))
+  })
+
+  it("skips when preemptiveCompaction disabled", async () => {
+    const { hooks } = await initPlugin({
+      preemptiveCompaction: { enabled: false, thresholdPercent: 80, modelContextLimit: 200000, autoContinue: true },
+    })
+
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: { sessionID: "s1", parts: [{ type: "text", text: "msg" }] },
+      },
+    })
+
+    expect(trackMessageTokens).not.toHaveBeenCalled()
+    expect(shouldTriggerCompaction).not.toHaveBeenCalled()
+  })
+
+  it("skips when sessionID missing", async () => {
+    const { hooks } = await initPlugin()
+
+    await hooks.event({
+      event: { type: "message.updated", properties: {} },
+    })
+
+    expect(trackMessageTokens).not.toHaveBeenCalled()
+  })
+})
+
+// ─── compaction summary capture ────────────────────────────────────
+
+describe("captureCompactionSummary (via message.updated)", () => {
+  it("captures summary when info.summary=true and info.finish=true", async () => {
+    const { hooks, input } = await initPlugin({
+      compactionSummaryCapture: { enabled: true },
+      privacy: { enabled: false },
+      learningMemory: { enabled: true, lessons: { enabled: true } },
+    })
+
+    input.client.session.messages.mockResolvedValue({
+      data: [
+        {
+          info: { summary: true, role: "assistant" },
+          parts: [{ type: "text", text: "A".repeat(60) }],
+        },
+      ],
+    })
+
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: {
+          sessionID: "s-summ",
+          parts: [{ type: "text", text: "msg" }],
+          info: { summary: true, finish: true },
+        },
+      },
+    })
+
+    expect(storeMemory).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringContaining("CONTEXT: Session compaction summary"),
+      "episodic",
+    )
+    expect(learnFromCompactionSummary).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringContaining("CONTEXT: Session compaction summary"),
+      expect.objectContaining({ source: "compaction", sessionId: "s-summ" }),
+    )
+  })
+
+  it("skips capture when compactionSummaryCapture disabled", async () => {
+    const { hooks } = await initPlugin({
+      compactionSummaryCapture: { enabled: false },
+    })
+
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: {
+          sessionID: "s1",
+          parts: [{ type: "text", text: "msg" }],
+          info: { summary: true, finish: true },
+        },
+      },
+    })
+
+    expect(storeMemory).not.toHaveBeenCalled()
+  })
+
+  it("skips when summary text is too short (< 50 chars)", async () => {
+    const { hooks, input } = await initPlugin({
+      compactionSummaryCapture: { enabled: true },
+    })
+
+    input.client.session.messages.mockResolvedValue({
+      data: [
+        { info: { summary: true }, parts: [{ type: "text", text: "short" }] },
+      ],
+    })
+
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: {
+          sessionID: "s1",
+          parts: [{ type: "text", text: "msg" }],
+          info: { summary: true, finish: true },
+        },
+      },
+    })
+
+    expect(storeMemory).not.toHaveBeenCalled()
+  })
+
+  it("strips private content when privacy enabled", async () => {
+    const { hooks, input } = await initPlugin({
+      compactionSummaryCapture: { enabled: true },
+      privacy: { enabled: true },
+    })
+
+    const summaryText = "Summary with <private>secret</private> data" + "x".repeat(50)
+    vi.mocked(isFullyPrivate).mockReturnValue(false)
+    vi.mocked(stripPrivateContent).mockReturnValue("Summary with [REDACTED] data" + "x".repeat(50))
+
+    input.client.session.messages.mockResolvedValue({
+      data: [
+        { info: { summary: true, role: "assistant" }, parts: [{ type: "text", text: summaryText }] },
+      ],
+    })
+
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: {
+          sessionID: "s1",
+          parts: [{ type: "text", text: "msg" }],
+          info: { summary: true, finish: true },
+        },
+      },
+    })
+
+    expect(stripPrivateContent).toHaveBeenCalled()
+    const storedContent = vi.mocked(storeMemory).mock.calls[0]?.[1]
+    expect(storedContent).toContain("[REDACTED]")
+  })
+
+  it("skips when fully private after stripping", async () => {
+    const { hooks, input } = await initPlugin({
+      compactionSummaryCapture: { enabled: true },
+      privacy: { enabled: true },
+    })
+
+    vi.mocked(isFullyPrivate).mockReturnValue(true)
+
+    input.client.session.messages.mockResolvedValue({
+      data: [
+        { info: { summary: true, role: "assistant" }, parts: [{ type: "text", text: "A".repeat(60) }] },
+      ],
+    })
+
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: {
+          sessionID: "s1",
+          parts: [{ type: "text", text: "msg" }],
+          info: { summary: true, finish: true },
+        },
+      },
+    })
+
+    expect(storeMemory).not.toHaveBeenCalled()
+  })
+
+  it("logs error when capture throws", async () => {
+    const { hooks, input } = await initPlugin({
+      compactionSummaryCapture: { enabled: true },
+    })
+
+    input.client.session.messages.mockRejectedValue(new Error("fetch failed"))
+
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: {
+          sessionID: "s-err",
+          parts: [{ type: "text", text: "msg" }],
+          info: { summary: true, finish: true },
+        },
+      },
+    })
+
+    expect(logger.error).toHaveBeenCalledWith("compaction summary capture failed", expect.objectContaining({ sessionID: "s-err" }))
+  })
+
+  it("skips when no summary message found in session", async () => {
+    const { hooks, input } = await initPlugin({
+      compactionSummaryCapture: { enabled: true },
+    })
+
+    input.client.session.messages.mockResolvedValue({
+      data: [
+        { info: { role: "user" }, parts: [{ type: "text", text: "question" }] },
+      ],
+    })
+
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: {
+          sessionID: "s1",
+          parts: [{ type: "text", text: "msg" }],
+          info: { summary: true, finish: true },
+        },
+      },
+    })
+
+    expect(storeMemory).not.toHaveBeenCalled()
+  })
+})
+
+// ─── experimental.chat.system.transform ────────────────────────────
+
+describe("experimental.chat.system.transform", () => {
+  it("appends system prompt when enabled", async () => {
+    const { hooks } = await initPlugin({ systemPrompt: { enabled: true } })
+    vi.mocked(buildMemorySystemPrompt).mockReturnValue("memory system prompt")
+
+    const output = { system: [] as string[] }
+    await hooks["experimental.chat.system.transform"]({}, output)
+
+    expect(output.system).toEqual(["memory system prompt"])
+    expect(buildMemorySystemPrompt).toHaveBeenCalledWith(expect.anything(), [], true)
+  })
+
+  it("skips when systemPrompt disabled", async () => {
+    const { hooks } = await initPlugin({ systemPrompt: { enabled: false } })
+
+    const output = { system: [] as string[] }
+    await hooks["experimental.chat.system.transform"]({}, output)
+
+    expect(output.system).toEqual([])
+    expect(buildMemorySystemPrompt).not.toHaveBeenCalled()
+  })
+
+  it("reuses plugin tool registry across calls", async () => {
+    const { hooks } = await initPlugin({ systemPrompt: { enabled: true } })
+
+    const output1 = { system: [] as string[] }
+    const output2 = { system: [] as string[] }
+    await hooks["experimental.chat.system.transform"]({}, output1)
+    await hooks["experimental.chat.system.transform"]({}, output2)
+
+    expect(buildToolRegistry).toHaveBeenCalledTimes(1)
+  })
+
+  it("passes connectionOk=true when connection is healthy", async () => {
+    const { hooks } = await initPlugin({ systemPrompt: { enabled: true } })
+    vi.mocked(isConnectionFailed).mockReturnValue(false)
+
+    const output = { system: [] as string[] }
+    await hooks["experimental.chat.system.transform"]({}, output)
+
+    expect(buildMemorySystemPrompt).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(Array),
+      true,
+    )
+  })
+
+  it("passes connectionOk=false when connection has failed", async () => {
+    const { hooks } = await initPlugin({ systemPrompt: { enabled: true } })
+    vi.mocked(isConnectionFailed).mockReturnValue(true)
+
+    const output = { system: [] as string[] }
+    await hooks["experimental.chat.system.transform"]({}, output)
+
+    expect(buildMemorySystemPrompt).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(Array),
+      false,
+    )
+  })
+})
+
+// ─── tool.definition ───────────────────────────────────────────────
+
+describe("tool.definition", () => {
+  it("appends hint for store_memory tool", async () => {
+    const { hooks } = await initPlugin()
+    const output = { description: "Store a new memory" }
+
+    await hooks["tool.definition"]({ toolID: "memory-mcp-1file_store_memory" }, output)
+
+    expect(output.description).toContain("prefix content with")
+    expect(output.description).toContain("DECISION:")
+  })
+
+  it("appends hint for recall tool", async () => {
+    const { hooks } = await initPlugin()
+    const output = { description: "Search memories" }
+
+    await hooks["tool.definition"]({ toolID: "memory-mcp-1file_recall" }, output)
+
+    expect(output.description).toContain("hybrid search")
+  })
+
+  it("appends hint for invalidate tool", async () => {
+    const { hooks } = await initPlugin()
+    const output = { description: "Invalidate a memory" }
+
+    await hooks["tool.definition"]({ toolID: "memory-mcp-1file_invalidate" }, output)
+
+    expect(output.description).toContain("outdated")
+  })
+
+  it("does not modify non-memory tools", async () => {
+    const { hooks } = await initPlugin()
+    const output = { description: "Run tests" }
+
+    await hooks["tool.definition"]({ toolID: "vitest_run" }, output)
+
+    expect(output.description).toBe("Run tests")
+  })
+
+  it("matches tool by server name case-insensitively", async () => {
+    const { hooks } = await initPlugin()
+    const output = { description: "Store" }
+
+    await hooks["tool.definition"]({ toolID: "Memory-MCP-1file_STORE_MEMORY" }, output)
+
+    expect(output.description).toContain("prefix content with")
+  })
+
+  it("matches tools containing 'memory' in toolID", async () => {
+    const { hooks } = await initPlugin()
+    const output = { description: "Store" }
+
+    await hooks["tool.definition"]({ toolID: "some_other_memory_store_memory" }, output)
+
+    expect(output.description).toContain("prefix content with")
+  })
+})
+
+// ─── experimental.session.compacting ───────────────────────────────
+
+describe("experimental.session.compacting", () => {
+  it("pushes recovery context when available", async () => {
+    const { hooks } = await initPlugin()
+    vi.mocked(buildCompactionRecoveryContext).mockResolvedValue({
+      text: "recovery text for compaction",
+      count: 5,
+    })
+
+    const output = { context: [] as string[] }
+    await hooks["experimental.session.compacting"]({}, output)
+
+    expect(output.context).toEqual(["recovery text for compaction"])
+  })
+
+  it("passes compact summary into additive recovery selector", async () => {
+    const { hooks, config } = await initPlugin()
+    vi.mocked(buildCompactionRecoveryContext).mockResolvedValue({
+      text: "recovery text for compaction",
+      count: 5,
+    })
+
+    const output = { context: [] as string[] }
+    await hooks["experimental.session.compacting"]({ summary: "compact summary text" }, output)
+
+    expect(buildCompactionRecoveryContext).toHaveBeenCalledWith(config, "compact summary text")
+  })
+
+  it("does nothing when compaction disabled", async () => {
+    const { hooks } = await initPlugin({ compaction: { enabled: false, memoryLimit: 10 } })
+
+    const output = { context: [] as string[] }
+    await hooks["experimental.session.compacting"]({}, output)
+
+    expect(output.context).toEqual([])
+    expect(buildCompactionRecoveryContext).not.toHaveBeenCalled()
+  })
+
+  it("does nothing when recovery returns null", async () => {
+    const { hooks } = await initPlugin()
+    vi.mocked(buildCompactionRecoveryContext).mockResolvedValue(null)
+
+    const output = { context: [] as string[] }
+    await hooks["experimental.session.compacting"]({}, output)
+
+    expect(output.context).toEqual([])
+  })
+})
+
+// ─── tool.execute.before ───────────────────────────────────────────
+
+describe("tool.execute.before", () => {
+  it("strips private content from store_memory args", async () => {
+    const { hooks } = await initPlugin({ privacy: { enabled: true } })
+    vi.mocked(isFullyPrivate).mockReturnValue(false)
+    vi.mocked(stripPrivateContent).mockReturnValue("cleaned content")
+
+    const output = { args: { content: "raw content with <private>secret</private>" } }
+    await hooks["tool.execute.before"]({ tool: "memory-mcp-1file_store_memory" }, output)
+
+    expect(stripPrivateContent).toHaveBeenCalledWith("raw content with <private>secret</private>")
+    expect(output.args.content).toBe("cleaned content")
+  })
+
+  it("strips private content from update_memory args", async () => {
+    const { hooks } = await initPlugin({ privacy: { enabled: true } })
+    vi.mocked(isFullyPrivate).mockReturnValue(false)
+    vi.mocked(stripPrivateContent).mockReturnValue("cleaned")
+
+    const output = { args: { content: "some update" } }
+    await hooks["tool.execute.before"]({ tool: "memory-mcp-1file_update_memory" }, output)
+
+    expect(stripPrivateContent).toHaveBeenCalled()
+  })
+
+  it("replaces fully private content with redacted message", async () => {
+    const { hooks } = await initPlugin({ privacy: { enabled: true } })
+    vi.mocked(isFullyPrivate).mockReturnValue(true)
+
+    const output = { args: { content: "<private>all secret</private>" } }
+    await hooks["tool.execute.before"]({ tool: "memory-mcp-1file_store_memory" }, output)
+
+    expect(output.args.content).toBe("[REDACTED — fully private content]")
+    expect(stripPrivateContent).not.toHaveBeenCalled()
+  })
+
+  it("skips when privacy disabled", async () => {
+    const { hooks } = await initPlugin({ privacy: { enabled: false } })
+
+    const output = { args: { content: "some <private>data</private>" } }
+    await hooks["tool.execute.before"]({ tool: "memory-mcp-1file_store_memory" }, output)
+
+    expect(output.args.content).toBe("some <private>data</private>")
+    expect(stripPrivateContent).not.toHaveBeenCalled()
+  })
+
+  it("skips for non-memory tools", async () => {
+    const { hooks } = await initPlugin({ privacy: { enabled: true } })
+
+    const output = { args: { content: "some data" } }
+    await hooks["tool.execute.before"]({ tool: "vitest_run" }, output)
+
+    expect(stripPrivateContent).not.toHaveBeenCalled()
+  })
+
+  it("skips when content is not a string", async () => {
+    const { hooks } = await initPlugin({ privacy: { enabled: true } })
+
+    const output = { args: { content: 12345 } }
+    await hooks["tool.execute.before"]({ tool: "memory-mcp-1file_store_memory" }, output)
+
+    expect(stripPrivateContent).not.toHaveBeenCalled()
+  })
+
+  it("skips when args.content is undefined", async () => {
+    const { hooks } = await initPlugin({ privacy: { enabled: true } })
+
+    const output = { args: { id: "mem-1" } }
+    await hooks["tool.execute.before"]({ tool: "memory-mcp-1file_store_memory" }, output)
+
+    expect(stripPrivateContent).not.toHaveBeenCalled()
+  })
+})
+
+// ─── Learning memory end-to-end integration ─────────────────────────
+
+describe("learning memory end-to-end flow", () => {
+  it("learn path: learnFromChatMessage is called when learningMemory.enabled=true and user text is present", async () => {
+    const { hooks } = await initPlugin({
+      learningMemory: { enabled: true },
+    })
+
+    const output = {
+      message: { id: "msg-learn" },
+      parts: [{ type: "text", text: "I prefer concise answers" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s-learn" }, output)
+
+    expect(learnFromChatMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ learningMemory: expect.objectContaining({ enabled: true }) }),
+      "I prefer concise answers",
+      expect.objectContaining({ source: "chat.message" }),
+    )
+  })
+
+  it("inject path: retrieveRecordsForInjection result is formatted and injected as synthetic part", async () => {
+    const { hooks } = await initPlugin({
+      learningMemory: { enabled: true },
+    })
+    vi.mocked(shouldInjectMemories).mockReturnValueOnce(false)
+    vi.mocked(shouldInjectLearnedPreferences).mockReturnValueOnce(true)
+    vi.mocked(retrieveRecordsForInjection).mockResolvedValueOnce({
+      status: "ok",
+      records: [
+        {
+          id: "rec-1",
+          kind: "user_preference",
+          content: "Use concise answers",
+          status: "confirmed",
+          confidence: 0.9,
+        },
+      ],
+      learning_summary: { injectable_by_default: true, raw: {} },
+    })
+    vi.mocked(formatLearningMemoryInjection).mockReturnValueOnce(
+      "[MEMORY] Learned User Preferences\n\n- Use concise answers",
+    )
+
+    const output = {
+      message: { id: "msg-inject" },
+      parts: [{ type: "text", text: "how should I write code?" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s-inject" }, output)
+
+    expect(retrieveRecordsForInjection).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ source: "chat.message", sessionId: "s-inject", query: "how should I write code?" }),
+    )
+    expect(formatLearningMemoryInjection).toHaveBeenCalled()
+    expect(output.parts[0]).toMatchObject({
+      type: "text",
+      text: "[MEMORY] Learned User Preferences\n\n- Use concise answers",
+      synthetic: true,
+    })
+    expect(markLearnedPreferencesInjected).toHaveBeenCalledWith("s-inject")
+  })
+
+  it("disabled no-op: learningMemory.enabled=false → learnFromChatMessage not called, retrieveRecordsForInjection not called", async () => {
+    const { hooks } = await initPlugin({
+      learningMemory: { enabled: false },
+      preferenceLearning: { ...makeConfig().preferenceLearning, enabled: false },
+    })
+    vi.mocked(shouldInjectMemories).mockReturnValueOnce(false)
+    vi.mocked(shouldInjectLearnedPreferences).mockReturnValueOnce(false)
+
+    const output = {
+      message: { id: "msg-disabled" },
+      parts: [{ type: "text", text: "I prefer verbose explanations" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s-disabled" }, output)
+
+    expect(learnFromChatMessage).not.toHaveBeenCalled()
+    expect(retrieveRecordsForInjection).not.toHaveBeenCalled()
+    expect(formatLearningMemoryInjection).not.toHaveBeenCalled()
+    expect(output.parts).toHaveLength(1)
+  })
+
+  it("server unsupported fallback: reason_code=unsupported → no injection, legacy path used if preferenceLearning enabled", async () => {
+    const { hooks } = await initPlugin({
+      learningMemory: { enabled: true },
+      preferenceLearning: { ...makeConfig().preferenceLearning, enabled: true },
+    })
+    vi.mocked(shouldInjectMemories).mockReturnValueOnce(false)
+    vi.mocked(shouldInjectLearnedPreferences).mockReturnValueOnce(true)
+    vi.mocked(retrieveRecordsForInjection).mockResolvedValueOnce({
+      status: "partial",
+      reason_code: "unsupported",
+      records: [],
+      learning_summary: { injectable_by_default: false, raw: {} },
+    })
+
+    const output = {
+      message: { id: "msg-unsupported" },
+      parts: [{ type: "text", text: "help me debug" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s-unsupported" }, output)
+
+    expect(formatLearningMemoryInjection).not.toHaveBeenCalled()
+    expect(output.parts).toHaveLength(1)
+  })
+})
+
+// ─── installCommand ─────────────────────────────────────────────────
+
+describe("installCommand (called during plugin init)", () => {
+  it("copies command files when source exists and target does not", async () => {
+    vi.mocked(existsSync).mockImplementation((p) => {
+      const s = String(p)
+      // Source files exist
+      if (s.includes("commands/init-mcp-memory.md")) return true
+      if (s.includes("commands/setup-mcp-memory.md")) return true
+      if (s.includes("commands/manage-mcp-server.md")) return true
+      // Target files don't exist
+      return false
+    })
+
+    await initPlugin()
+
+    expect(mkdirSync).toHaveBeenCalled()
+    expect(copyFileSync).toHaveBeenCalledTimes(3)
+    
+    const copiedFiles = vi.mocked(copyFileSync).mock.calls.map(call => String(call[0]))
+    expect(copiedFiles.some(f => f.endsWith("manage-mcp-server.md"))).toBe(true)
+  })
+
+  it("skips copying when target already exists", async () => {
+    vi.mocked(existsSync).mockReturnValue(true) // Both source and target exist
+
+    await initPlugin()
+
+    expect(copyFileSync).not.toHaveBeenCalled()
+  })
+
+  it("handles errors gracefully without throwing", async () => {
+    vi.mocked(existsSync).mockImplementation(() => {
+      throw new Error("fs error")
+    })
+
+    // Should not throw — installCommand catches internally
+    await expect(initPlugin()).resolves.toBeDefined()
+    expect(logger.debug).toHaveBeenCalledWith(
+      "Command auto-install failed (manual copy available)",
+      expect.any(Object),
+    )
+  })
+})

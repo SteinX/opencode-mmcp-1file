@@ -1,0 +1,50 @@
+{
+  "name": "opencode-mmcp-1file",
+  "version": "0.3.1",
+  "description": "OpenCode plugin that automatically reads/writes project-memory MCP for agents",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "node_modules/mmcp-1file-core",
+    "commands",
+    "opencode-mmcp-1file.example.jsonc",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "opencode",
+    "plugin",
+    "memory",
+    "mcp",
+    "agent",
+    "context"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "bundledDependencies": [
+    "mmcp-1file-core"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@opencode-ai/plugin": "^1.2.27",
+    "@opencode-ai/sdk": "^1.2.27",
+    "jsonc-parser": "^3.3.1",
+    "mmcp-1file-core": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.0"
+  }
+}

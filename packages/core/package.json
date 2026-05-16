@@ -1,0 +1,47 @@
+{
+  "name": "mmcp-1file-core",
+  "version": "0.1.0",
+  "description": "Shared memory-mcp client, context, capture, and recovery logic for agent plugins",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./config.js": {
+      "types": "./dist/config.d.ts",
+      "import": "./dist/config.js"
+    },
+    "./services/*.js": {
+      "types": "./dist/services/*.d.ts",
+      "import": "./dist/services/*.js"
+    },
+    "./utils/*.js": {
+      "types": "./dist/utils/*.d.ts",
+      "import": "./dist/utils/*.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "test": "vitest run"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "jsonc-parser": "^3.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.0"
+  }
+}
