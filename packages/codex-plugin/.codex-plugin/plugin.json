@@ -1,0 +1,35 @@
+{
+  "name": "codex-mmcp-1file",
+  "version": "0.1.0",
+  "description": "Persistent memory for Codex using memory-mcp-1file. Provides prompt-time context routing and stop-time task ledger capture.",
+  "author": {
+    "name": "SteinX"
+  },
+  "homepage": "https://github.com/SteinX/opencode-mmcp-1file",
+  "repository": "https://github.com/SteinX/opencode-mmcp-1file",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "memory",
+    "mcp",
+    "context"
+  ],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "Memory MCP",
+    "shortDescription": "Inject and capture memory-mcp context in Codex",
+    "longDescription": "Memory MCP adds prompt-time context routing and stop-time task ledger capture backed by memory-mcp-1file.",
+    "developerName": "SteinX",
+    "category": "Engineering",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "brandColor": "#4B5563",
+    "defaultPrompt": [
+      "Use project memory while working in this repo"
+    ],
+    "screenshots": []
+  }
+}

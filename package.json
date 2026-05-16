@@ -1,41 +1,19 @@
 {
-  "name": "opencode-mmcp-1file",
-  "version": "0.3.1",
-  "description": "OpenCode plugin that automatically reads/writes project-memory MCP for agents",
+  "name": "memory-plugin-monorepo",
+  "version": "0.0.0",
+  "private": true,
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "files": [
-    "dist",
-    "commands",
-    "opencode-mmcp-1file.example.jsonc",
-    "README.md",
-    "LICENSE"
+  "workspaces": [
+    "packages/core",
+    "packages/opencode-plugin",
+    "packages/codex-plugin"
   ],
   "scripts": {
-    "build": "tsc",
-    "dev": "tsc --watch",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "prepublishOnly": "npm run build"
-  },
-  "keywords": [
-    "opencode",
-    "plugin",
-    "memory",
-    "mcp",
-    "agent",
-    "context"
-  ],
-  "license": "MIT",
-  "publishConfig": {
-    "access": "public"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1",
-    "@opencode-ai/plugin": "^1.2.27",
-    "@opencode-ai/sdk": "^1.2.27",
-    "jsonc-parser": "^3.3.1"
+    "build": "npm run build --workspaces",
+    "test": "npm run test --workspaces",
+    "bundle:core": "node scripts/sync-bundled-core.js",
+    "pack:dry-run": "npm run bundle:core && npm pack --workspace opencode-mmcp-1file --dry-run && npm pack --workspace codex-mmcp-1file --dry-run",
+    "verify:packages": "npm run bundle:core && node scripts/verify-package-contents.js"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",

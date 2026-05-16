@@ -3,10 +3,22 @@ name: npm publish
 on:
   workflow_dispatch:
     inputs:
+      package:
+        description: "Workspace package to publish"
+        required: true
+        type: choice
+        options:
+          - opencode-mmcp-1file
+          - codex-mmcp-1file
       version:
-        description: "Version to publish (e.g. 0.2.0, 1.0.0)"
+        description: "Target version, for example 0.4.0"
         required: true
         type: string
+      dry_run:
+        description: "Run npm publish with --dry-run and skip git tag/release"
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -14,6 +26,10 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    env:
+      PACKAGE_NAME: ${{ inputs.package }}
+      TARGET_VERSION: ${{ inputs.version }}
+      DRY_RUN: ${{ inputs.dry_run }}
     steps:
       - uses: actions/checkout@v4
 
@@ -24,23 +40,51 @@ jobs:
 
       - run: npm ci
 
-      - run: npm run build
+      - run: npm run build --workspaces
 
-      - name: Set version
+      - run: npm run test --workspaces
+
+      - run: npm run bundle:core
+
+      - run: npm run verify:packages
+
+      - run: npm pack --workspace opencode-mmcp-1file --dry-run
+
+      - run: npm pack --workspace codex-mmcp-1file --dry-run
+
+      - name: Set selected workspace version
+        run: npm version "$TARGET_VERSION" --workspace "$PACKAGE_NAME" --no-git-tag-version
+
+      - name: Publish selected workspace
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          npm version ${{ inputs.version }} -m "release: v%s"
-
-      - run: npm publish
+          if [ "$DRY_RUN" = "true" ]; then
+            npm publish --workspace "$PACKAGE_NAME" --dry-run
+          else
+            npm publish --workspace "$PACKAGE_NAME"
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Push version commit and tag
-        run: git push --follow-tags
+      - name: Commit release version
+        if: ${{ !inputs.dry_run }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json packages/*/package.json
+          git commit -m "release: ${PACKAGE_NAME}@${TARGET_VERSION}"
+
+      - name: Tag release
+        if: ${{ !inputs.dry_run }}
+        run: git tag "${PACKAGE_NAME}@${TARGET_VERSION}"
+
+      - name: Push release commit and tag
+        if: ${{ !inputs.dry_run }}
+        run: |
+          git push
+          git push origin "${PACKAGE_NAME}@${TARGET_VERSION}"
 
       - name: Create GitHub Release
-        run: gh release create "$TAG" --generate-notes
+        if: ${{ !inputs.dry_run }}
+        run: gh release create "${PACKAGE_NAME}@${TARGET_VERSION}" --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: v${{ inputs.version }}
