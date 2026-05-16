@@ -55,6 +55,17 @@ jobs:
       - name: Set selected workspace version
         run: npm version "$TARGET_VERSION" --workspace "$PACKAGE_NAME" --no-git-tag-version
 
+      - name: Sync Codex plugin manifest version
+        if: ${{ inputs.package == 'codex-mmcp-1file' }}
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const path = "packages/codex-plugin/.codex-plugin/plugin.json";
+            const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
+            manifest.version = process.env.TARGET_VERSION;
+            fs.writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
+          '
+
       - name: Publish selected workspace
         run: |
           if [ "$DRY_RUN" = "true" ]; then
@@ -70,7 +81,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add package-lock.json packages/*/package.json
+          git add package-lock.json packages/*/package.json packages/codex-plugin/.codex-plugin/plugin.json
           git commit -m "release: ${PACKAGE_NAME}@${TARGET_VERSION}"
 
       - name: Tag release

@@ -94,6 +94,10 @@ for (const pkg of packages) {
 }
 
 const codexPlugin = parseJson("packages/codex-plugin", ".codex-plugin/plugin.json")
+const codexPackage = parseJson("packages/codex-plugin", "package.json")
+if (codexPlugin.version !== codexPackage.version) {
+  throw new Error(`codex plugin manifest version must match package.json version: ${codexPlugin.version} !== ${codexPackage.version}`)
+}
 if (codexPlugin.hooks !== "./hooks/hooks.json") {
   throw new Error("codex plugin.json must point hooks to ./hooks/hooks.json")
 }
