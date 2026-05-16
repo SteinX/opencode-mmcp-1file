@@ -59,6 +59,7 @@ import {
   learnFromMessageUpdated,
   learnFromSessionIdleSummary,
   retrieveRecordsForInjection,
+  retrieveForInjection,
 } from "./services/learning-memory-orchestrator.js"
 import { formatLearningMemoryInjection } from "./services/learning-memory-format.js"
 import { buildToolRegistry } from "./services/tool-registry.js"
@@ -269,7 +270,18 @@ const plugin: Plugin = async (input) => {
           }).then((result) => {
             if (!result) return null
             const badCodes = ["unsupported", "degraded", "stale", "generation_mismatch"]
-            if (result.reason_code && badCodes.includes(result.reason_code)) return null
+            const nonInjectableCode = result.reason_code ?? result.status
+            if (badCodes.includes(nonInjectableCode)) {
+              if (nonInjectableCode !== "unsupported") return null
+
+              return retrieveForInjection(config, {
+                source: "chat.message",
+                sessionId: hookInput.sessionID,
+                query: userText,
+              }).then((records) => records.length > 0
+                ? ["[MEMORY] Learned Memory", ...records.map((record) => record.content)].join("\n\n")
+                : null)
+            }
             return formatLearningMemoryInjection(
               { records: result.records, learning_summary: result.learning_summary },
               {
@@ -773,7 +785,13 @@ function installCommand(): void {
     const commandsDir = join(pluginDir, "..", "commands")
     const targetDir = join(homedir(), ".config", "opencode", "command")
 
-    const commands = ["init-mcp-memory.md", "setup-mcp-memory.md", "manage-mcp-server.md"]
+    const commands = [
+      "init-mcp-memory.md",
+      "setup-mcp-memory.md",
+      "manage-mcp-server.md",
+      "manage-learning-memory.md",
+      "migrate-learning-memory.md",
+    ]
     const installed: string[] = []
 
     for (const cmd of commands) {

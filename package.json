@@ -10,7 +10,7 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces",
-    "test": "npm run test --workspaces",
+    "test": "npm run build -w mmcp-1file-core && npm run test --workspaces",
     "bundle:core": "node scripts/sync-bundled-core.js",
     "pack:dry-run": "npm run bundle:core && npm pack --workspace opencode-mmcp-1file --dry-run && npm pack --workspace codex-mmcp-1file --dry-run",
     "verify:packages": "npm run bundle:core && node scripts/verify-package-contents.js"

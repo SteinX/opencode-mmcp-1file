@@ -125,6 +125,7 @@ vi.mock("../src/services/learning-memory-orchestrator.js", () => ({
   learnFromMessageUpdated: vi.fn().mockResolvedValue(undefined),
   learnFromSessionIdleSummary: vi.fn().mockResolvedValue(undefined),
   retrieveRecordsForInjection: vi.fn().mockResolvedValue(null),
+  retrieveForInjection: vi.fn().mockResolvedValue([]),
 }))
 
 vi.mock("../src/services/learning-memory-format.js", () => ({
@@ -182,6 +183,7 @@ const {
   learnFromMessageUpdated,
   learnFromSessionIdleSummary,
   retrieveRecordsForInjection,
+  retrieveForInjection,
 } = await import("../src/services/learning-memory-orchestrator.js")
 const { formatLearningMemoryInjection } = await import("../src/services/learning-memory-format.js")
 
@@ -2329,19 +2331,21 @@ describe("learning memory end-to-end flow", () => {
     expect(output.parts).toHaveLength(1)
   })
 
-  it("server unsupported fallback: reason_code=unsupported → no injection, legacy path used if preferenceLearning enabled", async () => {
+  it("server unsupported fallback injects legacy preferences through fallback path", async () => {
     const { hooks } = await initPlugin({
-      learningMemory: { enabled: true },
+      learningMemory: { enabled: true, fallback: { legacyPreferences: true } },
       preferenceLearning: { ...makeConfig().preferenceLearning, enabled: true },
     })
     vi.mocked(shouldInjectMemories).mockReturnValueOnce(false)
     vi.mocked(shouldInjectLearnedPreferences).mockReturnValueOnce(true)
     vi.mocked(retrieveRecordsForInjection).mockResolvedValueOnce({
-      status: "partial",
-      reason_code: "unsupported",
+      status: "unsupported",
       records: [],
       learning_summary: { injectable_by_default: false, raw: {} },
     })
+    vi.mocked(retrieveForInjection).mockResolvedValueOnce([
+      { id: "legacy-preferences", content: "## Legacy User Preferences\n- Use concise answers", kind: "user_preference" },
+    ])
 
     const output = {
       message: { id: "msg-unsupported" },
@@ -2350,8 +2354,16 @@ describe("learning memory end-to-end flow", () => {
 
     await hooks["chat.message"]({ sessionID: "s-unsupported" }, output)
 
+    expect(retrieveForInjection).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ source: "chat.message", sessionId: "s-unsupported", query: "help me debug" }),
+    )
     expect(formatLearningMemoryInjection).not.toHaveBeenCalled()
-    expect(output.parts).toHaveLength(1)
+    expect(output.parts[0]).toMatchObject({
+      type: "text",
+      text: "[MEMORY] Learned Memory\n\n## Legacy User Preferences\n- Use concise answers",
+      synthetic: true,
+    })
   })
 })
 
@@ -2365,6 +2377,8 @@ describe("installCommand (called during plugin init)", () => {
       if (s.includes("commands/init-mcp-memory.md")) return true
       if (s.includes("commands/setup-mcp-memory.md")) return true
       if (s.includes("commands/manage-mcp-server.md")) return true
+      if (s.includes("commands/manage-learning-memory.md")) return true
+      if (s.includes("commands/migrate-learning-memory.md")) return true
       // Target files don't exist
       return false
     })
@@ -2372,10 +2386,12 @@ describe("installCommand (called during plugin init)", () => {
     await initPlugin()
 
     expect(mkdirSync).toHaveBeenCalled()
-    expect(copyFileSync).toHaveBeenCalledTimes(3)
+    expect(copyFileSync).toHaveBeenCalledTimes(5)
     
     const copiedFiles = vi.mocked(copyFileSync).mock.calls.map(call => String(call[0]))
     expect(copiedFiles.some(f => f.endsWith("manage-mcp-server.md"))).toBe(true)
+    expect(copiedFiles.some(f => f.endsWith("manage-learning-memory.md"))).toBe(true)
+    expect(copiedFiles.some(f => f.endsWith("migrate-learning-memory.md"))).toBe(true)
   })
 
   it("skips copying when target already exists", async () => {
