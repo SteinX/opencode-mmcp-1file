@@ -67,6 +67,18 @@ describe("Codex hooks", () => {
     expect(core.buildCompactionRecoveryContext).toHaveBeenCalledWith(expect.anything(), "We are converting the repo to workspaces.")
   })
 
+  it("triggers recovery for Chinese continuation prompts without compact summary", async () => {
+    const output = await runUserPromptSubmit(JSON.stringify({
+      cwd: "/repo",
+      session_id: "s1",
+      prompt: "接着做 monorepo 改造",
+    }))
+
+    const additionalContext = (output as any).hookSpecificOutput.additionalContext
+    expect(additionalContext).toContain("Recovery Additions")
+    expect(core.buildCompactionRecoveryContext).toHaveBeenCalledWith(expect.anything(), undefined)
+  })
+
   it("handles missing MCP data directory without injecting context", async () => {
     core.resolveDataDir.mockReturnValue(null)
 

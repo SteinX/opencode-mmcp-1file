@@ -12,7 +12,14 @@ import {
 } from "mmcp-1file-core"
 import { readCodexBuiltinMemorySummary, readStableRepoGuidance } from "./codex-builtins.js"
 
-const CONTINUE_PATTERN = /\b(?:continue|resume|keep going|继续|接着|恢复)\b/i
+const ENGLISH_CONTINUE_PATTERN = /\b(?:continue|resume|keep going)\b/i
+const CHINESE_CONTINUE_PATTERN = /(?:继续|接着|恢复)/
+
+function shouldBuildRecovery(prompt: string, compactSummary?: string): boolean {
+  return Boolean(compactSummary?.trim())
+    || ENGLISH_CONTINUE_PATTERN.test(prompt)
+    || CHINESE_CONTINUE_PATTERN.test(prompt)
+}
 
 function sourcesFor(parts: Array<{ source: ContextSource; text: string | null }>): ContextSource[] {
   return parts.flatMap((part) => part.text ? [part.source] : [])
@@ -35,7 +42,7 @@ export async function buildPromptContext(args: {
   if (!resolveDataDir(config)) return null
 
   const memoryContext = await fetchAndFormatMemories(config, args.prompt)
-  const shouldRecover = Boolean(args.compactSummary?.trim()) || CONTINUE_PATTERN.test(args.prompt)
+  const shouldRecover = shouldBuildRecovery(args.prompt, args.compactSummary)
   const recovery = shouldRecover
     ? await buildCompactionRecoveryContext(config, args.compactSummary)
     : null
