@@ -216,6 +216,22 @@ describe("code-index-sync", () => {
     expect(updated).not.toBe(baseline)
   })
 
+  it("tracks workspace files even when an ancestor directory name is ignored", () => {
+    const ancestorBuildDir = join(rootDir, "build")
+    const nestedWorkspace = join(ancestorBuildDir, "workspace")
+    mkdirSync(join(nestedWorkspace, "src"), { recursive: true })
+    writeFileSync(join(nestedWorkspace, "package.json"), '{"name":"nested"}')
+    writeFileSync(join(nestedWorkspace, "src", "index.ts"), "export const nested = true\n")
+
+    const baseline = computeWorkspaceFingerprint(nestedWorkspace)
+    expect(baseline).toBeTruthy()
+
+    writeTrackedFile(nestedWorkspace, "src/feature.ts", "export const feature = true\n")
+
+    const updated = computeWorkspaceFingerprint(nestedWorkspace)
+    expect(updated).not.toBe(baseline)
+  })
+
   it("does not change fingerprint for files under ignored mobile directories", () => {
     const baseline = computeWorkspaceFingerprint(workspaceDir)
     expect(baseline).toBeTruthy()

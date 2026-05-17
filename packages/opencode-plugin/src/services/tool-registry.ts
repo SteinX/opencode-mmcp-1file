@@ -385,6 +385,9 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
       execute: async (args) => {
         const callArgs: Record<string, unknown> = { path: args.path }
         if (args.force) callArgs.force = true
+        const filterResult = buildCodeIndexFilterArgs(config.codeIndexSync)
+        if (typeof filterResult === "string") return filterResult
+        Object.assign(callArgs, filterResult)
         return proxy("index_project", callArgs)
       },
     }),

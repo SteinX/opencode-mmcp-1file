@@ -1227,7 +1227,7 @@ describe("project_index tool", () => {
     vi.clearAllMocks()
   })
 
-  it("proxies a clean payload for path-only indexing", async () => {
+  it("proxies a clean payload for path-only indexing when config has no filters", async () => {
     const tools = buildToolRegistry(makeConfig())
     await tools.project_index.execute({ path: "/project" }, mockContext)
 
@@ -1244,7 +1244,54 @@ describe("project_index tool", () => {
     expect(payload).not.toHaveProperty("resume_token")
   })
 
-  it("adds force only when requested", async () => {
+  it("applies configured index filters for path-only indexing", async () => {
+    const tools = buildToolRegistry(makeConfig({
+      codeIndexSync: {
+        enabled: true,
+        autoRefresh: false,
+        debounceMs: 10000,
+        minReindexIntervalMs: 300000,
+        includePatterns: ["src/**/*"],
+        excludePatterns: ["**/*.log"],
+      },
+    }))
+    await tools.project_index.execute({ path: "/project" }, mockContext)
+
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "index_project",
+      expect.objectContaining({
+        path: "/project",
+        include_patterns: ["src/**/*"],
+        exclude_patterns: ["**/*.log"],
+      }),
+    )
+  })
+
+  it("adds force while preserving configured filters", async () => {
+    const tools = buildToolRegistry(makeConfig({
+      codeIndexSync: {
+        enabled: true,
+        autoRefresh: false,
+        debounceMs: 10000,
+        minReindexIntervalMs: 300000,
+        includePatterns: ["src/**/*"],
+      },
+    }))
+    await tools.project_index.execute({ path: "/project", force: true }, mockContext)
+
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "index_project",
+      expect.objectContaining({ path: "/project", force: true, include_patterns: ["src/**/*"] }),
+    )
+    const payload = vi.mocked(callMemoryTool).mock.calls[0]?.[2] as Record<string, unknown>
+    expect(payload).not.toHaveProperty("resume")
+    expect(payload).not.toHaveProperty("job_id")
+    expect(payload).not.toHaveProperty("resume_token")
+  })
+
+  it("adds force only when requested and config has no filters", async () => {
     const tools = buildToolRegistry(makeConfig())
     await tools.project_index.execute({ path: "/project", force: true }, mockContext)
 
