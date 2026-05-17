@@ -282,7 +282,7 @@ function walkTrackedFiles(rootDir: string, currentDir: string, output: string[])
     const relPath = relative(rootDir, fullPath)
 
     if (entry.isDirectory()) {
-      if (hasIgnoredDirectorySegment(fullPath)) continue
+      if (hasIgnoredDirectorySegment(relPath)) continue
       walkTrackedFiles(rootDir, fullPath, output)
       continue
     }
