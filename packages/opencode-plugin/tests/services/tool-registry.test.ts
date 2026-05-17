@@ -1086,6 +1086,32 @@ describe("project_ensure_index tool", () => {
     expect(result).toBe("ok")
   })
 
+  it("applies configured filters when durable status is unavailable", async () => {
+    vi.mocked(getProjectDurableStatus).mockResolvedValueOnce(null)
+    const tools = buildToolRegistry(makeConfig({
+      codeIndexSync: {
+        enabled: true,
+        autoRefresh: false,
+        debounceMs: 10000,
+        minReindexIntervalMs: 300000,
+        includePatterns: ["src/**/*"],
+        excludePatterns: ["**/*.log"],
+      },
+    }))
+
+    await tools.project_ensure_index.execute({ path: "/project" }, mockContext)
+
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "index_project",
+      expect.objectContaining({
+        path: "/project",
+        include_patterns: ["src/**/*"],
+        exclude_patterns: ["**/*.log"],
+      }),
+    )
+  })
+
   it("returns already_running without calling index_project", async () => {
     vi.mocked(getProjectDurableStatus).mockResolvedValueOnce({
       state: "running",
@@ -1170,18 +1196,30 @@ describe("project_ensure_index tool", () => {
     expect(result).toBe("ok")
   })
 
-  it("starts a fresh index when durable status is not resumable", async () => {
+  it("starts a fresh index with configured filters when durable status is not resumable", async () => {
     vi.mocked(getProjectDurableStatus).mockResolvedValueOnce({
       state: "failed",
       can_resume: false,
       reason_code: "workspace_changed_since_checkpoint",
       raw: {},
     } as any)
-    const tools = buildToolRegistry(makeConfig())
+    const tools = buildToolRegistry(makeConfig({
+      codeIndexSync: {
+        enabled: true,
+        autoRefresh: false,
+        debounceMs: 10000,
+        minReindexIntervalMs: 300000,
+        includePatterns: ["src/**/*"],
+      },
+    }))
 
     const result = await tools.project_ensure_index.execute({ path: "/project" }, mockContext)
 
-    expect(callMemoryTool).toHaveBeenCalledWith(expect.anything(), "index_project", { path: "/project" })
+    expect(callMemoryTool).toHaveBeenCalledWith(
+      expect.anything(),
+      "index_project",
+      expect.objectContaining({ path: "/project", include_patterns: ["src/**/*"] }),
+    )
     expect(result).toBe("ok")
   })
 })

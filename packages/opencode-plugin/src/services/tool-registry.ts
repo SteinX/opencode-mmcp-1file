@@ -399,9 +399,17 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
         path: tool.schema.string(),
       },
       execute: async (args) => {
+        const freshIndexPayload = (): Record<string, unknown> | string => {
+          const filterResult = buildCodeIndexFilterArgs(config.codeIndexSync)
+          if (typeof filterResult === "string") return filterResult
+          return { path: args.path, ...filterResult }
+        }
+
         const status = await getProjectDurableStatus(config, args.path)
         if (!status) {
-          return proxy("index_project", { path: args.path })
+          const callArgs = freshIndexPayload()
+          if (typeof callArgs === "string") return callArgs
+          return proxy("index_project", callArgs)
         }
 
         if (
@@ -444,7 +452,9 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
           })
         }
 
-        return proxy("index_project", { path: args.path })
+        const callArgs = freshIndexPayload()
+        if (typeof callArgs === "string") return callArgs
+        return proxy("index_project", callArgs)
       },
     }),
 
