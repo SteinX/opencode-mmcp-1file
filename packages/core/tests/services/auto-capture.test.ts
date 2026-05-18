@@ -6,11 +6,16 @@ vi.mock("../../src/services/mcp-client.js", () => ({
   storeMemory: vi.fn().mockResolvedValue(true),
 }))
 
+vi.mock("../../src/services/memory-orchestration.js", () => ({
+  createHookObservation: vi.fn().mockResolvedValue(true),
+}))
+
 vi.mock("../../src/utils/logger.js", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }))
 
 const { storeMemory } = await import("../../src/services/mcp-client.js")
+const { createHookObservation } = await import("../../src/services/memory-orchestration.js")
 
 function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
   return {
@@ -94,12 +99,18 @@ describe("performAutoCapture", () => {
     const result = await performAutoCapture(config, "test-session-valid", messages, callLLM)
     expect(result).toBe(true)
     expect(callLLM).toHaveBeenCalledOnce()
-    expect(storeMemory).toHaveBeenCalledWith(
+    expect(createHookObservation).toHaveBeenCalledWith(
       config,
-      "CONTEXT: ESLint configuration guide",
-      "procedural",
-      { runId: "test-session-valid", metadata: { capture_tags: ["eslint"] } },
+      expect.objectContaining({
+        content: "CONTEXT: ESLint configuration guide",
+        source: "opencode-hook",
+        eventType: "session_idle",
+        memoryType: "procedural",
+        context: expect.objectContaining({ runId: "test-session-valid" }),
+        metadata: { capture_tags: ["eslint"], hook: "session.idle" },
+      }),
     )
+    expect(storeMemory).not.toHaveBeenCalled()
   })
 
   it("omits capture_tags metadata when no tags were extracted", async () => {
@@ -118,12 +129,16 @@ describe("performAutoCapture", () => {
     )
 
     await performAutoCapture(config, "test-session-no-tags", messages, callLLM)
-    expect(storeMemory).toHaveBeenCalledWith(
+    expect(createHookObservation).toHaveBeenCalledWith(
       config,
-      "CONTEXT: ESLint configuration guide",
-      "procedural",
-      { runId: "test-session-no-tags", metadata: undefined },
+      expect.objectContaining({
+        content: "CONTEXT: ESLint configuration guide",
+        memoryType: "procedural",
+        context: expect.objectContaining({ runId: "test-session-no-tags" }),
+        metadata: { hook: "session.idle" },
+      }),
     )
+    expect(storeMemory).not.toHaveBeenCalled()
   })
 
   it("returns false when LLM returns SKIP prefix", async () => {
@@ -175,7 +190,7 @@ describe("performAutoCapture", () => {
 
     await performAutoCapture(config, "test-session-privacy", messages, callLLM)
 
-    const storedContent = vi.mocked(storeMemory).mock.calls[0]?.[1]
+    const storedContent = vi.mocked(createHookObservation).mock.calls[0]?.[1].content
     expect(storedContent).not.toContain("api-key-123")
     expect(storedContent).toContain("[REDACTED]")
   })

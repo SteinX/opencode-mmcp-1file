@@ -1,5 +1,6 @@
 import type { PluginConfig } from "../config.js"
 import { recallMemories, searchMemoryResult } from "./mcp-client.js"
+import { buildBootstrapContext } from "./memory-orchestration.js"
 import { formatMemoriesForRecovery } from "../utils/format.js"
 import { selectAdditiveRecoveryMemories } from "./recovery-selector.js"
 
@@ -19,13 +20,29 @@ export async function buildCompactionRecoveryContext(
 ): Promise<{ text: string; count: number; skippedSimilarToSummary: number } | null> {
   if (!config.compaction.enabled) return null
 
+  const context = compactionContext(config)
+  const bootstrap = await buildBootstrapContext(config, {
+    prompt: "continue",
+    compactSummary,
+    limit: config.compaction.bootstrapLimit ?? 5,
+    tokenBudget: config.compaction.bootstrapTokenBudget ?? 1500,
+    context,
+  })
+  if (bootstrap) {
+    return {
+      text: bootstrap.text,
+      count: bootstrap.count,
+      skippedSimilarToSummary: 0,
+    }
+  }
+
   const [taskResult, contextResult] = await Promise.all([
-    searchMemoryResult(config, "TASK: in_progress", "bm25", 5, compactionContext(config)),
+    searchMemoryResult(config, "TASK: in_progress", "bm25", 5, context),
     recallMemories(
       config,
       "recent project context and decisions",
       config.compaction.memoryLimit,
-      compactionContext(config),
+      context,
     ),
   ])
 

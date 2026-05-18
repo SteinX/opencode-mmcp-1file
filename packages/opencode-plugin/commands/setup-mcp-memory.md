@@ -199,6 +199,10 @@ Based on the user's answers, generate a `opencode-mmcp-1file.jsonc` file. Use th
     "knowledgeGraphTimeoutMs": 10000,  // Timeout for knowledge graph entity lookup MCP calls (ms)
     "projectKnowledgeTimeoutMs": 15000, // Timeout for project knowledge retrieval MCP calls (ms)
     "learningMemoryTimeoutMs": 10000,  // Timeout for learning memory retrieval MCP calls (ms)
+    "bootstrapTimeoutMs": 10000,     // Timeout for server-side memory_bootstrap calls (ms)
+    "observationTimeoutMs": 10000,   // Timeout for memory_observation_create hook evidence writes (ms)
+    "auditTimeoutMs": 10000,         // Timeout for memory_audit calls (ms)
+    "searchTraceTimeoutMs": 10000,   // Timeout for memory_search_trace calls (ms)
     "projectInfoCacheTtlMs": 300000    // TTL for project_info in-memory cache (ms). Default: 5 minutes.
   }
 }
@@ -213,6 +217,8 @@ Based on the user's answers, generate a `opencode-mmcp-1file.jsonc` file. Use th
 - Only include sections that differ from defaults
 - Include `codeIndexSync` only when the user customizes index refresh/resume behavior, enables `autoRefresh`, or wants project-specific `includePatterns` / `excludePatterns`; otherwise omit it and rely on defaults
 - For index filters, prefer config defaults over per-call agent arguments; do not generate empty `includePatterns` / `excludePatterns` unless the user explicitly wants to disable server defaults
+- Keep `chatMessage.bootstrapLimit` / `bootstrapTokenBudget` and `compaction.bootstrapLimit` / `bootstrapTokenBudget` at defaults unless the user reports startup context being too small or too large.
+- Keep `performance.bootstrapTimeoutMs`, `observationTimeoutMs`, `auditTimeoutMs`, and `searchTraceTimeoutMs` at defaults unless the user reports hook timeouts.
 - Include `performance` only when the user has a large database or reports slow memory retrieval; otherwise omit it and rely on defaults
 - Exception: always include `mcpServer` section (it's the core config)
 

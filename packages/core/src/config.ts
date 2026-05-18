@@ -27,6 +27,10 @@ export interface PluginConfig {
     knowledgeGraphRelatedDepth?: number
     knowledgeGraphEntityMatch?: boolean
     projectKnowledgeValidOnly?: boolean
+    /** Preferred server-side bootstrap result limit for normal prompt context. */
+    bootstrapLimit?: number
+    /** Preferred server-side bootstrap token budget for normal prompt context. */
+    bootstrapTokenBudget?: number
     /** Tiered injection: prioritize important categories over recency. Set to null/undefined to disable (flat list fallback). */
     projectKnowledgeTiers?: TierConfig[] | null
   }
@@ -38,6 +42,10 @@ export interface PluginConfig {
   compaction: {
     enabled: boolean
     memoryLimit: number
+    /** Preferred server-side bootstrap result limit for compaction recovery. */
+    bootstrapLimit?: number
+    /** Preferred server-side bootstrap token budget for compaction recovery. */
+    bootstrapTokenBudget?: number
   }
   keywordDetection: {
     enabled: boolean
@@ -154,6 +162,14 @@ export interface PluginConfig {
     projectKnowledgeTimeoutMs: number
     /** Timeout for learning memory retrieval MCP calls (ms). Default: 10000 */
     learningMemoryTimeoutMs: number
+    /** Timeout for memory_bootstrap MCP calls (ms). Default: 10000 */
+    bootstrapTimeoutMs: number
+    /** Timeout for memory_observation_create MCP calls (ms). Default: 10000 */
+    observationTimeoutMs: number
+    /** Timeout for memory_audit MCP calls (ms). Default: 10000 */
+    auditTimeoutMs: number
+    /** Timeout for memory_search_trace MCP calls (ms). Default: 10000 */
+    searchTraceTimeoutMs: number
     /** TTL for project_info cache (ms). Default: 300000 (5 min) */
     projectInfoCacheTtlMs: number
   }
@@ -175,6 +191,8 @@ export const DEFAULT_CONFIG: PluginConfig = {
     knowledgeGraphRelatedDepth: 1,
     knowledgeGraphEntityMatch: true,
     projectKnowledgeValidOnly: false,
+    bootstrapLimit: 10,
+    bootstrapTokenBudget: 4000,
     projectKnowledgeTiers: [
       { categories: ["USER"], limit: 5 },
       { categories: ["DECISION", "PATTERN"], limit: 5 },
@@ -189,6 +207,8 @@ export const DEFAULT_CONFIG: PluginConfig = {
   compaction: {
     enabled: true,
     memoryLimit: 10,
+    bootstrapLimit: 5,
+    bootstrapTokenBudget: 1500,
   },
   keywordDetection: {
     enabled: true,
@@ -283,6 +303,10 @@ export const DEFAULT_CONFIG: PluginConfig = {
     knowledgeGraphTimeoutMs: 10_000,
     projectKnowledgeTimeoutMs: 15_000,
     learningMemoryTimeoutMs: 10_000,
+    bootstrapTimeoutMs: 10_000,
+    observationTimeoutMs: 10_000,
+    auditTimeoutMs: 10_000,
+    searchTraceTimeoutMs: 10_000,
     projectInfoCacheTtlMs: 300_000,
   },
 }

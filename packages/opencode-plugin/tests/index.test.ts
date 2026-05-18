@@ -40,6 +40,11 @@ vi.mock("../src/services/compaction.js", () => ({
   buildCompactionRecoveryContext: vi.fn().mockResolvedValue(null),
 }))
 
+vi.mock("../src/services/memory-orchestration.js", () => ({
+  buildBootstrapContext: vi.fn().mockResolvedValue(null),
+  createHookObservation: vi.fn().mockResolvedValue(true),
+}))
+
 vi.mock("../src/services/mcp-client.js", () => ({
   getMemoryClient: vi.fn().mockResolvedValue({}),
   getMemoryConnectionKey: vi.fn().mockReturnValue("test-connection-key"),
@@ -150,6 +155,10 @@ const {
 } = await import("../src/services/context-inject.js")
 const { performAutoCapture } = await import("../src/services/auto-capture.js")
 const { buildCompactionRecoveryContext } = await import("../src/services/compaction.js")
+const {
+  buildBootstrapContext,
+  createHookObservation,
+} = await import("../src/services/memory-orchestration.js")
 const {
   getMemoryClient,
   storeMemory,
@@ -303,6 +312,8 @@ const registeredHandlers: Array<{ event: string; handler: (...args: any[]) => an
 beforeEach(() => {
   vi.clearAllMocks()
   vi.useFakeTimers()
+  vi.mocked(buildBootstrapContext).mockResolvedValue(null)
+  vi.mocked(createHookObservation).mockResolvedValue(true)
 
   // Track signal handlers registered by the plugin
   const processOnSpy = vi.spyOn(process, "on").mockImplementation(((event: string, handler: (...args: any[]) => any) => {
@@ -684,6 +695,43 @@ describe("chat.message hook", () => {
       synthetic: true,
     })
     expect(markSessionInjected).toHaveBeenCalledWith("s1", ["query_recall"])
+  })
+
+  it("injects server bootstrap context before legacy memory sources when available", async () => {
+    const { hooks } = await initPlugin()
+    vi.mocked(shouldInjectMemories).mockReturnValue(true)
+    vi.mocked(shouldInjectQueryRecall).mockReturnValue(true)
+    vi.mocked(shouldInjectProjectKnowledge).mockReturnValue(true)
+    vi.mocked(shouldInjectCodeIntel).mockReturnValue(true)
+    vi.mocked(buildBootstrapContext).mockResolvedValue({
+      text: "[MEMORY BOOTSTRAP] Stable Context\n- DECISION: use server bootstrap",
+      count: 1,
+      usedFallback: false,
+      raw: {},
+    })
+    vi.mocked(fetchAndFormatMemories).mockResolvedValue("[MEMORY] legacy")
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "implement bootstrap migration" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+
+    expect(output.parts[0]).toMatchObject({
+      type: "text",
+      text: "[MEMORY BOOTSTRAP] Stable Context\n- DECISION: use server bootstrap",
+      synthetic: true,
+    })
+    expect(fetchAndFormatMemories).not.toHaveBeenCalled()
+    expect(fetchProjectKnowledge).not.toHaveBeenCalled()
+    expect(fetchCodeIntelContext).not.toHaveBeenCalled()
+    expect(markSessionInjected).toHaveBeenCalledWith("s1", [
+      "query_recall",
+      "project_knowledge",
+      "code_intel",
+      "knowledge_graph",
+    ])
   })
 
   it("injects project knowledge and code intel when relevant memories are unavailable", async () => {
@@ -1834,11 +1882,16 @@ describe("captureCompactionSummary (via message.updated)", () => {
       },
     })
 
-    expect(storeMemory).toHaveBeenCalledWith(
+    expect(createHookObservation).toHaveBeenCalledWith(
       expect.anything(),
-      expect.stringContaining("CONTEXT: Session compaction summary"),
-      "episodic",
+      expect.objectContaining({
+        content: expect.stringContaining("CONTEXT: Session compaction summary"),
+        source: "opencode-hook",
+        eventType: "compact_summary",
+        memoryType: "episodic",
+      }),
     )
+    expect(storeMemory).not.toHaveBeenCalled()
     expect(learnFromCompactionSummary).toHaveBeenCalledWith(
       expect.anything(),
       expect.stringContaining("CONTEXT: Session compaction summary"),
@@ -1862,6 +1915,7 @@ describe("captureCompactionSummary (via message.updated)", () => {
       },
     })
 
+    expect(createHookObservation).not.toHaveBeenCalled()
     expect(storeMemory).not.toHaveBeenCalled()
   })
 
@@ -1887,6 +1941,7 @@ describe("captureCompactionSummary (via message.updated)", () => {
       },
     })
 
+    expect(createHookObservation).not.toHaveBeenCalled()
     expect(storeMemory).not.toHaveBeenCalled()
   })
 
@@ -1918,7 +1973,7 @@ describe("captureCompactionSummary (via message.updated)", () => {
     })
 
     expect(stripPrivateContent).toHaveBeenCalled()
-    const storedContent = vi.mocked(storeMemory).mock.calls[0]?.[1]
+    const storedContent = vi.mocked(createHookObservation).mock.calls[0]?.[1].content
     expect(storedContent).toContain("[REDACTED]")
   })
 
@@ -1947,6 +2002,7 @@ describe("captureCompactionSummary (via message.updated)", () => {
       },
     })
 
+    expect(createHookObservation).not.toHaveBeenCalled()
     expect(storeMemory).not.toHaveBeenCalled()
   })
 

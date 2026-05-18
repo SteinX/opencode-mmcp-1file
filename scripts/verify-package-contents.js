@@ -73,6 +73,39 @@ function assertNoForbiddenReferences(packageDir, relativePath, forbiddenReferenc
   }
 }
 
+const marketplace = parseJson(".", ".codex-plugin/marketplace.json")
+if (marketplace.name !== "mmcp-1file") {
+  throw new Error(`Root .codex-plugin/marketplace.json name must be mmcp-1file, got ${marketplace.name}`)
+}
+if (marketplace.interface?.displayName !== "Memory MCP") {
+  throw new Error("Root .codex-plugin/marketplace.json interface.displayName must be Memory MCP")
+}
+const marketplacePlugin = marketplace.plugins?.find((plugin) => plugin.name === "codex-mmcp-1file")
+if (!marketplacePlugin) {
+  throw new Error("Root .codex-plugin/marketplace.json must list codex-mmcp-1file")
+}
+if (marketplacePlugin.source?.source !== "git-subdir") {
+  throw new Error("codex-mmcp-1file marketplace source must use git-subdir")
+}
+if (marketplacePlugin.source?.url !== "https://github.com/SteinX/opencode-mmcp-1file.git") {
+  throw new Error("codex-mmcp-1file marketplace source url must point to the GitHub repository")
+}
+if (marketplacePlugin.source?.path !== "./packages/codex-plugin") {
+  throw new Error("codex-mmcp-1file marketplace source path must be ./packages/codex-plugin")
+}
+if (marketplacePlugin.source?.ref !== "main") {
+  throw new Error("codex-mmcp-1file marketplace source ref must be main")
+}
+if (marketplacePlugin.policy?.installation !== "AVAILABLE") {
+  throw new Error("codex-mmcp-1file marketplace installation policy must be AVAILABLE")
+}
+if (marketplacePlugin.policy?.authentication !== "ON_INSTALL") {
+  throw new Error("codex-mmcp-1file marketplace authentication policy must be ON_INSTALL")
+}
+if (marketplacePlugin.category !== "Memory") {
+  throw new Error("codex-mmcp-1file marketplace category must be Memory")
+}
+
 for (const pkg of packages) {
   for (const file of pkg.required) assertFile(pkg.dir, file)
   for (const file of pkg.json) parseJson(pkg.dir, file)

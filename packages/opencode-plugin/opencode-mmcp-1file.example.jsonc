@@ -15,6 +15,8 @@
     "maxKnowledgeGraphItems": 10,   // Max related entities to inject from the graph
     "knowledgeGraphRelatedDepth": 1, // Traversal depth for related entity lookup
     "knowledgeGraphEntityMatch": true, // Enable automatic entity matching in conversation
+    "bootstrapLimit": 10,            // Server-side memory_bootstrap result limit for normal prompt context
+    "bootstrapTokenBudget": 4000,    // Server-side memory_bootstrap token budget for normal prompt context
     // Tiered injection: prioritize explicit user-requested memories first, then project guidance.
     // Each tier defines category prefixes to match and a max slot count.
     // Memories are allocated in tier order; unmatched go to catch-all (empty categories).
@@ -36,7 +38,9 @@
   // Memory recovery after context compaction (READ)
   "compaction": {
     "enabled": true,
-    "memoryLimit": 10
+    "memoryLimit": 10,
+    "bootstrapLimit": 5,             // Server-side memory_bootstrap result limit for recovery context
+    "bootstrapTokenBudget": 1500     // Server-side memory_bootstrap token budget for recovery context
   },
 
   // Keyword detection for explicit memory requests
@@ -76,7 +80,7 @@
       "maxPollMs": 300000,                // Maximum time to wait for resume completion (ms, 5 min)
       "allowFullRestartFallback": false,  // Allow full rebuild when resume is not possible (default: false for safety)
       "allowDestructiveRecovery": false   // Allow destructive recovery for corrupt storage (default: false)
-    },
+    }
     // Optional code-index scope filters. Omit both to use MCP server defaults (env vars CODE_INDEX_INCLUDE_PATTERNS / CODE_INDEX_EXCLUDE_PATTERNS).
     // Empty array [] is meaningful: it disables that side of filtering entirely.
     // Values are project-relative glob patterns using / separators, must not start with /.
@@ -176,6 +180,14 @@
     "projectKnowledgeTimeoutMs": 15000,
     // Timeout for learning memory retrieval MCP calls (ms).
     "learningMemoryTimeoutMs": 10000,
+    // Timeout for server-side memory_bootstrap calls (ms).
+    "bootstrapTimeoutMs": 10000,
+    // Timeout for memory_observation_create hook evidence writes (ms).
+    "observationTimeoutMs": 10000,
+    // Timeout for memory_audit calls (ms).
+    "auditTimeoutMs": 10000,
+    // Timeout for memory_search_trace calls (ms).
+    "searchTraceTimeoutMs": 10000,
     // TTL for project_info in-memory cache (ms). Default: 5 minutes.
     "projectInfoCacheTtlMs": 300000
   }

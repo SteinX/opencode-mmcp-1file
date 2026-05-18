@@ -129,6 +129,8 @@ describe("loadConfig", () => {
     expect(config.chatMessage.maxKnowledgeGraphItems).toBe(10)
     expect(config.chatMessage.knowledgeGraphRelatedDepth).toBe(1)
     expect(config.chatMessage.knowledgeGraphEntityMatch).toBe(true)
+    expect(config.chatMessage.bootstrapLimit).toBe(10)
+    expect(config.chatMessage.bootstrapTokenBudget).toBe(4000)
     expect(config.chatMessage.projectKnowledgeTiers).toEqual([
       { categories: ["USER"], limit: 5 },
       { categories: ["DECISION", "PATTERN"], limit: 5 },
@@ -164,8 +166,14 @@ describe("loadConfig", () => {
     })
     expect(config.memoryScope.shareAcrossAgents).toBe(true)
     expect(config.memoryScope.includeAgentMetadata).toBe(true)
+    expect(config.compaction.bootstrapLimit).toBe(5)
+    expect(config.compaction.bootstrapTokenBudget).toBe(1500)
     expect(config.mcpServer.reconnectIntervalMs).toBe(30000)
     expect(config.mcpServer.heartbeatIntervalMs).toBe(20000)
+    expect(config.performance.bootstrapTimeoutMs).toBe(10000)
+    expect(config.performance.observationTimeoutMs).toBe(10000)
+    expect(config.performance.auditTimeoutMs).toBe(10000)
+    expect(config.performance.searchTraceTimeoutMs).toBe(10000)
   })
 
   it("loads and merges JSONC config file", () => {
@@ -223,6 +231,41 @@ describe("loadConfig", () => {
     expect(config.mcpServer.reconnectIntervalMs).toBe(45000)
     expect(config.mcpServer.heartbeatIntervalMs).toBe(15000)
     expect(config.mcpServer.port).toBe(23817)
+  })
+
+  it("merges bootstrap and orchestration timeout overrides", () => {
+    vi.mocked(existsSync).mockImplementation((p) =>
+      String(p).endsWith("opencode-mmcp-1file.jsonc"),
+    )
+    vi.mocked(readFileSync).mockReturnValue(
+      `{
+        "chatMessage": {
+          "bootstrapLimit": 12,
+          "bootstrapTokenBudget": 5000
+        },
+        "compaction": {
+          "bootstrapLimit": 6,
+          "bootstrapTokenBudget": 1800
+        },
+        "performance": {
+          "bootstrapTimeoutMs": 7000,
+          "observationTimeoutMs": 8000,
+          "auditTimeoutMs": 9000,
+          "searchTraceTimeoutMs": 11000
+        }
+      }`,
+    )
+
+    const config = loadConfig("/dir")
+    expect(config.chatMessage.bootstrapLimit).toBe(12)
+    expect(config.chatMessage.bootstrapTokenBudget).toBe(5000)
+    expect(config.compaction.bootstrapLimit).toBe(6)
+    expect(config.compaction.bootstrapTokenBudget).toBe(1800)
+    expect(config.performance.bootstrapTimeoutMs).toBe(7000)
+    expect(config.performance.observationTimeoutMs).toBe(8000)
+    expect(config.performance.auditTimeoutMs).toBe(9000)
+    expect(config.performance.searchTraceTimeoutMs).toBe(11000)
+    expect(config.performance.recallTimeoutMs).toBe(15000)
   })
 
   it("merges preferenceLearning overrides while preserving defaults", () => {

@@ -41,6 +41,7 @@ import {
   deleteLearningMemory,
 } from "./learning-memory-client.js"
 import { annotateCodeIntelResponse, annotateProjectStatusResponse } from "../utils/code-intel-annotations.js"
+import { getMemoryAudit, getMemorySearchTrace } from "./memory-orchestration.js"
 
 const UNAVAILABLE_MESSAGE =
   "Memory server temporarily unavailable — auto-reconnecting. " +
@@ -104,6 +105,13 @@ function projectionRequestDefaults(args: {
     relationScope: args.relation_scope ?? "all",
     sortMode: args.sort_mode ?? "canonical",
   }
+}
+
+function traceModeForServer(mode?: "auto" | "semantic" | "keyword"): "recall" | "vector" | "bm25" | undefined {
+  if (mode === "auto") return "recall"
+  if (mode === "semantic") return "vector"
+  if (mode === "keyword") return "bm25"
+  return undefined
 }
 
 async function getFreshProjectProjection(config: PluginConfig, args: {
@@ -193,6 +201,38 @@ export function buildToolRegistry(config: PluginConfig, directory?: string): Too
         }
 
         return proxy("recall", { query: args.query, limit, ...scopeArgs })
+      },
+    }),
+
+    memory_audit: tool({
+      description:
+        "Read a server-owned memory lifecycle/debug audit. Use for support, degraded memory diagnostics, GC backlog, and learning-memory readiness. This is read-only.",
+      args: {
+        detail: tool.schema.enum(["summary", "full"]).optional(),
+      },
+      execute: async (args) => {
+        if (isConnectionFailed(connectionKey)) return UNAVAILABLE_MESSAGE
+        const result = await getMemoryAudit(config, { detail: args.detail ?? "summary" })
+        return JSON.stringify(result)
+      },
+    }),
+
+    memory_trace: tool({
+      description:
+        "Explain how memory search selected or ranked results. Use when a result looks surprising or when debugging retrieval quality. This is read-only.",
+      args: {
+        query: tool.schema.string(),
+        limit: tool.schema.number().optional(),
+        mode: tool.schema.enum(["auto", "semantic", "keyword"]).optional(),
+      },
+      execute: async (args) => {
+        if (isConnectionFailed(connectionKey)) return UNAVAILABLE_MESSAGE
+        const callArgs: Record<string, unknown> = { query: args.query }
+        if (args.limit !== undefined) callArgs.limit = args.limit
+        const mode = traceModeForServer(args.mode)
+        if (mode !== undefined) callArgs.mode = mode
+        const result = await getMemorySearchTrace(config, callArgs)
+        return JSON.stringify(result)
       },
     }),
 

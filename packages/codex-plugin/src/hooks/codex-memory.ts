@@ -1,5 +1,7 @@
 import {
   buildCompactionRecoveryContext,
+  buildBootstrapContext,
+  createHookObservation,
   fetchAndFormatMemories,
   loadConfig,
   resolveDataDir,
@@ -12,6 +14,7 @@ import {
 } from "mmcp-1file-core"
 import { readCodexBuiltinMemorySummary, readStableRepoGuidance } from "./codex-builtins.js"
 
+const CODEX_BOOTSTRAP_TIMEOUT_MS = 5_000
 const ENGLISH_CONTINUE_PATTERN = /\b(?:continue|resume|keep going)\b/i
 const CHINESE_CONTINUE_PATTERN = /(?:继续|接着|恢复)/
 
@@ -32,6 +35,19 @@ function joinContext(parts: Array<{ title: string; text: string | null }>): stri
     .join("\n\n")
 }
 
+async function withFallback<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), timeoutMs)
+  })
+  return Promise.race([
+    promise.finally(() => {
+      if (timer) clearTimeout(timer)
+    }),
+    timeout,
+  ])
+}
+
 export async function buildPromptContext(args: {
   cwd: string
   sessionId?: string
@@ -41,7 +57,25 @@ export async function buildPromptContext(args: {
   const config = loadConfig(args.cwd)
   if (!resolveDataDir(config)) return null
 
-  const memoryContext = await fetchAndFormatMemories(config, args.prompt)
+  const bootstrapTimeoutMs = Math.min(
+    config.performance?.bootstrapTimeoutMs ?? CODEX_BOOTSTRAP_TIMEOUT_MS,
+    CODEX_BOOTSTRAP_TIMEOUT_MS,
+  )
+  const bootstrapContext = await withFallback(
+    buildBootstrapContext(config, {
+      prompt: args.prompt,
+      compactSummary: args.compactSummary,
+      limit: config.chatMessage.bootstrapLimit ?? 10,
+      tokenBudget: config.chatMessage.bootstrapTokenBudget ?? 4000,
+      context: {
+        runId: args.sessionId,
+        namespace: config.memoryScope.namespace,
+      },
+    }),
+    bootstrapTimeoutMs,
+    null,
+  )
+  const memoryContext = bootstrapContext?.text ?? await fetchAndFormatMemories(config, args.prompt)
   const shouldRecover = shouldBuildRecovery(args.prompt, args.compactSummary)
   const recovery = shouldRecover
     ? await buildCompactionRecoveryContext(config, args.compactSummary)
@@ -116,7 +150,19 @@ export async function captureTaskLedger(args: {
       content = `${category}: ${content}`
     }
 
-    const ok = await storeMemory(config, content, "episodic", {
+    const ok = await createHookObservation(config, {
+      content,
+      source: "codex-hook",
+      eventType: "stop_ledger",
+      confidence: 0.8,
+      redactionState: config.privacy.enabled ? "redacted" : "raw",
+      memoryType: "episodic",
+      context: {
+        runId: args.sessionId,
+        metadata: { source: "codex.stop", hook: "Stop" },
+      },
+      metadata: { source: "codex.stop", hook: "Stop" },
+    }) || await storeMemory(config, content, "episodic", {
       runId: args.sessionId,
       metadata: { source: "codex.stop" },
     })
