@@ -64,6 +64,7 @@ import {
 import { formatLearningMemoryInjection } from "./services/learning-memory-format.js"
 import { buildToolRegistry } from "./services/tool-registry.js"
 import { ensureCodeIndexFresh, resetCodeIndexSyncState } from "./services/code-index-sync.js"
+import { buildBootstrapContext, createHookObservation } from "./services/memory-orchestration.js"
 import type { PluginConfig } from "./config.js"
 
 const plugin: Plugin = async (input) => {
@@ -243,19 +244,32 @@ const plugin: Plugin = async (input) => {
         return
       }
 
-      const formattedPromise = shouldInjectExistingMemories
+      const bootstrap = shouldInjectExistingMemories
+        ? await withTimeout(buildBootstrapContext(config, {
+            prompt: userText,
+            limit: config.chatMessage.bootstrapLimit ?? 10,
+            tokenBudget: config.chatMessage.bootstrapTokenBudget ?? 4000,
+            context: {
+              runId: hookInput.sessionID,
+              namespace: config.memoryScope.namespace,
+            },
+          }), config.performance?.bootstrapTimeoutMs ?? 10_000, { fallback: null, label: "memory-bootstrap" })
+        : null
+      const useLegacyMemorySources = shouldInjectExistingMemories && !bootstrap
+
+      const formattedPromise = useLegacyMemorySources
         && shouldInjectQueryRecall(config, hookInput.sessionID, isAfterCompaction)
         ? withTimeout(fetchAndFormatMemories(config, userText), config.performance?.recallTimeoutMs ?? 15_000, { fallback: null, label: "recall" })
         : Promise.resolve(null)
-      const projectKnowledgePromise = shouldInjectExistingMemories
+      const projectKnowledgePromise = useLegacyMemorySources
         && shouldInjectProjectKnowledge(config, hookInput.sessionID, isAfterCompaction)
         ? withTimeout(fetchProjectKnowledge(config), config.performance?.projectKnowledgeTimeoutMs ?? 15_000, { fallback: null, label: "project-knowledge" })
         : Promise.resolve(null)
-      const codeIntelPromise = shouldInjectExistingMemories
+      const codeIntelPromise = useLegacyMemorySources
         && shouldInjectCodeIntel(config, hookInput.sessionID, isAfterCompaction)
         ? withTimeout(fetchCodeIntelContext(config), config.performance?.projectInfoTimeoutMs ?? 10_000, { fallback: null, label: "code-intel" })
         : Promise.resolve(null)
-      const knowledgeGraphPromise = shouldInjectExistingMemories
+      const knowledgeGraphPromise = useLegacyMemorySources
         && shouldInjectKnowledgeGraph(config, hookInput.sessionID, isAfterCompaction)
         ? withTimeout(fetchKnowledgeGraphContext(config, userText), config.performance?.knowledgeGraphTimeoutMs ?? 10_000, { fallback: null, label: "knowledge-graph" })
         : Promise.resolve(null)
@@ -316,6 +330,18 @@ const plugin: Plugin = async (input) => {
         ]
 
       const injectedSources: InjectionSource[] = []
+
+      if (bootstrap?.text) {
+        output.parts.unshift({
+          id: `prt-memory-bootstrap-${Date.now()}`,
+          sessionID: hookInput.sessionID,
+          messageID: output.message.id || `msg-memory-fallback-${Date.now()}`,
+          type: "text" as const,
+          text: bootstrap.text,
+          synthetic: true,
+        } as any)
+        injectedSources.push("query_recall", "project_knowledge", "code_intel", "knowledge_graph")
+      }
 
       if (formatted) {
         const syntheticPart = {
@@ -755,7 +781,19 @@ async function captureCompactionSummary(
       if (isFullyPrivate(content)) return
     }
 
-    await storeMemory(config, content, "episodic")
+    await createHookObservation(config, {
+      content,
+      source: "opencode-hook",
+      eventType: "compact_summary",
+      confidence: 0.8,
+      redactionState: config.privacy.enabled ? "redacted" : "raw",
+      memoryType: "episodic",
+      context: {
+        runId: sessionID,
+        metadata: { source: "compaction", hook: "message.updated" },
+      },
+      metadata: { source: "compaction", hook: "message.updated" },
+    })
 
     void learnFromCompactionSummary(config, content, {
       source: "compaction",

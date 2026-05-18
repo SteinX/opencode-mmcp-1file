@@ -570,6 +570,17 @@ interface ClientState {
 const clientStates = new Map<string, ClientState>()
 const connectionFailureHandlers = new Map<string, () => void>()
 
+export type MemoryClientLifecycleEvent = "reset" | "disconnect" | "failure"
+
+export interface MemoryClientLifecycleNotification {
+  event: MemoryClientLifecycleEvent
+  connectionKey: string
+}
+
+type MemoryClientLifecycleHandler = (notification: MemoryClientLifecycleNotification) => void
+
+const lifecycleHandlers = new Set<MemoryClientLifecycleHandler>()
+
 function createClientState(key: string): ClientState {
   return {
     key,
@@ -611,6 +622,23 @@ function getClientState(config: PluginConfig): ClientState {
   const state = createClientState(key)
   clientStates.set(key, state)
   return state
+}
+
+export function registerMemoryClientLifecycleHandler(
+  handler: MemoryClientLifecycleHandler,
+): () => void {
+  lifecycleHandlers.add(handler)
+  return () => lifecycleHandlers.delete(handler)
+}
+
+function notifyMemoryClientLifecycle(event: MemoryClientLifecycleEvent, connectionKey: string): void {
+  for (const handler of lifecycleHandlers) {
+    try {
+      handler({ event, connectionKey })
+    } catch (err) {
+      logger.debug("memory client lifecycle handler failed", { event, connectionKey, error: String(err) })
+    }
+  }
 }
 
 function collectErrorText(value: unknown, depth = 0, seen = new Set<unknown>()): string {
@@ -747,6 +775,7 @@ function notifyConnectionFailure(state: ClientState): void {
 
 async function failActiveConnection(state: ClientState): Promise<void> {
   await disposeClient(state)
+  notifyMemoryClientLifecycle("failure", state.key)
   notifyConnectionFailure(state)
 }
 
@@ -756,6 +785,7 @@ async function resetClientConnection(config: PluginConfig): Promise<Client> {
 
   state.resetConnectionPromise = (async () => {
     await disposeClient(state)
+    notifyMemoryClientLifecycle("reset", state.key)
 
     const client = await connectToServer(config)
     state.client = client
@@ -1200,6 +1230,15 @@ export async function callMemoryTool(
   return extractTextResult(result)
 }
 
+export async function callMemoryToolJson(
+  config: PluginConfig,
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown> | null> {
+  const result = await callToolWithRetry(config, toolName, args)
+  return extractJsonRecord(result)
+}
+
 export async function disconnectMemoryClient(config?: PluginConfig): Promise<void> {
   if (config) {
     const key = getClientKey(config)
@@ -1208,10 +1247,12 @@ export async function disconnectMemoryClient(config?: PluginConfig): Promise<voi
       await disposeClient(state)
       clientStates.delete(key)
     }
+    notifyMemoryClientLifecycle("disconnect", key)
   } else {
     for (const [key, state] of clientStates) {
       await disposeClient(state)
       clientStates.delete(key)
+      notifyMemoryClientLifecycle("disconnect", key)
     }
   }
 
@@ -1232,11 +1273,13 @@ export async function resetMemoryClientForServerControl(config?: PluginConfig): 
 
     await disposeClient(state)
     clientStates.delete(key)
+    notifyMemoryClientLifecycle("reset", key)
     return
   }
 
   for (const [key, state] of clientStates) {
     await disposeClient(state)
     clientStates.delete(key)
+    notifyMemoryClientLifecycle("reset", key)
   }
 }

@@ -78,6 +78,11 @@ vi.mock("../../src/services/learning-memory-client.js", () => ({
   deleteLearningMemory: vi.fn().mockResolvedValue({ status: "ok" }),
 }))
 
+vi.mock("../../src/services/memory-orchestration.js", () => ({
+  getMemoryAudit: vi.fn().mockResolvedValue({ status: "ok" }),
+  getMemorySearchTrace: vi.fn().mockResolvedValue({ query: "test", steps: [] }),
+}))
+
 const {
   callMemoryTool,
   getMemoryClient,
@@ -109,6 +114,10 @@ const {
   migrateLegacyLearningMemories,
   deleteLearningMemory,
 } = await import("../../src/services/learning-memory-client.js")
+const {
+  getMemoryAudit,
+  getMemorySearchTrace,
+} = await import("../../src/services/memory-orchestration.js")
 
 function makeConfig(
   overrides?: Partial<Omit<PluginConfig, "codeIndexSync">> & { codeIndexSync?: Partial<PluginConfig["codeIndexSync"]> },
@@ -150,13 +159,16 @@ const mockContext = {
 describe("buildToolRegistry", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(isConnectionFailed).mockReturnValue(false)
   })
 
-  it("returns 28 unified tools", () => {
+  it("returns 30 unified tools", () => {
     const tools = buildToolRegistry(makeConfig())
     const toolNames = Object.keys(tools)
     expect(toolNames).toEqual([
       "memory_query",
+      "memory_audit",
+      "memory_trace",
       "memory_migrate",
       "memory_save",
       "memory_manage",
@@ -308,6 +320,58 @@ describe("memory_query tool", () => {
         metadataFilter: { kind: "decision" },
       }),
     )
+  })
+})
+
+describe("memory audit and trace tools", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("memory_audit returns server audit JSON", async () => {
+    const config = makeConfig()
+    vi.mocked(getMemoryAudit).mockResolvedValue({ status: "ok", memory_health: { status: "healthy" } })
+    const tools = buildToolRegistry(config)
+
+    const result = await tools.memory_audit.execute({ detail: "summary" }, mockContext)
+
+    expect(JSON.parse(result)).toEqual({ status: "ok", memory_health: { status: "healthy" } })
+    expect(getMemoryAudit).toHaveBeenCalledWith(config, { detail: "summary" })
+  })
+
+  it("memory_trace returns server search trace JSON", async () => {
+    const config = makeConfig()
+    vi.mocked(getMemorySearchTrace).mockResolvedValue({ query: "bootstrap", steps: [] })
+    const tools = buildToolRegistry(config)
+
+    const result = await tools.memory_trace.execute({ query: "bootstrap", limit: 5 }, mockContext)
+
+    expect(JSON.parse(result)).toEqual({ query: "bootstrap", steps: [] })
+    expect(getMemorySearchTrace).toHaveBeenCalledWith(config, { query: "bootstrap", limit: 5 })
+  })
+
+  it("memory_trace maps friendly modes to server trace modes", async () => {
+    const config = makeConfig()
+    vi.mocked(getMemorySearchTrace).mockResolvedValue({ query: "bootstrap", steps: [] })
+    const tools = buildToolRegistry(config)
+
+    await tools.memory_trace.execute({ query: "bootstrap", mode: "auto" }, mockContext)
+    await tools.memory_trace.execute({ query: "bootstrap", mode: "semantic" }, mockContext)
+    await tools.memory_trace.execute({ query: "bootstrap", mode: "keyword" }, mockContext)
+
+    expect(getMemorySearchTrace).toHaveBeenNthCalledWith(1, config, { query: "bootstrap", mode: "recall" })
+    expect(getMemorySearchTrace).toHaveBeenNthCalledWith(2, config, { query: "bootstrap", mode: "vector" })
+    expect(getMemorySearchTrace).toHaveBeenNthCalledWith(3, config, { query: "bootstrap", mode: "bm25" })
+  })
+
+  it("memory_audit returns unavailable message when disconnected", async () => {
+    vi.mocked(isConnectionFailed).mockReturnValueOnce(true)
+    const tools = buildToolRegistry(makeConfig())
+
+    const result = await tools.memory_audit.execute({ detail: "summary" }, mockContext)
+
+    expect(result).toContain("Memory server temporarily unavailable")
+    expect(getMemoryAudit).not.toHaveBeenCalled()
   })
 })
 

@@ -26,6 +26,10 @@ describe("performance config", () => {
       knowledgeGraphTimeoutMs: 10_000,
       projectKnowledgeTimeoutMs: 15_000,
       learningMemoryTimeoutMs: 10_000,
+      bootstrapTimeoutMs: 10_000,
+      observationTimeoutMs: 10_000,
+      auditTimeoutMs: 10_000,
+      searchTraceTimeoutMs: 10_000,
       projectInfoCacheTtlMs: 300_000,
     })
   })
@@ -56,6 +60,10 @@ describe("performance config", () => {
       knowledgeGraphTimeoutMs: 10_000,
       projectKnowledgeTimeoutMs: 15_000,
       learningMemoryTimeoutMs: 10_000,
+      bootstrapTimeoutMs: 10_000,
+      observationTimeoutMs: 10_000,
+      auditTimeoutMs: 10_000,
+      searchTraceTimeoutMs: 10_000,
       projectInfoCacheTtlMs: 300_000,
     })
   })

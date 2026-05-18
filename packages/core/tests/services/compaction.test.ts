@@ -9,7 +9,12 @@ vi.mock("../../src/utils/logger.js", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }))
 
+vi.mock("../../src/services/memory-orchestration.js", () => ({
+  buildBootstrapContext: vi.fn().mockResolvedValue(null),
+}))
+
 const { recallMemories, searchMemoryResult } = await import("../../src/services/mcp-client.js")
+const { buildBootstrapContext } = await import("../../src/services/memory-orchestration.js")
 import { buildCompactionRecoveryContext } from "../../src/services/compaction.js"
 import type { PluginConfig } from "../../src/config.js"
 
@@ -33,6 +38,7 @@ function makeConfig(overrides?: Partial<Pick<PluginConfig, "compaction">>): Plug
 describe("buildCompactionRecoveryContext", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(buildBootstrapContext).mockResolvedValue(null)
   })
 
   it("returns null when compaction is disabled", async () => {
@@ -50,6 +56,33 @@ describe("buildCompactionRecoveryContext", () => {
     expect(result).not.toBeNull()
     expect(result!.count).toBe(0)
     expect(result!.text).toContain("compacted")
+  })
+
+  it("prefers memory_bootstrap recovery when available", async () => {
+    const config = makeConfig()
+    vi.mocked(buildBootstrapContext).mockResolvedValue({
+      text: "[MEMORY BOOTSTRAP] Active Tasks\n- TASK: continue migration",
+      count: 1,
+      usedFallback: false,
+      raw: {},
+    })
+
+    const result = await buildCompactionRecoveryContext(config, "compact summary")
+
+    expect(result).toEqual({
+      text: "[MEMORY BOOTSTRAP] Active Tasks\n- TASK: continue migration",
+      count: 1,
+      skippedSimilarToSummary: 0,
+    })
+    expect(buildBootstrapContext).toHaveBeenCalledWith(config, {
+      prompt: "continue",
+      compactSummary: "compact summary",
+      limit: 5,
+      tokenBudget: 1500,
+      context: undefined,
+    })
+    expect(searchMemoryResult).not.toHaveBeenCalled()
+    expect(recallMemories).not.toHaveBeenCalled()
   })
 
   it("includes task memories in recovery context", async () => {

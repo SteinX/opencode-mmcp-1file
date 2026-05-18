@@ -1,5 +1,5 @@
 import type { PluginConfig } from "../config.js"
-import { storeMemory } from "./mcp-client.js"
+import { createHookObservation } from "./memory-orchestration.js"
 import { stripPrivateContent, isFullyPrivate } from "../utils/privacy.js"
 
 interface SessionMessages {
@@ -72,9 +72,21 @@ export async function performAutoCapture(
       if (isFullyPrivate(content)) return false
     }
 
-    const stored = await storeMemory(config, content, parsed.memoryType, {
-      runId: sessionID,
-      metadata: parsed.tags.length > 0 ? { capture_tags: parsed.tags } : undefined,
+    const metadata = parsed.tags.length > 0
+      ? { capture_tags: parsed.tags, hook: "session.idle" }
+      : { hook: "session.idle" }
+    const stored = await createHookObservation(config, {
+      content,
+      source: "opencode-hook",
+      eventType: "session_idle",
+      confidence: 0.8,
+      redactionState: config.privacy.enabled ? "redacted" : "raw",
+      memoryType: parsed.memoryType,
+      context: {
+        runId: sessionID,
+        metadata,
+      },
+      metadata,
     })
 
     if (stored) {

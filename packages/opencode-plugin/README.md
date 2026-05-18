@@ -89,6 +89,8 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
     "maxKnowledgeGraphItems": 10,   // Max related entities to inject from the graph
     "knowledgeGraphRelatedDepth": 1, // Traversal depth for related entity lookup
     "knowledgeGraphEntityMatch": true, // Enable automatic entity matching in conversation
+    "bootstrapLimit": 10,            // Server-side memory_bootstrap result limit for normal prompt context
+    "bootstrapTokenBudget": 4000,    // Server-side memory_bootstrap token budget for normal prompt context
     // Tiered injection: prioritize explicit user-requested memories first, then project guidance.
     // Set to null to disable and use flat recency-based list.
     "projectKnowledgeTiers": [
@@ -108,7 +110,9 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
   // Memory recovery after context compaction (READ)
   "compaction": {
     "enabled": true,
-    "memoryLimit": 10
+    "memoryLimit": 10,
+    "bootstrapLimit": 5,             // Server-side memory_bootstrap result limit for recovery context
+    "bootstrapTokenBudget": 1500     // Server-side memory_bootstrap token budget for recovery context
   },
 
   // Keyword detection for explicit memory requests
@@ -148,7 +152,7 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
       "maxPollMs": 300000,                // Maximum time to wait for resume completion (ms, 5 min)
       "allowFullRestartFallback": false,  // Allow full rebuild when resume is not possible (default: false for safety)
       "allowDestructiveRecovery": false   // Allow destructive recovery for corrupt storage (default: false)
-    },
+    }
     // Optional code-index scope filters. Omit both to use MCP server defaults (env vars CODE_INDEX_INCLUDE_PATTERNS / CODE_INDEX_EXCLUDE_PATTERNS).
     // Empty array [] is meaningful: it disables that side of filtering entirely.
     // Values are project-relative glob patterns using / separators, must not start with /.
@@ -246,6 +250,10 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
     "knowledgeGraphTimeoutMs": 10000,  // Timeout for knowledge graph entity lookup MCP calls (ms)
     "projectKnowledgeTimeoutMs": 15000, // Timeout for project knowledge retrieval MCP calls (ms)
     "learningMemoryTimeoutMs": 10000,  // Timeout for learning memory retrieval MCP calls (ms)
+    "bootstrapTimeoutMs": 10000,     // Timeout for server-side memory_bootstrap calls (ms)
+    "observationTimeoutMs": 10000,   // Timeout for memory_observation_create hook evidence writes (ms)
+    "auditTimeoutMs": 10000,         // Timeout for memory_audit calls (ms)
+    "searchTraceTimeoutMs": 10000,   // Timeout for memory_search_trace calls (ms)
     "projectInfoCacheTtlMs": 300000    // TTL for project_info in-memory cache (ms). Default: 5 minutes.
   }
 }
@@ -255,9 +263,9 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
 
 | Section | Purpose |
 |---------|---------|
-| **chatMessage** | Controls memory retrieval and injection into the chat stream |
+| **chatMessage** | Controls memory retrieval, server-side bootstrap budgets, and injection into the chat stream |
 | **autoCapture** | Idle-time memory extraction via external LLM |
-| **compaction** | Memory re-injection after context compaction |
+| **compaction** | Memory re-injection after context compaction, including bootstrap recovery budgets |
 | **keywordDetection** | Detection of "remember" requests in user messages |
 | **preemptiveCompaction** | Early compaction trigger based on token estimates |
 | **privacy** | Redaction of `<private>` tagged content |
@@ -269,7 +277,7 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
 | **memoryScope** | Logical scope, agent-sharing defaults, and default metadata layered inside the current shard |
 | **mcpServer** | [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server command, physical data shard, embedding model, transport mode, and HTTP reconnect/heartbeat timing |
 | **systemPrompt** | Agent guidance via Memory Protocol in system prompt |
-| **performance** | Per-call MCP timeouts (recall, project info, knowledge graph, project knowledge, learning memory) and in-memory cache TTL for `project_info`. Increase timeout values for large databases (>10k memories). |
+| **performance** | Per-call timeouts for recall, bootstrap, observation, audit, trace, project info, knowledge graph, project knowledge, learning memory, and project-info caching. Increase timeout values for large databases (>10k memories). |
 
 By default, `USER:` memories are prioritized ahead of `DECISION:`, `PATTERN:`, and `CONTEXT:` in Project Knowledge. This keeps explicit user-requested memories more visible during session bootstrap and compaction recovery.
 
