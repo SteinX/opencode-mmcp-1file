@@ -391,6 +391,31 @@ describe("createHookObservation", () => {
       expect.anything(),
     )
   })
+
+  it("falls back to storeMemory when observation returns top-level unsupported", async () => {
+    const config = makeConfig()
+    mcp.getMemoryConnectionKey.mockReturnValue("key-top-level-unsupported-observation")
+    mcp.discoverTools.mockResolvedValue(["memory_observation_create"])
+    mcp.callMemoryToolJson.mockResolvedValue({
+      status: "unsupported",
+      reason_code: "unsupported",
+    })
+    mcp.storeMemory.mockResolvedValue(true)
+
+    await expect(createHookObservation(config, {
+      content: "DECISION: keep fallback for compatibility envelopes",
+      source: "codex-hook",
+      eventType: "stop_ledger",
+      memoryType: "episodic",
+    })).resolves.toBe(true)
+
+    expect(mcp.storeMemory).toHaveBeenCalledWith(
+      config,
+      "DECISION: keep fallback for compatibility envelopes",
+      "episodic",
+      expect.anything(),
+    )
+  })
 })
 
 describe("audit and trace wrappers", () => {

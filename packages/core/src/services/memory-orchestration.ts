@@ -283,8 +283,15 @@ function mergeObservationMetadata(config: PluginConfig, request: HookObservation
 }
 
 function partialReasonCode(raw: Record<string, unknown>): string | undefined {
-  if (!isRecord(raw.summary) || !isRecord(raw.summary.partial)) return undefined
-  return asString(raw.summary.partial.reason_code)
+  const summaryReasonCode = isRecord(raw.summary) && isRecord(raw.summary.partial)
+    ? asString(raw.summary.partial.reason_code)
+    : undefined
+  if (summaryReasonCode) return summaryReasonCode
+
+  const topLevelReasonCode = asString(raw.reason_code)
+  if (topLevelReasonCode) return topLevelReasonCode
+
+  return asString(raw.status) === "unsupported" ? "unsupported" : undefined
 }
 
 function unsupportedResponse(tool: ServerOrchestrationTool): Record<string, unknown> {
