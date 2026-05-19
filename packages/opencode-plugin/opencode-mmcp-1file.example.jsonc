@@ -150,7 +150,7 @@
 
   // MCP server configuration (memory-mcp-1file)
   "mcpServer": {
-    "command": ["npm", "exec", "-y", "memory-mcp-1file", "--"],
+    "command": ["npm", "exec", "-y", "@steinx/memory-mcp-1file", "--"],
     "tag": "default",                // Physical storage shard; derives dataDir as ~/.local/share/opencode-mmcp-1file/{tag}
     // "dataDir": "",               // Override: explicit data directory (takes precedence over tag)
     "model": "qwen3",

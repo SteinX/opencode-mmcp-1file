@@ -46,7 +46,7 @@ function makeConfig(dataDir: string): PluginConfig {
     captureModel: { provider: "", model: "", apiUrl: "", apiKey: "" },
     memoryScope: { namespace: "", shareAcrossAgents: true, includeAgentMetadata: true, includeRunMetadata: false, userId: "", defaultMetadata: {} },
     mcpServer: {
-      command: ["npm", "exec", "-y", "memory-mcp-1file", "--"],
+      command: ["npm", "exec", "-y", "@steinx/memory-mcp-1file", "--"],
       tag: "",
       dataDir,
       model: "qwen3",

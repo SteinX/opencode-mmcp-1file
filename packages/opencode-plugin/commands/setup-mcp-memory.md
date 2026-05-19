@@ -85,6 +85,19 @@ Ask the user these questions (adapt based on their answers — skip what's alrea
 
 Based on the user's answers, generate a `opencode-mmcp-1file.jsonc` file. Use the template below, including ONLY sections the user customized (omit sections where defaults are fine — the plugin uses defaults for missing sections).
 
+The default MCP server package is `@steinx/memory-mcp-1file`, published to GitHub Packages. Do not write npm auth tokens into this config. If the package has not been installed on this machine before, tell the user to configure npm separately with either:
+
+```bash
+npm login --scope=@steinx --auth-type=legacy --registry=https://npm.pkg.github.com
+```
+
+or an equivalent `~/.npmrc` entry:
+
+```ini
+@steinx:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=YOUR_GITHUB_PACKAGES_TOKEN
+```
+
 **Full template** (include only relevant sections):
 
 ```jsonc
@@ -180,7 +193,7 @@ Based on the user's answers, generate a `opencode-mmcp-1file.jsonc` file. Use th
 
   // MCP server configuration
   "mcpServer": {
-    "command": ["npm", "exec", "-y", "memory-mcp-1file", "--"],
+    "command": ["npm", "exec", "-y", "@steinx/memory-mcp-1file", "--"],
     "tag": "",                       // Physical storage shard / dataDir selector
     "model": "qwen3",
     "mcpServerName": "memory-mcp-1file"

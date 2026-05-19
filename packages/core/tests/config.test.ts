@@ -137,6 +137,7 @@ describe("loadConfig", () => {
       { categories: ["CONTEXT"], limit: 5 },
     ])
     expect(config.mcpServer.tag).toBe("")
+    expect(config.mcpServer.command).toEqual(["npm", "exec", "-y", "@steinx/memory-mcp-1file", "--"])
     expect(config.privacy.enabled).toBe(true)
     expect(config.codeIndexSync.enabled).toBe(true)
     expect(config.codeIndexSync.autoRefresh).toBe(false)
@@ -553,7 +554,7 @@ describe("applyConfig", () => {
         userId: "",
         defaultMetadata: {},
       },
-      mcpServer: { command: ["npm", "exec", "-y", "memory-mcp-1file", "--"], tag: "", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1", reconnectIntervalMs: 30000, heartbeatIntervalMs: 20000 },
+      mcpServer: { command: ["npm", "exec", "-y", "@steinx/memory-mcp-1file", "--"], tag: "", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1", reconnectIntervalMs: 30000, heartbeatIntervalMs: 20000 },
     })
     const changed = applyConfig(target)
     expect(changed).toEqual([])

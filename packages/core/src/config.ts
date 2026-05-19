@@ -284,7 +284,7 @@ export const DEFAULT_CONFIG: PluginConfig = {
     defaultMetadata: {},
   },
   mcpServer: {
-    command: ["npm", "exec", "-y", "memory-mcp-1file", "--"],
+    command: ["npm", "exec", "-y", "@steinx/memory-mcp-1file", "--"],
     tag: "",
     model: "qwen3",
     mcpServerName: "memory-mcp-1file",
