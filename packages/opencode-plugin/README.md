@@ -158,7 +158,7 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
       "maxPollMs": 300000,                // Maximum time to wait for resume completion (ms, 5 min)
       "allowFullRestartFallback": false,  // Allow full rebuild when resume is not possible (default: false for safety)
       "allowDestructiveRecovery": false   // Allow destructive recovery for corrupt storage (default: false)
-    }
+    },
     // Optional code-index scope filters. Omit both to use MCP server defaults (env vars CODE_INDEX_INCLUDE_PATTERNS / CODE_INDEX_EXCLUDE_PATTERNS).
     // Empty array [] is meaningful: it disables that side of filtering entirely.
     // Values are project-relative glob patterns using / separators, must not start with /.
