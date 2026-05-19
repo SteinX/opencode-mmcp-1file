@@ -75,7 +75,13 @@ export async function buildPromptContext(args: {
     bootstrapTimeoutMs,
     null,
   )
-  const memoryContext = bootstrapContext?.text ?? await fetchAndFormatMemories(config, args.prompt)
+  const bootstrapHasMemories = Boolean(bootstrapContext && bootstrapContext.count > 0)
+  const legacyMemoryContext = bootstrapHasMemories ? null : await fetchAndFormatMemories(config, args.prompt)
+  const memoryContext = [
+    legacyMemoryContext,
+    bootstrapHasMemories ? bootstrapContext?.text : null,
+    !bootstrapHasMemories ? bootstrapContext?.text : null,
+  ].filter((part): part is string => Boolean(part?.trim())).join("\n\n") || null
   const shouldRecover = shouldBuildRecovery(args.prompt, args.compactSummary)
   const recovery = shouldRecover
     ? await buildCompactionRecoveryContext(config, args.compactSummary)

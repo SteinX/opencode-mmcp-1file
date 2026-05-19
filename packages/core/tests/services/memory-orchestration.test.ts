@@ -297,7 +297,7 @@ describe("createHookObservation", () => {
     )
   })
 
-  it("normalizes unsupported observation prefixes to CONTEXT in fallback writes", async () => {
+  it("preserves pattern and bugfix prefixes in legacy fallback writes", async () => {
     const config = makeConfig()
     mcp.getMemoryConnectionKey.mockReturnValue("key-prefixes")
     mcp.discoverTools.mockResolvedValue(["store_memory"])
@@ -319,14 +319,50 @@ describe("createHookObservation", () => {
     expect(mcp.storeMemory).toHaveBeenNthCalledWith(
       1,
       config,
-      "CONTEXT: PATTERN: keep adapter shared",
+      "PATTERN: keep adapter shared",
       "procedural",
       expect.anything(),
     )
     expect(mcp.storeMemory).toHaveBeenNthCalledWith(
       2,
       config,
-      "CONTEXT: BUGFIX: retry cache invalidation",
+      "BUGFIX: retry cache invalidation",
+      "episodic",
+      expect.anything(),
+    )
+  })
+
+  it("uses legacy storage for pattern and bugfix observations while the server observation contract lacks those prefixes", async () => {
+    const config = makeConfig()
+    mcp.getMemoryConnectionKey.mockReturnValue("key-observation-prefixes")
+    mcp.discoverTools.mockResolvedValue(["memory_observation_create"])
+    mcp.storeMemory.mockResolvedValue(true)
+
+    await createHookObservation(config, {
+      content: "PATTERN: keep adapter shared",
+      source: "codex-hook",
+      eventType: "stop_ledger",
+      memoryType: "procedural",
+    })
+    await createHookObservation(config, {
+      content: "BUGFIX: retry cache invalidation",
+      source: "codex-hook",
+      eventType: "stop_ledger",
+      memoryType: "episodic",
+    })
+
+    expect(mcp.callMemoryToolJson).not.toHaveBeenCalled()
+    expect(mcp.storeMemory).toHaveBeenNthCalledWith(
+      1,
+      config,
+      "PATTERN: keep adapter shared",
+      "procedural",
+      expect.anything(),
+    )
+    expect(mcp.storeMemory).toHaveBeenNthCalledWith(
+      2,
+      config,
+      "BUGFIX: retry cache invalidation",
       "episodic",
       expect.anything(),
     )
