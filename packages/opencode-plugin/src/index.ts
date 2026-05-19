@@ -255,7 +255,8 @@ const plugin: Plugin = async (input) => {
             },
           }), config.performance?.bootstrapTimeoutMs ?? 10_000, { fallback: null, label: "memory-bootstrap" })
         : null
-      const useLegacyMemorySources = shouldInjectExistingMemories && !bootstrap
+      const bootstrapHasMemories = Boolean(bootstrap && bootstrap.count > 0)
+      const useLegacyMemorySources = shouldInjectExistingMemories && !bootstrapHasMemories
 
       const formattedPromise = useLegacyMemorySources
         && shouldInjectQueryRecall(config, hookInput.sessionID, isAfterCompaction)
@@ -340,7 +341,9 @@ const plugin: Plugin = async (input) => {
           text: bootstrap.text,
           synthetic: true,
         } as any)
-        injectedSources.push("query_recall", "project_knowledge", "code_intel", "knowledge_graph")
+        if (bootstrapHasMemories) {
+          injectedSources.push("query_recall", "project_knowledge", "code_intel", "knowledge_graph")
+        }
       }
 
       if (formatted) {

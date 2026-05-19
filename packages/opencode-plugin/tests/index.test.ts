@@ -734,6 +734,51 @@ describe("chat.message hook", () => {
     ])
   })
 
+  it("keeps legacy memory sources when server bootstrap has no memories", async () => {
+    const { hooks } = await initPlugin()
+    vi.mocked(shouldInjectMemories).mockReturnValue(true)
+    vi.mocked(shouldInjectQueryRecall).mockReturnValueOnce(true)
+    vi.mocked(shouldInjectProjectKnowledge).mockReturnValueOnce(true)
+    vi.mocked(shouldInjectCodeIntel).mockReturnValueOnce(true)
+    vi.mocked(shouldInjectKnowledgeGraph).mockReturnValueOnce(true)
+    vi.mocked(buildBootstrapContext).mockResolvedValue({
+      text: "[MEMORY BOOTSTRAP] Partial Result\n- reason_code: degraded",
+      count: 0,
+      usedFallback: false,
+      raw: {},
+    })
+    vi.mocked(fetchAndFormatMemories).mockResolvedValue("[MEMORY] legacy recall")
+    vi.mocked(fetchProjectKnowledge).mockResolvedValue("[MEMORY] project knowledge")
+    vi.mocked(fetchCodeIntelContext).mockResolvedValue("[CODE INTELLIGENCE] indexed project")
+    vi.mocked(fetchKnowledgeGraphContext).mockResolvedValue("[KNOWLEDGE GRAPH] Architectural Overview")
+
+    const output = {
+      message: { id: "msg1" },
+      parts: [{ type: "text", text: "implement bootstrap migration" }],
+    }
+
+    await hooks["chat.message"]({ sessionID: "s1" }, output)
+
+    expect(fetchAndFormatMemories).toHaveBeenCalledWith(expect.anything(), "implement bootstrap migration")
+    expect(fetchProjectKnowledge).toHaveBeenCalled()
+    expect(fetchCodeIntelContext).toHaveBeenCalled()
+    expect(fetchKnowledgeGraphContext).toHaveBeenCalledWith(expect.anything(), "implement bootstrap migration")
+    expect(output.parts.map((part: any) => part.text)).toEqual([
+      "[MEMORY] legacy recall",
+      "[MEMORY BOOTSTRAP] Partial Result\n- reason_code: degraded",
+      "implement bootstrap migration",
+      "[MEMORY] project knowledge",
+      "[CODE INTELLIGENCE] indexed project",
+      "[KNOWLEDGE GRAPH] Architectural Overview",
+    ])
+    expect(markSessionInjected).toHaveBeenCalledWith("s1", [
+      "query_recall",
+      "project_knowledge",
+      "code_intel",
+      "knowledge_graph",
+    ])
+  })
+
   it("injects project knowledge and code intel when relevant memories are unavailable", async () => {
     const { hooks } = await initPlugin()
     vi.mocked(shouldInjectMemories).mockReturnValue(true)
