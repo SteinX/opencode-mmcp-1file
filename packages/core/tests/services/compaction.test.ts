@@ -85,6 +85,27 @@ describe("buildCompactionRecoveryContext", () => {
     expect(recallMemories).not.toHaveBeenCalled()
   })
 
+  it("falls back to legacy recovery when memory_bootstrap has diagnostics but no memories", async () => {
+    const config = makeConfig()
+    vi.mocked(buildBootstrapContext).mockResolvedValue({
+      text: "[MEMORY BOOTSTRAP] Partial Result\n- reason_code: degraded",
+      count: 0,
+      usedFallback: false,
+      raw: {},
+    })
+    vi.mocked(searchMemoryResult).mockResolvedValue({ status: "ok", source: "search", memories: [{ id: "1", content: "TASK: continue migration" }] })
+    vi.mocked(recallMemories).mockResolvedValue({ status: "ok", source: "recall", memories: [{ id: "2", content: "DECISION: use bootstrap fallback" }] })
+
+    const result = await buildCompactionRecoveryContext(config, "compact summary")
+
+    expect(result!.count).toBe(2)
+    expect(result!.text).toContain("TASK: continue migration")
+    expect(result!.text).toContain("DECISION: use bootstrap fallback")
+    expect(result!.text).toContain("[MEMORY BOOTSTRAP] Partial Result")
+    expect(searchMemoryResult).toHaveBeenCalledWith(config, "TASK: in_progress", "bm25", 5, undefined)
+    expect(recallMemories).toHaveBeenCalledWith(config, "recent project context and decisions", 10, undefined)
+  })
+
   it("includes task memories in recovery context", async () => {
     const config = makeConfig()
     vi.mocked(searchMemoryResult).mockResolvedValue({ status: "ok", source: "search", memories: [{ id: "1", content: "TASK: implement auth" }] })

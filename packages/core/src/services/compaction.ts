@@ -28,7 +28,8 @@ export async function buildCompactionRecoveryContext(
     tokenBudget: config.compaction.bootstrapTokenBudget ?? 1500,
     context,
   })
-  if (bootstrap) {
+  const bootstrapDiagnostics = bootstrap && bootstrap.count === 0 ? bootstrap.text : null
+  if (bootstrap && bootstrap.count > 0) {
     return {
       text: bootstrap.text,
       count: bootstrap.count,
@@ -61,6 +62,7 @@ export async function buildCompactionRecoveryContext(
     const memoriesText = formatMemoriesForRecovery(taskMemories, contextMemories)
     if (memoriesText) parts.push(memoriesText)
   }
+  if (bootstrapDiagnostics) parts.push(bootstrapDiagnostics)
 
   return {
     text: parts.join("\n\n"),

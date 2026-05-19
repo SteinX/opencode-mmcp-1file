@@ -23,8 +23,15 @@ const LEGAL_MEMORY_PREFIXES = [
   "TASK:",
   "RESEARCH:",
   "DECISION:",
+  "PATTERN:",
+  "BUGFIX:",
   "CONTEXT:",
   "USER:",
+]
+
+const LEGACY_OBSERVATION_STORAGE_PREFIXES = [
+  "PATTERN:",
+  "BUGFIX:",
 ]
 
 export type ServerOrchestrationTool = typeof ORCHESTRATION_TOOLS[number]
@@ -155,7 +162,7 @@ export async function createHookObservation(
   const capabilities = await getServerCapabilities(config)
   const content = ensureLegalPrefix(request.content)
 
-  if (!capabilities.has("memory_observation_create")) {
+  if (!capabilities.has("memory_observation_create") || shouldUseLegacyObservationStorage(content)) {
     return storeObservationFallback(config, request, content)
   }
 
@@ -252,6 +259,11 @@ function ensureLegalPrefix(content: string): string {
   const upper = trimmed.toUpperCase()
   if (LEGAL_MEMORY_PREFIXES.some((prefix) => upper.startsWith(prefix))) return trimmed
   return `CONTEXT: ${trimmed}`
+}
+
+function shouldUseLegacyObservationStorage(content: string): boolean {
+  const upper = content.trim().toUpperCase()
+  return LEGACY_OBSERVATION_STORAGE_PREFIXES.some((prefix) => upper.startsWith(prefix))
 }
 
 function buildScopeArgs(

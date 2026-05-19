@@ -110,6 +110,25 @@ describe("Codex hooks", () => {
     )
   })
 
+  it("keeps legacy recall when Codex bootstrap has diagnostics but no memories", async () => {
+    core.buildBootstrapContext.mockResolvedValue({
+      text: "[MEMORY BOOTSTRAP] Partial Result\n- reason_code: degraded",
+      count: 0,
+      usedFallback: false,
+    })
+
+    const output = await runUserPromptSubmit(JSON.stringify({
+      cwd: "/repo",
+      session_id: "s1",
+      prompt: "implement migration",
+    }))
+
+    const additionalContext = (output as any).hookSpecificOutput.additionalContext
+    expect(additionalContext).toContain("Prefer npm workspaces")
+    expect(additionalContext).toContain("[MEMORY BOOTSTRAP] Partial Result")
+    expect(core.fetchAndFormatMemories).toHaveBeenCalledWith(expect.anything(), "implement migration")
+  })
+
   it("falls back to legacy recall when Codex bootstrap exceeds its hook budget", async () => {
     vi.useFakeTimers()
     core.buildBootstrapContext.mockReturnValue(new Promise(() => undefined))
