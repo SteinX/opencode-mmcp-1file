@@ -266,7 +266,7 @@ function makeConfig(overrides?: Partial<PluginConfig>): PluginConfig {
       userId: "",
       defaultMetadata: {},
     },
-    mcpServer: { command: ["npx", "-y", "memory-mcp-1file"], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1", reconnectIntervalMs: 30000, heartbeatIntervalMs: 20000 },
+    mcpServer: { command: ["npx", "-y", "@steinx/memory-mcp-1file"], tag: "default", model: "qwen3", mcpServerName: "memory-mcp-1file", transport: "stdio", port: 23817, bind: "127.0.0.1", reconnectIntervalMs: 30000, heartbeatIntervalMs: 20000 },
     systemPrompt: { enabled: true },
     ...overrides,
     chatMessage,
@@ -1153,17 +1153,12 @@ describe("chat.message hook", () => {
   })
 
   it("lets typed learningMemory inject without legacy preferenceLearning enabled", async () => {
-    vi.mocked(shouldInjectLearnedPreferences).mockRestore()
-    const { shouldInjectLearnedPreferences: realShouldInjectLearnedPreferences } = await vi.importActual<typeof import("../src/services/preference-learning.js")>(
-      "../src/services/preference-learning.js",
-    )
-    vi.mocked(shouldInjectLearnedPreferences).mockImplementation(realShouldInjectLearnedPreferences)
-
     const { hooks } = await initPlugin({
       learningMemory: { enabled: true },
       preferenceLearning: { ...makeConfig().preferenceLearning, enabled: false },
     })
     vi.mocked(shouldInjectMemories).mockReturnValueOnce(false)
+    vi.mocked(shouldInjectLearnedPreferences).mockReturnValueOnce(true)
     vi.mocked(retrieveRecordsForInjection).mockResolvedValueOnce({
       status: "ok",
       records: [],

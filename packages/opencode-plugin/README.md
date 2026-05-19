@@ -5,7 +5,7 @@
 [![node](https://img.shields.io/node/v/opencode-mmcp-1file)](https://nodejs.org)
 [![GitHub Actions](https://img.shields.io/github/actions/workflow/status/SteinX/opencode-mmcp-1file/npm-publish.yml?label=publish)](https://github.com/SteinX/opencode-mmcp-1file/actions)
 
-Persistent memory for OpenCode agents via [memory-mcp-1file](https://github.com/pomazanbohdan/memory-mcp-1file).
+Persistent memory for OpenCode agents via [memory-mcp-1file](https://github.com/SteinX/memory-mcp-1file).
 
 ## What it does
 
@@ -65,7 +65,13 @@ Add to your OpenCode configuration (`opencode.json` or `~/.config/opencode/confi
 }
 ```
 
-The plugin automatically spawns a [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server via stdio. No separate MCP server configuration needed.
+The plugin automatically spawns the [`@steinx/memory-mcp-1file`](https://github.com/SteinX/memory-mcp-1file) server package via stdio. No separate MCP server configuration is needed, but first-time installs must allow npm to read the `@steinx` package from GitHub Packages:
+
+```bash
+npm login --scope=@steinx --auth-type=legacy --registry=https://npm.pkg.github.com
+```
+
+Or configure `~/.npmrc` with an equivalent `@steinx:registry=https://npm.pkg.github.com` entry and GitHub Packages auth token.
 
 ## Configuration
 
@@ -225,7 +231,7 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
 
   // MCP server configuration (memory-mcp-1file)
   "mcpServer": {
-    "command": ["npm", "exec", "-y", "memory-mcp-1file", "--"],
+    "command": ["npm", "exec", "-y", "@steinx/memory-mcp-1file", "--"],
     "tag": "default",                // Physical storage shard; derives dataDir as ~/.local/share/opencode-mmcp-1file/{tag}
     // "dataDir": "",               // Override: explicit data directory (takes precedence over tag)
     "model": "qwen3",               // Embedding model for vector search
@@ -275,7 +281,7 @@ Create `opencode-mmcp-1file.jsonc` at your project root or `~/.config/opencode/o
 | **learningMemory** | Typed preference/lesson/rule capture from conversational signals. Requires server-side support (`metadata.learning.schema_version = 1`). Only `confirmed`/`rule` records that are `active` and `injectable_by_default=true` are injected into context. Sub-sections: `preferences`, `lessons`, `rules`, `injection`, `fallback`. |
 | **captureModel** | LLM for auto-capture summarization — uses direct HTTP when apiKey is set, otherwise OpenCode session API |
 | **memoryScope** | Logical scope, agent-sharing defaults, and default metadata layered inside the current shard |
-| **mcpServer** | [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server command, physical data shard, embedding model, transport mode, and HTTP reconnect/heartbeat timing |
+| **mcpServer** | [`@steinx/memory-mcp-1file`](https://github.com/SteinX/memory-mcp-1file) server command, physical data shard, embedding model, transport mode, and HTTP reconnect/heartbeat timing |
 | **systemPrompt** | Agent guidance via Memory Protocol in system prompt |
 | **performance** | Per-call timeouts for recall, bootstrap, observation, audit, trace, project info, knowledge graph, project knowledge, learning memory, and project-info caching. Increase timeout values for large databases (>10k memories). |
 
@@ -385,7 +391,7 @@ Plugin hooks (index.ts)
 
 ## How It Works
 
-The plugin spawns a [`memory-mcp-1file`](https://github.com/pomazanbohdan/memory-mcp-1file) server via stdio and registers 28 plugin tools that wrap underlying MCP operations. The agent calls these tools directly; each call is automatically routed to the appropriate MCP operation.
+The plugin spawns the [`@steinx/memory-mcp-1file`](https://github.com/SteinX/memory-mcp-1file) server package via stdio and registers 28 plugin tools that wrap underlying MCP operations. The agent calls these tools directly; each call is automatically routed to the appropriate MCP operation.
 
 `project_projection` is the simple projection/readback entry point. It takes only `project_id` plus optional `locator`, `relation_scope`, and `sort_mode`, returning raw JSON from the server and falling back to a fresh projection when locator readback is unavailable. `project_status` remains part of that same tool surface for indexing lifecycle control and compatibility projection actions. In addition to `list`, `index`, and `stats`, it still supports projection workflows with `action: "projection"` and `action: "projection_by_locator"`. Projection requests default to `relation_scope: "all"` and `sort_mode: "canonical"`, and any locator returned by the server is treated as an opaque, same-process, non-persistable handle.
 

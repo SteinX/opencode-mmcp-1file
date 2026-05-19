@@ -9,7 +9,7 @@ Codex plugin for `memory-mcp-1file`.
 - `Stop` hook captures a task ledger from the transcript and stores reusable facts.
 - Recovery content is additive: it avoids repeating compact summaries and focuses on missing operational context.
 - When supported by the server, hooks prefer `memory_bootstrap` for prompt/recovery context and `memory_observation_create` for stop-time ledger capture. Older servers fall back to the legacy recall and `store_memory` paths.
-- The plugin does not declare a static Codex MCP server. Hooks connect to `memory-mcp-1file` only when the current workspace config enables memory with `mcpServer.tag` or `mcpServer.dataDir`.
+- The plugin does not declare a static Codex MCP server. Hooks use the current workspace config, whose default `mcpServer.command` runs the `@steinx/memory-mcp-1file` package, and connect only when `mcpServer.tag` or `mcpServer.dataDir` enables memory.
 
 ## Marketplace install
 

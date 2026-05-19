@@ -76,7 +76,7 @@ function makeConfig(overrides?: { chatMessage?: Partial<PluginConfig["chatMessag
       defaultMetadata: {},
     },
     mcpServer: {
-      command: ["npx", "-y", "memory-mcp-1file"],
+      command: ["npx", "-y", "@steinx/memory-mcp-1file"],
       tag: "default",
       model: "qwen3",
       transport: "http",
