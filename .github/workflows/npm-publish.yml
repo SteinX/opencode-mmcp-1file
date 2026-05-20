@@ -1,10 +1,10 @@
-name: npm publish
+name: release
 
 on:
   workflow_dispatch:
     inputs:
       package:
-        description: "Workspace package to publish"
+        description: "Package or plugin to release"
         required: true
         type: choice
         options:
@@ -15,7 +15,7 @@ on:
         required: true
         type: string
       dry_run:
-        description: "Run npm publish with --dry-run and skip git tag/release"
+        description: "Run publish/release checks without pushing tags or releases"
         required: true
         default: true
         type: boolean
@@ -24,7 +24,8 @@ permissions:
   contents: write
 
 jobs:
-  publish:
+  opencode-npm:
+    if: ${{ inputs.package == 'opencode-mmcp-1file' }}
     runs-on: ubuntu-latest
     env:
       PACKAGE_NAME: ${{ inputs.package }}
@@ -40,6 +41,9 @@ jobs:
 
       - run: npm ci
 
+      - name: Set selected workspace version
+        run: npm version "$TARGET_VERSION" --workspace "$PACKAGE_NAME" --no-git-tag-version
+
       - run: npm run build --workspaces
 
       - run: npm run test --workspaces
@@ -49,22 +53,6 @@ jobs:
       - run: npm run verify:packages
 
       - run: npm pack --workspace opencode-mmcp-1file --dry-run
-
-      - run: npm pack --workspace codex-mmcp-1file --dry-run
-
-      - name: Set selected workspace version
-        run: npm version "$TARGET_VERSION" --workspace "$PACKAGE_NAME" --no-git-tag-version
-
-      - name: Sync Codex plugin manifest version
-        if: ${{ inputs.package == 'codex-mmcp-1file' }}
-        run: |
-          node -e '
-            const fs = require("node:fs");
-            const path = "packages/codex-plugin/.codex-plugin/plugin.json";
-            const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
-            manifest.version = process.env.TARGET_VERSION;
-            fs.writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
-          '
 
       - name: Publish selected workspace
         run: |
@@ -81,7 +69,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add package-lock.json packages/*/package.json packages/codex-plugin/.codex-plugin/plugin.json
+          git add package-lock.json packages/opencode-plugin/package.json
           git commit -m "release: ${PACKAGE_NAME}@${TARGET_VERSION}"
 
       - name: Tag release
@@ -97,5 +85,94 @@ jobs:
       - name: Create GitHub Release
         if: ${{ !inputs.dry_run }}
         run: gh release create "${PACKAGE_NAME}@${TARGET_VERSION}" --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  codex-plugin:
+    if: ${{ inputs.package == 'codex-mmcp-1file' }}
+    runs-on: ubuntu-latest
+    env:
+      PACKAGE_NAME: ${{ inputs.package }}
+      TARGET_VERSION: ${{ inputs.version }}
+      DRY_RUN: ${{ inputs.dry_run }}
+      RUNTIME_BRANCH: codex-mmcp-1file-runtime
+      RUNTIME_ROOT: dist/codex-runtime
+      RUNTIME_PLUGIN_DIR: dist/codex-runtime/codex-mmcp-1file
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+
+      - name: Set Codex plugin version and marketplace ref
+        run: |
+          npm version "$TARGET_VERSION" --workspace "$PACKAGE_NAME" --no-git-tag-version
+          node -e '
+            const fs = require("node:fs");
+            const version = process.env.TARGET_VERSION;
+            const tag = `${process.env.PACKAGE_NAME}@${version}`;
+
+            const manifestPath = "packages/codex-plugin/.codex-plugin/plugin.json";
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+            manifest.version = version;
+            fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+            const marketplacePath = ".codex-plugin/marketplace.json";
+            const marketplace = JSON.parse(fs.readFileSync(marketplacePath, "utf8"));
+            const plugin = marketplace.plugins.find((entry) => entry.name === process.env.PACKAGE_NAME);
+            if (!plugin) throw new Error(`Missing ${process.env.PACKAGE_NAME} marketplace entry`);
+            plugin.source.path = "./codex-mmcp-1file";
+            plugin.source.ref = tag;
+            fs.writeFileSync(marketplacePath, `${JSON.stringify(marketplace, null, 2)}\n`);
+          '
+
+      - run: npm run build --workspaces
+
+      - run: npm run test --workspaces
+
+      - run: CODEX_MARKETPLACE_REF="${PACKAGE_NAME}@${TARGET_VERSION}" npm run verify:packages
+
+      - name: Pack Codex runtime archive
+        run: |
+          mkdir -p dist/releases
+          tar -czf "dist/releases/${PACKAGE_NAME}-${TARGET_VERSION}.tgz" -C "$RUNTIME_ROOT" codex-mmcp-1file
+          (cd "$RUNTIME_ROOT" && zip -qry "../releases/${PACKAGE_NAME}-${TARGET_VERSION}.zip" codex-mmcp-1file)
+
+      - name: Commit release metadata
+        if: ${{ !inputs.dry_run }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json packages/codex-plugin/package.json packages/codex-plugin/.codex-plugin/plugin.json .codex-plugin/marketplace.json
+          git commit -m "release: ${PACKAGE_NAME}@${TARGET_VERSION}"
+          git push
+
+      - name: Prepare runtime branch worktree
+        if: ${{ !inputs.dry_run }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin "$RUNTIME_BRANCH" || true
+          git worktree add --detach ../codex-runtime-branch
+          cd ../codex-runtime-branch
+          git rm -r . || true
+          cp -R "$GITHUB_WORKSPACE/$RUNTIME_PLUGIN_DIR" ./codex-mmcp-1file
+          git add -f codex-mmcp-1file
+          git commit -m "release: ${PACKAGE_NAME}@${TARGET_VERSION} runtime"
+          git branch -f "$RUNTIME_BRANCH"
+          git tag "${PACKAGE_NAME}@${TARGET_VERSION}"
+          git push origin HEAD:"$RUNTIME_BRANCH" --force-with-lease
+          git push origin "${PACKAGE_NAME}@${TARGET_VERSION}"
+
+      - name: Create GitHub Release
+        if: ${{ !inputs.dry_run }}
+        run: |
+          gh release create "${PACKAGE_NAME}@${TARGET_VERSION}" \
+            "dist/releases/${PACKAGE_NAME}-${TARGET_VERSION}.tgz" \
+            "dist/releases/${PACKAGE_NAME}-${TARGET_VERSION}.zip" \
+            --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

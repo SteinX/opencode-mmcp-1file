@@ -275,8 +275,8 @@ describe("Codex hooks", () => {
         source: {
           source: "git-subdir",
           url: "https://github.com/SteinX/opencode-mmcp-1file.git",
-          path: "./packages/codex-plugin",
-          ref: "main",
+          path: "./codex-mmcp-1file",
+          ref: expect.stringMatching(/^codex-mmcp-1file@/),
         },
         policy: {
           installation: "AVAILABLE",

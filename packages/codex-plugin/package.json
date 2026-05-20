@@ -2,6 +2,7 @@
   "name": "codex-mmcp-1file",
   "version": "0.1.0",
   "description": "Codex plugin that injects and captures memory-mcp context through hooks",
+  "private": true,
   "type": "module",
   "main": "dist/hooks/user-prompt-submit.js",
   "types": "dist/index.d.ts",
@@ -28,9 +29,6 @@
     "context"
   ],
   "license": "MIT",
-  "publishConfig": {
-    "access": "public"
-  },
   "bundledDependencies": [
     "mmcp-1file-core"
   ],

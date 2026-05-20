@@ -90,11 +90,15 @@ if (marketplacePlugin.source?.source !== "git-subdir") {
 if (marketplacePlugin.source?.url !== "https://github.com/SteinX/opencode-mmcp-1file.git") {
   throw new Error("codex-mmcp-1file marketplace source url must point to the GitHub repository")
 }
-if (marketplacePlugin.source?.path !== "./packages/codex-plugin") {
-  throw new Error("codex-mmcp-1file marketplace source path must be ./packages/codex-plugin")
+if (marketplacePlugin.source?.path !== "./codex-mmcp-1file") {
+  throw new Error("codex-mmcp-1file marketplace source path must be ./codex-mmcp-1file")
 }
-if (marketplacePlugin.source?.ref !== "main") {
-  throw new Error("codex-mmcp-1file marketplace source ref must be main")
+const expectedCodexRef = process.env.CODEX_MARKETPLACE_REF
+if (expectedCodexRef && marketplacePlugin.source?.ref !== expectedCodexRef) {
+  throw new Error(`codex-mmcp-1file marketplace source ref must be ${expectedCodexRef}, got ${marketplacePlugin.source?.ref}`)
+}
+if (!expectedCodexRef && typeof marketplacePlugin.source?.ref !== "string") {
+  throw new Error("codex-mmcp-1file marketplace source ref must be a string")
 }
 if (marketplacePlugin.policy?.installation !== "AVAILABLE") {
   throw new Error("codex-mmcp-1file marketplace installation policy must be AVAILABLE")
@@ -128,6 +132,9 @@ for (const pkg of packages) {
 
 const codexPlugin = parseJson("packages/codex-plugin", ".codex-plugin/plugin.json")
 const codexPackage = parseJson("packages/codex-plugin", "package.json")
+if (codexPackage.private !== true) {
+  throw new Error("packages/codex-plugin/package.json must be private because Codex installs from marketplace runtime artifacts, not npm")
+}
 if (codexPlugin.version !== codexPackage.version) {
   throw new Error(`codex plugin manifest version must match package.json version: ${codexPlugin.version} !== ${codexPackage.version}`)
 }

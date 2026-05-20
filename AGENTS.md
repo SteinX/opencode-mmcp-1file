@@ -93,7 +93,7 @@ Plugin hooks (index.ts)
 - **Session tracking**: `injectedSessions` Set in `context-inject.ts` and `capturedSessions` Set in `auto-capture.ts` prevent duplicate operations per session. These reset only on process restart.
 - **Config path**: `loadConfig()` searches for `opencode-mmcp-1file.jsonc` relative to CWD, not plugin install dir. The repo tracks `opencode-mmcp-1file.example.jsonc` as a template; `opencode-mmcp-1file.jsonc` is gitignored for local use.
 - **Plugin disabled state**: If neither `tag` nor `dataDir` is set in config, `resolveDataDir()` returns `null` and the plugin returns `{}` (no hooks registered).
-- **CI/CD**: `.github/workflows/npm-publish.yml` uses manual dispatch (`workflow_dispatch`), bumps version, publishes to npm, creates GitHub release.
+- **CI/CD**: `.github/workflows/npm-publish.yml` uses manual dispatch (`workflow_dispatch`). It publishes `opencode-mmcp-1file` to npm. It does not publish `codex-mmcp-1file` to npm; instead it builds the Codex runtime tree, pushes it to the `codex-mmcp-1file-runtime` branch, tags it as `codex-mmcp-1file@x.y.z`, and attaches `.tgz` / `.zip` artifacts to the GitHub Release.
 
 ## Plan Submission
 
