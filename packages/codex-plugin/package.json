@@ -1,6 +1,6 @@
 {
   "name": "codex-mmcp-1file",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Codex plugin that injects and captures memory-mcp context through hooks",
   "private": true,
   "type": "module",

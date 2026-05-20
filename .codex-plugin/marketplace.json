@@ -10,7 +10,7 @@
         "source": "git-subdir",
         "url": "https://github.com/SteinX/opencode-mmcp-1file.git",
         "path": "./codex-mmcp-1file",
-        "ref": "codex-mmcp-1file@0.1.0"
+        "ref": "codex-mmcp-1file@0.1.1"
       },
       "policy": {
         "installation": "AVAILABLE",

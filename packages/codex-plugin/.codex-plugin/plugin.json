@@ -1,6 +1,6 @@
 {
   "name": "codex-mmcp-1file",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Persistent memory for Codex using memory-mcp-1file. Provides prompt-time context routing and stop-time task ledger capture.",
   "author": {
     "name": "SteinX"
