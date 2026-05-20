@@ -109,7 +109,7 @@ jobs:
 
       - name: Set Codex plugin version and marketplace ref
         run: |
-          npm version "$TARGET_VERSION" --workspace "$PACKAGE_NAME" --no-git-tag-version
+          npm version "$TARGET_VERSION" --workspace "$PACKAGE_NAME" --no-git-tag-version --allow-same-version
           node -e '
             const fs = require("node:fs");
             const version = process.env.TARGET_VERSION;
@@ -147,8 +147,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add package-lock.json packages/codex-plugin/package.json packages/codex-plugin/.codex-plugin/plugin.json .codex-plugin/marketplace.json
-          git commit -m "release: ${PACKAGE_NAME}@${TARGET_VERSION}"
-          git push
+          if git diff --cached --quiet; then
+            echo "Release metadata already up to date; skipping commit."
+          else
+            git commit -m "release: ${PACKAGE_NAME}@${TARGET_VERSION}"
+            git push
+          fi
 
       - name: Prepare runtime branch worktree
         if: ${{ !inputs.dry_run }}
@@ -164,7 +168,12 @@ jobs:
           git commit -m "release: ${PACKAGE_NAME}@${TARGET_VERSION} runtime"
           git branch -f "$RUNTIME_BRANCH"
           git tag "${PACKAGE_NAME}@${TARGET_VERSION}"
-          git push origin HEAD:"$RUNTIME_BRANCH" --force-with-lease
+          REMOTE_RUNTIME_SHA="$(git ls-remote --heads origin "$RUNTIME_BRANCH" | cut -f1)"
+          if [ -n "$REMOTE_RUNTIME_SHA" ]; then
+            git push origin HEAD:"refs/heads/$RUNTIME_BRANCH" --force-with-lease="refs/heads/$RUNTIME_BRANCH:$REMOTE_RUNTIME_SHA"
+          else
+            git push origin HEAD:"refs/heads/$RUNTIME_BRANCH"
+          fi
           git push origin "${PACKAGE_NAME}@${TARGET_VERSION}"
 
       - name: Create GitHub Release
